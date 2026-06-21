@@ -1,0 +1,19 @@
+# Lõi Web Framework
+fastapi==0.110.0
+uvicorn[standard]==0.29.0
+
+# Xử lý Form và File Upload (Dành cho việc upload file ZIP/PDF CV)
+python-multipart==0.0.9
+
+# Cấu hình Cơ sở dữ liệu (PostgreSQL)
+sqlalchemy==2.0.29
+psycopg2-binary==2.9.9
+alembic==1.13.1
+
+# Xác thực và Phân quyền (JWT & Passwords)
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# Xác thực dữ liệu và Biến môi trường
+pydantic[email]==2.6.4
+pydantic-settings==2.2.1

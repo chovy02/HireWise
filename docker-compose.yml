@@ -1,0 +1,30 @@
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: hirewise_db
+    restart: always
+    environment:
+      POSTGRES_USER: hirewise
+      POSTGRES_PASSWORD: hirewise123
+      POSTGRES_DB: hirewise_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  api:
+    build: ./src/backend
+    container_name: hirewise_api
+    restart: always
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    depends_on:
+      - db
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./src/backend:/app
+    environment:
+      - DATABASE_URL=postgresql://hirewise:hirewise123@db:5432/hirewise_db
+
+volumes:
+  postgres_data:
