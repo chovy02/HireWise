@@ -4,9 +4,9 @@ services:
     container_name: hirewise_db
     restart: always
     environment:
-      POSTGRES_USER: hirewise
-      POSTGRES_PASSWORD: hirewise123
-      POSTGRES_DB: hirewise_db
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
     ports:
       - "5432:5432"
     volumes:
@@ -24,7 +24,7 @@ services:
     volumes:
       - ./src/backend:/app
     environment:
-      - DATABASE_URL=postgresql://hirewise:hirewise123@db:5432/hirewise_db
+      - DATABASE_URL=${DATABASE_URL}
 
 volumes:
   postgres_data:
