@@ -26,5 +26,15 @@ services:
     environment:
       - DATABASE_URL=postgresql://hirewise:hirewise123@db:5432/hirewise_db
 
+  mcp:
+    build: ./src/mcp_server
+    container_name: hirewise_mcp
+    restart: always
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./src/mcp_server:/app
+    command: python server.py
+
 volumes:
   postgres_data:
