@@ -13,6 +13,9 @@ alembic==1.13.1
 # Xác thực và Phân quyền (JWT & Passwords)
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
+bcrypt==3.2.2
+
+fastapi-mail==1.4.1
 
 # Xác thực dữ liệu và Biến môi trường
 pydantic[email]==2.6.4
