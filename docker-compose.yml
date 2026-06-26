@@ -23,8 +23,8 @@ services:
       - "8000:8000"
     volumes:
       - ./src/backend:/app
-    environment:
-      - DATABASE_URL=${DATABASE_URL}
+    env_file:
+      - .env
 
   mcp:
     build: ./src/mcp_server
