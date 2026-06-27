@@ -1,0 +1,42 @@
+@import "tailwindcss";
+
+/* ---- Design tokens pulled from the AutoRecruit AI mockups ---- */
+@theme {
+  --color-sidebar: #0b1020;
+  --color-sidebar-hover: #161d33;
+  --color-sidebar-active: #1c2440;
+  --color-brand: #4f46e5;
+  --color-brand-light: #6366f1;
+  --color-canvas: #f7f8fb;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--color-canvas);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  color: #0f172a;
+}
+
+/* Thin custom scrollbar to match the clean dashboard look */
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+  background-clip: content-box;
+}
