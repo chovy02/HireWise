@@ -258,7 +258,12 @@ function buildAnalysis(c) {
       fileName: cvAnalysis.fileName,
       resume: cvAnalysis.resume,
       profile: cvAnalysis.profile,
-      deductions: cvAnalysis.deductions,
+      // `sources` = the résumé bullet keys (exp-<job>-<bullet>) each deduction
+      // cites, so hovering a deduction highlights the evidence in the CV.
+      deductions: [
+        { ...cvAnalysis.deductions[0], sources: ['exp-0-0', 'exp-0-2'] },
+        { ...cvAnalysis.deductions[1], sources: ['exp-0-0', 'exp-1-0'] },
+      ],
       flags: cvAnalysis.flags,
     }
   }
@@ -297,6 +302,7 @@ function buildAnalysis(c) {
       {
         title: 'Relevant Technical Background',
         evidence: `Candidate lists ${c.skills.join(', ')} and ${c.years} years of experience.`,
+        sources: ['exp-0-0', 'exp-0-1'],
       },
     ],
     flags:

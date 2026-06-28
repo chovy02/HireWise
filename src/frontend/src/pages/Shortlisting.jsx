@@ -12,6 +12,9 @@ import {
   CheckCircle2,
   FolderPlus,
   Plus,
+  Briefcase,
+  ArrowRight,
+  ArrowLeft,
 } from 'lucide-react'
 import Topbar from '../components/Topbar.jsx'
 import {
@@ -19,7 +22,6 @@ import {
   Badge,
   Tag,
   ScoreRing,
-  Segmented,
   SecondaryButton,
   PrimaryButton,
 } from '../components/ui.jsx'
@@ -34,11 +36,15 @@ export default function Shortlisting() {
   const toast = useToast()
   const { projects } = useProjects()
 
-  // Which project (JD) are we shortlisting against?
+  // Which project (JD) are we shortlisting against? If arriving without a
+  // specific project (and more than one exists), we show a picker first.
   const initialId =
-    location.state?.projectId && projects.some((p) => p.id === location.state.projectId)
+    location.state?.projectId &&
+    projects.some((p) => p.id === location.state.projectId)
       ? location.state.projectId
-      : projects[0]?.id || null
+      : projects.length === 1
+        ? projects[0].id
+        : null
   const [projectId, setProjectId] = useState(initialId)
 
   const [query, setQuery] = useState('')
@@ -80,7 +86,64 @@ export default function Shortlisting() {
     )
   }
 
-  const project = projects.find((p) => p.id === projectId) || projects[0]
+  const project = projectId ? projects.find((p) => p.id === projectId) : null
+
+  // ---- Project picker: choose which JD to shortlist (like the dashboard) ----
+  if (!project) {
+    return (
+      <>
+        <Topbar />
+        <main className="flex-1 overflow-y-auto px-8 py-7">
+          <div>
+            <h1 className="text-2xl font-bold text-slate-900">
+              Candidate Shortlisting
+            </h1>
+            <p className="mt-1 text-sm text-slate-500">
+              Select a project to shortlist candidates against.
+            </p>
+          </div>
+          <div className="mt-6 grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
+            {projects.map((p) => {
+              const shortlisted = p.candidates.filter((c) => c.shortlisted).length
+              return (
+                <button
+                  key={p.id}
+                  onClick={() => setProjectId(p.id)}
+                  className="group flex flex-col text-left"
+                >
+                  <Card className="flex h-full flex-col p-5 transition hover:border-indigo-300 hover:shadow-md">
+                    <div className="flex items-start gap-3">
+                      <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600">
+                        <Briefcase size={18} />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <h3 className="truncate text-base font-semibold text-slate-900">
+                          {p.title}
+                        </h3>
+                        <p className="mt-0.5 text-xs text-slate-400">
+                          {p.candidates.length} candidates • {shortlisted}{' '}
+                          shortlisted
+                        </p>
+                      </div>
+                    </div>
+                    <p className="mt-3 line-clamp-2 flex-1 text-sm leading-relaxed text-slate-500">
+                      {p.jdInput || 'No description provided.'}
+                    </p>
+                    <div className="mt-4 flex items-center justify-end border-t border-slate-100 pt-3 text-xs">
+                      <span className="inline-flex items-center gap-1 font-medium text-indigo-600 group-hover:gap-1.5">
+                        Shortlist <ArrowRight size={14} />
+                      </span>
+                    </div>
+                  </Card>
+                </button>
+              )
+            })}
+          </div>
+        </main>
+      </>
+    )
+  }
+
   // Read live from context so overrides + re-ranking reflect instantly.
   const candidates = project.candidates
   const visible = candidates.filter((c) =>
@@ -105,30 +168,34 @@ export default function Shortlisting() {
       <main className="flex-1 overflow-y-auto px-8 py-7">
         {/* Header */}
         <div className="flex items-start justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-slate-900">
-              Candidate Shortlisting
-            </h1>
-            <p className="mt-1 text-sm text-slate-500">
-              AI-ranked leaderboard for{' '}
-              <span className="font-semibold text-slate-700">
-                {project.title}
-              </span>
-              .
-            </p>
+          <div className="flex items-center gap-3">
+            {/* Back to the project picker (only when there's a choice to make) */}
+            {projects.length > 1 && (
+              <button
+                onClick={() => {
+                  setProjectId(null)
+                  setSelected([])
+                  setCompareMode(false)
+                }}
+                className="rounded-md p-1.5 text-slate-500 hover:bg-slate-100"
+                title="Change project"
+              >
+                <ArrowLeft size={18} />
+              </button>
+            )}
+            <div>
+              <h1 className="text-2xl font-bold text-slate-900">
+                Candidate Shortlisting
+              </h1>
+              <p className="mt-1 text-sm text-slate-500">
+                AI-ranked leaderboard for{' '}
+                <span className="font-semibold text-slate-700">
+                  {project.title}
+                </span>
+                .
+              </p>
+            </div>
           </div>
-          {/* Which JD to list — switch between projects */}
-          {projects.length > 1 && (
-            <Segmented
-              options={projects.map((p) => ({ value: p.id, label: p.title }))}
-              value={project.id}
-              onChange={(id) => {
-                setProjectId(id)
-                setSelected([])
-                setCompareMode(false)
-              }}
-            />
-          )}
         </div>
 
         {/* Search + controls */}

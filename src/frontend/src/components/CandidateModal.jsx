@@ -47,6 +47,8 @@ export default function CandidateModal({
   const [summaryDraft, setSummaryDraft] = useState(
     candidate.overrideSummary || ''
   )
+  // Résumé bullet keys currently highlighted by hovering an AI deduction.
+  const [highlighted, setHighlighted] = useState([])
 
   if (!candidate) return null
   const a = candidate.analysis
@@ -295,6 +297,16 @@ export default function CandidateModal({
                         <p className="mt-1 text-xs leading-relaxed text-slate-500">
                           {d.evidence}
                         </p>
+                        {d.sources?.length > 0 && (
+                          <button
+                            onMouseEnter={() => setHighlighted(d.sources)}
+                            onMouseLeave={() => setHighlighted([])}
+                            className="mt-2 flex items-center gap-1.5 text-xs font-medium text-indigo-600 hover:text-indigo-700"
+                          >
+                            <Sparkles size={13} /> Hover to highlight source in
+                            résumé
+                          </button>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -369,15 +381,23 @@ export default function CandidateModal({
                         </span>
                       </div>
                       <ul className="mt-1.5 space-y-1">
-                        {job.bullets.map((b, bi) => (
-                          <li
-                            key={bi}
-                            className="flex gap-2 text-xs leading-relaxed text-slate-600"
-                          >
-                            <span className="mt-1.5 h-1 w-1 flex-shrink-0 rounded-full bg-slate-400" />
-                            <span>{b}</span>
-                          </li>
-                        ))}
+                        {job.bullets.map((b, bi) => {
+                          const key = `exp-${ji}-${bi}`
+                          const hot = highlighted.includes(key)
+                          return (
+                            <li
+                              key={bi}
+                              className={`flex gap-2 rounded px-1 text-xs leading-relaxed transition-colors ${
+                                hot
+                                  ? 'bg-amber-100 text-slate-800'
+                                  : 'text-slate-600'
+                              }`}
+                            >
+                              <span className="mt-1.5 h-1 w-1 flex-shrink-0 rounded-full bg-slate-400" />
+                              <span>{b}</span>
+                            </li>
+                          )
+                        })}
                       </ul>
                     </div>
                   ))}
