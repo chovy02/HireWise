@@ -189,6 +189,181 @@ export const cvAnalysis = {
   ],
 }
 
+// ---------------------------------------------------------------------------
+// Project-based workflow (frontend-only mock).
+// A "project" == a Job Description campaign. Created on the Dashboard, listed as
+// cards, opened into a detail view, and shortlisted against. All of this lives
+// in client state (ProjectContext) — no backend wiring yet.
+// ---------------------------------------------------------------------------
+
+// Heuristic: pull a likely job title out of the free-text description.
+export function deriveTitle(text) {
+  if (!text || !text.trim()) return 'Untitled Role'
+  const roles =
+    /\b((?:senior|junior|lead|principal|staff)?\s*(?:frontend|front-end|backend|back-end|fullstack|full-stack|software|product|data|ml|devops|mobile|ios|android|qa|security|platform|cloud)?\s*(?:engineer|developer|manager|designer|scientist|analyst|architect|lead))\b/i
+  const m = text.match(roles)
+  if (m) {
+    return m[1]
+      .trim()
+      .replace(/\s+/g, ' ')
+      .replace(/\b\w/g, (ch) => ch.toUpperCase())
+  }
+  // Fallback: first few words.
+  return text.trim().split(/\s+/).slice(0, 4).join(' ')
+}
+
+// Turn the natural-language brief into a structured, "AI-generated" JD.
+export function generateJD(text) {
+  const title = deriveTitle(text)
+  const brief = (text || '').trim() || 'No description provided.'
+  return {
+    title,
+    markdown: `# ${title}
+
+## Role Overview
+${brief}
+
+## Key Responsibilities
+- Own delivery of high-impact features end to end.
+- Collaborate cross-functionally with design, product, and engineering.
+- Mentor teammates and raise the bar on quality and best practices.
+- Drive technical decisions and document architectural trade-offs.
+
+## Required Qualifications
+- Proven track record in a similar role.
+- Strong fundamentals and hands-on expertise with the core stack.
+- Excellent communication and collaboration skills.
+
+## Nice to Have
+- Experience leading or mentoring a team.
+- Exposure to scaling systems and performance optimization.
+
+## Scoring Matrix (auto-generated)
+| Criteria | Weight |
+| --- | --- |
+| Core technical skills | 35% |
+| Relevant experience | 30% |
+| Leadership & collaboration | 20% |
+| Culture & communication | 15% |`,
+  }
+}
+
+// Build a full "intelligence brief" analysis from a lightweight candidate.
+// Eleanor reuses the rich cvAnalysis above; everyone else gets a derived brief.
+function buildAnalysis(c) {
+  if (c.id === 'eleanor-rigby') {
+    return {
+      matchScore: cvAnalysis.matchScore,
+      processedIn: cvAnalysis.processedIn,
+      fileName: cvAnalysis.fileName,
+      resume: cvAnalysis.resume,
+      profile: cvAnalysis.profile,
+      deductions: cvAnalysis.deductions,
+      flags: cvAnalysis.flags,
+    }
+  }
+  return {
+    matchScore: c.score,
+    processedIn: '1.4s',
+    fileName: `${c.name.replace(/\s+/g, '_')}_CV.pdf`,
+    resume: {
+      name: c.name,
+      headline: `${c.title} | ${c.years} years experience`,
+      experience: [
+        {
+          role: c.title,
+          company: 'Current Company',
+          period: 'Recent',
+          bullets: [
+            `Worked extensively with ${c.skills.slice(0, 2).join(' and ')}.`,
+            `${c.years} years of hands-on experience in the field.`,
+          ],
+        },
+      ],
+      education: [
+        {
+          degree: 'B.S. relevant field',
+          school: 'University',
+          period: '—',
+        },
+      ],
+    },
+    profile: {
+      totalExperience: `${c.years} years`,
+      highestEducation: 'B.S.',
+      verifiedSkills: c.skills,
+    },
+    deductions: [
+      {
+        title: 'Relevant Technical Background',
+        evidence: `Candidate lists ${c.skills.join(', ')} and ${c.years} years of experience.`,
+      },
+    ],
+    flags:
+      c.score < 80
+        ? [
+            {
+              title: 'Partial skill match',
+              detail:
+                'Some preferred skills from the job description were not clearly found in the CV.',
+            },
+          ]
+        : [],
+  }
+}
+
+// A fresh, independent copy of the seed candidate set for a new project, with
+// override-tracking fields initialized. Each project gets its own array so
+// overrides on one project never bleed into another.
+export function makeSeedCandidates() {
+  const base = [
+    {
+      id: 'eleanor-rigby',
+      name: 'Eleanor Rigby',
+      title: 'Senior Frontend Engineer',
+      years: 8,
+      isNew: true,
+      score: 98,
+      skills: ['React', 'TypeScript', 'GraphQL', 'Team Leadership'],
+    },
+    {
+      id: 'marcus-chen',
+      name: 'Marcus Chen',
+      title: 'Frontend Developer',
+      years: 5,
+      isNew: false,
+      score: 85,
+      skills: ['React', 'JavaScript', 'Redux', 'Tailwind CSS'],
+    },
+    {
+      id: 'sarah-jenkins',
+      name: 'Sarah Jenkins',
+      title: 'Fullstack Engineer',
+      years: 6,
+      isNew: true,
+      score: 72,
+      skills: ['Angular', 'Node.js', 'PostgreSQL', 'AWS'],
+    },
+    {
+      id: 'david-okoro',
+      name: 'David Okoro',
+      title: 'Software Engineer',
+      years: 4,
+      isNew: false,
+      score: 68,
+      skills: ['Vue', 'JavaScript', 'CSS', 'REST'],
+    },
+  ]
+  return base.map((c) => ({
+    ...c,
+    aiScore: c.score, // original AI score, preserved even after override
+    overridden: false,
+    shortlisted: false,
+    editHistory: [], // { field, oldValue, newValue, editor, timestamp }
+    analysis: buildAnalysis(c),
+  }))
+}
+
 // ---- Admin Gateway: Agent Monitor ----
 export const adminStats = {
   systemStatus: 'Operational',

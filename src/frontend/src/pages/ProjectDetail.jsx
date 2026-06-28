@@ -1,0 +1,500 @@
+import { useRef, useState } from 'react'
+import { useParams, useNavigate, Navigate } from 'react-router-dom'
+import {
+  Bot,
+  CheckCircle2,
+  ArrowLeft,
+  Users,
+  UploadCloud,
+  Link2,
+  Mail,
+  Plus,
+  X,
+  RefreshCw,
+  AlertTriangle,
+  XCircle,
+  FileText,
+} from 'lucide-react'
+import Topbar from '../components/Topbar.jsx'
+import {
+  Card,
+  StatCard,
+  Badge,
+  ProgressBar,
+  PrimaryButton,
+  SecondaryButton,
+} from '../components/ui.jsx'
+import { useToast } from '../context/ToastContext.jsx'
+import { useProjects } from '../context/ProjectContext.jsx'
+import { ingestionQueue, systemAlerts } from '../data/mockData.js'
+
+const METHOD_ICON = { upload: UploadCloud, link: Link2, email: Mail }
+
+const INGEST_TABS = [
+  { key: 'upload', label: 'Direct Upload', icon: UploadCloud },
+  { key: 'link', label: 'Link Sync', icon: Link2 },
+  { key: 'email', label: 'Email Listener', icon: Mail },
+]
+
+const QUEUE_STATUS = {
+  processing: { variant: 'processing', icon: RefreshCw },
+  completed: { variant: 'completed', icon: CheckCircle2 },
+  error: { variant: 'error', icon: XCircle },
+}
+
+const ALERT_STYLES = {
+  success: { icon: CheckCircle2, cls: 'text-emerald-500' },
+  warning: { icon: AlertTriangle, cls: 'text-amber-500' },
+  error: { icon: XCircle, cls: 'text-red-500' },
+}
+
+// Minimal markdown renderer for the generated JD (headings, bullets, tables).
+function GeneratedJD({ markdown }) {
+  const lines = markdown.split('\n')
+  const blocks = []
+  let i = 0
+  while (i < lines.length) {
+    const line = lines[i]
+    if (line.startsWith('# ')) {
+      blocks.push(
+        <h1 key={i} className="text-xl font-bold text-slate-900">
+          {line.slice(2)}
+        </h1>
+      )
+      i++
+    } else if (line.startsWith('## ')) {
+      blocks.push(
+        <h2
+          key={i}
+          className="mt-5 text-sm font-bold uppercase tracking-wide text-slate-500"
+        >
+          {line.slice(3)}
+        </h2>
+      )
+      i++
+    } else if (line.startsWith('- ')) {
+      const items = []
+      while (i < lines.length && lines[i].startsWith('- ')) {
+        items.push(lines[i].slice(2))
+        i++
+      }
+      blocks.push(
+        <ul key={i} className="mt-2 list-disc space-y-1 pl-5 text-sm text-slate-700">
+          {items.map((it, k) => (
+            <li key={k}>{it}</li>
+          ))}
+        </ul>
+      )
+    } else if (line.startsWith('|')) {
+      const rows = []
+      while (i < lines.length && lines[i].startsWith('|')) {
+        rows.push(lines[i])
+        i++
+      }
+      const parseRow = (r) =>
+        r
+          .split('|')
+          .slice(1, -1)
+          .map((c) => c.trim())
+      const header = parseRow(rows[0])
+      const body = rows.slice(2).map(parseRow) // skip the |---| divider
+      blocks.push(
+        <table key={i} className="mt-3 w-full text-left text-sm">
+          <thead>
+            <tr className="border-b border-slate-200 text-xs uppercase text-slate-400">
+              {header.map((h, k) => (
+                <th key={k} className="py-2 pr-4">
+                  {h}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {body.map((row, r) => (
+              <tr key={r} className="border-b border-slate-100">
+                {row.map((c, k) => (
+                  <td key={k} className="py-2 pr-4 text-slate-700">
+                    {c}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )
+    } else if (line.trim() === '') {
+      i++
+    } else {
+      blocks.push(
+        <p key={i} className="mt-2 text-sm leading-relaxed text-slate-600">
+          {line}
+        </p>
+      )
+      i++
+    }
+  }
+  return <div>{blocks}</div>
+}
+
+export default function ProjectDetail() {
+  const { id } = useParams()
+  const navigate = useNavigate()
+  const { getProject } = useProjects()
+  const [showAddSource, setShowAddSource] = useState(false)
+  const project = getProject(id)
+
+  if (!project) return <Navigate to="/" replace />
+
+  const shortlisted = project.candidates.filter((c) => c.shortlisted).length
+  const totalIngested = project.sources.reduce((n, s) => n + (s.count || 0), 0)
+
+  const stats = [
+    {
+      key: 'candidates',
+      icon: Users,
+      cls: 'bg-indigo-50 text-indigo-600',
+      label: 'Candidates',
+      value: String(project.candidates.length),
+      footnote: 'Ranked for this role',
+    },
+    {
+      key: 'shortlisted',
+      icon: CheckCircle2,
+      cls: 'bg-emerald-50 text-emerald-600',
+      label: 'Shortlisted',
+      value: String(shortlisted),
+      footnote: 'Proceeded to next step',
+    },
+    {
+      key: 'sources',
+      icon: Link2,
+      cls: 'bg-violet-50 text-violet-600',
+      label: 'Ingestion Sources',
+      value: String(project.sources.length),
+      footnote: `${totalIngested} CVs ingested`,
+    },
+  ]
+
+  return (
+    <>
+      <Topbar />
+      <main className="flex-1 overflow-y-auto px-8 py-7">
+        {/* Header */}
+        <div className="flex items-start justify-between">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => navigate('/')}
+              className="rounded-md p-1.5 text-slate-500 hover:bg-slate-100"
+              title="Back to dashboard"
+            >
+              <ArrowLeft size={18} />
+            </button>
+            <div>
+              <h1 className="text-2xl font-bold text-slate-900">
+                {project.title}
+              </h1>
+              <p className="mt-1 text-sm text-slate-500">
+                Project overview & generated job description.
+              </p>
+            </div>
+          </div>
+          <PrimaryButton
+            onClick={() =>
+              navigate('/shortlisting', { state: { projectId: project.id } })
+            }
+          >
+            <Users size={16} /> View Shortlist
+          </PrimaryButton>
+        </div>
+
+        {/* Stat cards */}
+        <div className="mt-6 grid grid-cols-1 gap-5 md:grid-cols-3">
+          {stats.map((s) => (
+            <StatCard
+              key={s.key}
+              icon={s.icon}
+              iconClass={s.cls}
+              label={s.label}
+              value={s.value}
+              footnote={s.footnote}
+            />
+          ))}
+        </div>
+
+        {/* Two-column grid */}
+        <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
+          {/* ---- Left: generated Job Description ---- */}
+          <div className="space-y-6">
+            <Card className="p-6">
+              <div className="flex items-center gap-2">
+                <Bot size={20} className="text-indigo-600" />
+                <h2 className="text-base font-semibold text-slate-900">
+                  Natural Language Job Description
+                </h2>
+                <Badge variant="ai">AI Generated</Badge>
+              </div>
+              <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50/50 p-5">
+                <GeneratedJD markdown={project.jdMarkdown} />
+              </div>
+            </Card>
+          </div>
+
+          {/* ---- Right: sources + ingestion + alerts ---- */}
+          <div className="space-y-6">
+            {/* Ingested sources */}
+            <Card className="p-6">
+              <div className="flex items-center justify-between">
+                <h2 className="text-base font-semibold text-slate-900">
+                  Ingestion Sources
+                </h2>
+                <SecondaryButton
+                  className="px-3 py-2"
+                  onClick={() => setShowAddSource(true)}
+                >
+                  <Plus size={15} /> Add Source
+                </SecondaryButton>
+              </div>
+              <p className="mt-1 text-sm text-slate-500">
+                Every source feeding candidates into this project.
+              </p>
+              <div className="mt-4 space-y-3">
+                {project.sources.map((s) => {
+                  const Icon = METHOD_ICON[s.method] || UploadCloud
+                  return (
+                    <div
+                      key={s.id}
+                      className="flex items-start gap-3 rounded-xl border border-slate-200 p-4"
+                    >
+                      <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600">
+                        <Icon size={16} />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-semibold text-slate-800">
+                          {s.label}
+                        </p>
+                        <p className="truncate text-xs text-slate-400">
+                          {s.value || 'No source detail'}
+                        </p>
+                      </div>
+                      <Badge variant="neutral">
+                        <FileText size={11} /> {s.count || 0} CVs
+                      </Badge>
+                    </div>
+                  )
+                })}
+              </div>
+            </Card>
+
+            {/* Ingestion Queue */}
+            <Card className="p-6">
+              <h2 className="text-base font-semibold text-slate-900">
+                Ingestion Queue
+              </h2>
+              <div className="mt-4 space-y-3">
+                {ingestionQueue.map((item) => {
+                  const { variant, icon: Icon } = QUEUE_STATUS[item.status]
+                  return (
+                    <div
+                      key={item.id}
+                      className="rounded-xl border border-slate-200 p-4"
+                    >
+                      <div className="flex items-start justify-between">
+                        <div>
+                          <p className="text-sm font-semibold text-slate-800">
+                            {item.title}
+                          </p>
+                          <p className="text-xs text-slate-400">{item.source}</p>
+                        </div>
+                        <Badge variant={variant}>
+                          <Icon size={11} /> {item.statusLabel}
+                        </Badge>
+                      </div>
+                      <div className="mt-3 flex items-center justify-between text-xs">
+                        <span className="text-slate-500">{item.detail}</span>
+                        <span className="font-semibold text-slate-700">
+                          {item.progress}%
+                        </span>
+                      </div>
+                      <div className="mt-2">
+                        <ProgressBar value={item.progress} color={item.color} />
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+
+              <h2 className="mt-8 text-base font-semibold text-slate-900">
+                System Alerts
+              </h2>
+              <div className="mt-4 space-y-3">
+                {systemAlerts.map((alert) => {
+                  const { icon: Icon, cls } = ALERT_STYLES[alert.level]
+                  return (
+                    <div key={alert.id} className="flex items-start gap-2.5">
+                      <Icon
+                        size={16}
+                        className={`mt-0.5 flex-shrink-0 ${cls}`}
+                      />
+                      <p className="text-sm leading-relaxed text-slate-600">
+                        {alert.text}
+                      </p>
+                    </div>
+                  )
+                })}
+              </div>
+            </Card>
+          </div>
+        </div>
+      </main>
+
+      {showAddSource && (
+        <AddSourceModal
+          projectId={project.id}
+          onClose={() => setShowAddSource(false)}
+        />
+      )}
+    </>
+  )
+}
+
+// Modal to add another ingestion source (more CVs / link / inbox) to a project.
+function AddSourceModal({ projectId, onClose }) {
+  const toast = useToast()
+  const { addSource } = useProjects()
+  const [activeTab, setActiveTab] = useState('upload')
+  const [value, setValue] = useState('')
+  const fileInputRef = useRef(null)
+
+  function handleAdd() {
+    if (activeTab !== 'upload' && !value.trim()) {
+      toast('Enter a URL / inbox first.')
+      return
+    }
+    const label = INGEST_TABS.find((t) => t.key === activeTab).label
+    // Mock CV count so the source list shows something meaningful.
+    const count = Math.floor(Math.random() * 30) + 5
+    addSource(projectId, { method: activeTab, label, value, count })
+    toast(`Added ${label} source (+${count} CVs ingested).`)
+    onClose()
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div
+        className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm"
+        onClick={onClose}
+      />
+      <div className="relative w-full max-w-lg overflow-hidden rounded-2xl bg-white shadow-2xl">
+        <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
+          <h2 className="text-base font-bold text-slate-900">
+            Add Ingestion Source
+          </h2>
+          <button
+            onClick={onClose}
+            className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="px-6 py-5">
+          {/* Tabs */}
+          <div className="flex border-b border-slate-200">
+            {INGEST_TABS.map(({ key, label, icon: Icon }) => (
+              <button
+                key={key}
+                onClick={() => {
+                  setActiveTab(key)
+                  setValue('')
+                }}
+                className={`-mb-px flex items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-medium transition-colors ${
+                  activeTab === key
+                    ? 'border-indigo-600 text-indigo-600'
+                    : 'border-transparent text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                <Icon size={16} /> {label}
+              </button>
+            ))}
+          </div>
+
+          <div className="mt-5">
+            {activeTab === 'upload' && (
+              <div
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => {
+                  e.preventDefault()
+                  if (e.dataTransfer.files?.length)
+                    setValue(e.dataTransfer.files[0].name)
+                }}
+                className="flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-slate-200 bg-slate-50/50 px-6 py-8 text-center"
+              >
+                <div className="flex h-12 w-12 items-center justify-center rounded-full bg-indigo-50 text-indigo-600">
+                  <UploadCloud size={22} />
+                </div>
+                <p className="mt-3 text-sm font-semibold text-slate-700">
+                  {value || 'Drop ZIP file of CVs here'}
+                </p>
+                <p className="mt-1 text-xs text-slate-400">
+                  Supports PDF, DOCX, up to 50MB
+                </p>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".zip,.pdf,.docx"
+                  className="hidden"
+                  onChange={(e) => {
+                    if (e.target.files?.length) setValue(e.target.files[0].name)
+                  }}
+                />
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="mt-4 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+                >
+                  Browse Files
+                </button>
+              </div>
+            )}
+
+            {activeTab === 'link' && (
+              <div className="rounded-xl border border-slate-200 bg-slate-50/50 p-5">
+                <label className="block text-sm font-medium text-slate-700">
+                  Google Forms / sheet URL
+                </label>
+                <input
+                  type="url"
+                  value={value}
+                  onChange={(e) => setValue(e.target.value)}
+                  placeholder="https://forms.gle/…"
+                  className="mt-2 w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2.5 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                />
+              </div>
+            )}
+
+            {activeTab === 'email' && (
+              <div className="rounded-xl border border-slate-200 bg-slate-50/50 p-5">
+                <label className="block text-sm font-medium text-slate-700">
+                  Shared inbox to listen on
+                </label>
+                <input
+                  type="email"
+                  value={value}
+                  onChange={(e) => setValue(e.target.value)}
+                  placeholder="careers@company.com"
+                  className="mt-2 w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2.5 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                />
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-2 border-t border-slate-200 px-6 py-4">
+          <SecondaryButton onClick={onClose}>Cancel</SecondaryButton>
+          <PrimaryButton onClick={handleAdd}>
+            <Plus size={16} /> Add Source
+          </PrimaryButton>
+        </div>
+      </div>
+    </div>
+  )
+}

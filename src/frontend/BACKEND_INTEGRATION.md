@@ -7,14 +7,55 @@ Legend:
 - ✅ **Exists** — endpoint already implemented in `src/backend/app/routers/`
 - 🔲 **To build** — endpoint referenced by the UI but not implemented yet
 
-> The 4 dashboard screens currently render **mock data** from
+> The app screens currently render **mock data**. Project state (job
+> descriptions, their ingestion sources, candidates, overrides) lives entirely in
+> [`src/context/ProjectContext.jsx`](src/context/ProjectContext.jsx) and resets on
+> reload. Static placeholder lists (ingestion queue, system alerts, seed
+> candidates, JD template) live in
 > [`src/data/mockData.js`](src/data/mockData.js). Only the auth flow talks to the
-> real backend today. Each control below has a `// BUTTON:` / `// ACTION:` comment
-> next to it in the source so you can grep for it.
+> real backend today.
 >
 > In dev, Vite proxies `/auth` and `/api` to `http://localhost:8000`
 > (see [`vite.config.js`](vite.config.js)), so the Python backend needs **no CORS
 > changes**.
+
+---
+
+## 🧭 Project-based workflow (current UX)
+
+A **project == a Job Description campaign**. The flow:
+
+1. **Dashboard** ([`pages/Dashboard.jsx`](src/pages/Dashboard.jsx)) — empty state
+   ("Create your first project") or a grid of project cards. **Add** button
+   (top-right once projects exist).
+2. **Create project** ([`pages/CreateProject.jsx`](src/pages/CreateProject.jsx)) —
+   left: natural-language JD box; right: Multi-Channel Ingestion Hub (pick the
+   first source); bottom: **Add**. On submit the JD is generated and the user
+   returns to the dashboard with a new card.
+3. **Project detail** ([`pages/ProjectDetail.jsx`](src/pages/ProjectDetail.jsx)) —
+   opening a card shows the **generated JD**, the list of **ingestion sources**
+   (+ **Add Source** to add more CVs / link / inbox), the ingestion queue, and a
+   **View Shortlist** button scoped to that JD.
+4. **Shortlisting** ([`pages/Shortlisting.jsx`](src/pages/Shortlisting.jsx)) —
+   project-scoped leaderboard. The per-row button opens the **candidate popup**
+   ([`components/CandidateModal.jsx`](src/components/CandidateModal.jsx)) — the old
+   CV Analysis page is gone. The popup's **pen icon** overrides the AI evaluation.
+
+Replace the `ProjectContext` handler bodies (`addProject`, `addSource`,
+`overrideCandidate`, `toggleShortlist`) with `fetch()` calls when the API exists.
+
+---
+
+## 📁 Projects / Job Descriptions — [`context/ProjectContext.jsx`](src/context/ProjectContext.jsx)
+
+| Control / handler | Method & Endpoint | Status | Backs onto (model) |
+|---|---|---|---|
+| **Add** (create project) → `addProject()` | `POST /api/job-descriptions` (send `raw_text` + first source; AI returns `title`, `jd_markdown`, `requirements`) | 🔲 | `JobDescription` (+ `requirements` JSONB) |
+| Dashboard project grid (data) | `GET /api/job-descriptions` | 🔲 | `JobDescription` list |
+| Open a project (detail) | `GET /api/job-descriptions/{id}` | 🔲 | `JobDescription` (+ sources, counts) |
+| **Add Source** → `addSource()` | `POST /api/job-descriptions/{id}/sources` `{ method, value }` (`upload` = multipart) | 🔲 | new `IngestionSource` table → `Candidate.source_id` |
+| Ingestion Sources list (data) | `GET /api/job-descriptions/{id}/sources` | 🔲 | `IngestionSource` (+ per-source CV count) |
+| Ingestion source by method | `upload` → `POST /api/ingestion/upload` · `link` → `POST /api/ingestion/link` · `email` → `POST /api/ingestion/email` | 🔲 | `Candidate` (+ `file_hash` dedupe, `source`) |
 
 ---
 
@@ -37,45 +78,59 @@ All three call the real backend via [`src/api/auth.js`](src/api/auth.js).
 
 ## 📊 Dashboard — [`pages/Dashboard.jsx`](src/pages/Dashboard.jsx)
 
+The dashboard is now a **project list** (see *Projects / Job Descriptions* above).
+
 | Control | Method & Endpoint | Status | Backs onto (model) |
 |---|---|---|---|
-| **+ New Campaign** | `POST /api/job-descriptions` | 🔲 | `JobDescription` |
-| **Generate Scoring Matrix** | `POST /api/job-descriptions` (send `raw_text`, AI returns `jd_markdown` + `requirements`) | 🔲 | `JobDescription.requirements` (JSONB) |
-| Ingestion tab: **Direct Upload** drop zone / **Browse Files** | `POST /api/ingestion/upload` (multipart ZIP/PDF/DOCX) | 🔲 | `Candidate` (+ `file_hash` dedupe) |
-| Ingestion tab: **Link Sync → Connect** | `POST /api/ingestion/link` (Google Forms/Sheet URL) | 🔲 | `Candidate` (`source="google_forms"`) |
-| Ingestion tab: **Email Listener → Connect** | `POST /api/ingestion/email` (shared inbox) | 🔲 | `Candidate` (`source="email"`) |
-| **Ingestion Queue** list (data) | `GET /api/ingestion/queue` | 🔲 | Queue/job status — consider a new table or derive from `Candidate.status` |
+| Project grid + counts (data) | `GET /api/job-descriptions` | 🔲 | `JobDescription` (+ source count, candidate count) |
+| **Add** / first-project **+** | navigates to `/projects/new` (create form) | — | — |
+| Open a project card | navigates to `/projects/{id}` | — | — |
+
+### Ingestion queue / alerts (shown on project detail)
+
+| Control | Method & Endpoint | Status | Backs onto (model) |
+|---|---|---|---|
+| **Ingestion Queue** list (data) | `GET /api/job-descriptions/{id}/queue` | 🔲 | derive from `Candidate.status` / a jobs table |
 | **System Alerts** list (data) | `GET /api/system/alerts` | 🔲 | `SystemLog` (level = WARNING/ERROR/INFO) |
-| Stat cards (Active Drives / CVs Processed / AI Insights) | `GET /api/dashboard/stats` | 🔲 | Aggregates over `JobDescription`, `Candidate`, `AgentToolLog` |
 
 ---
 
 ## 👥 Shortlisting — [`pages/Shortlisting.jsx`](src/pages/Shortlisting.jsx)
 
+Project-scoped. The leaderboard reorders live when an evaluation is overridden.
+
 | Control | Method & Endpoint | Status | Backs onto (model) |
 |---|---|---|---|
-| **Frontend Eng / Product Mgr** switch | `GET /api/job-descriptions` (list active drives) | 🔲 | `JobDescription` |
-| Candidate table (data) | `GET /api/shortlist?jd_id=…` | 🔲 | `Shortlist` + `ShortlistItem` + `Evaluation.score` |
-| **Semantic Search** (submit) | `POST /api/shortlist/search` `{ jd_id, query }` | 🔲 | Vector/semantic search over `Candidate.raw_text` / `CandidateSkill` |
-| **Filters** button | adds query params to `GET /api/shortlist` | 🔲 | filter on `Evaluation`, `CandidateSkill`, experience |
-| filter chips **×** | re-query `GET /api/shortlist` with the chip removed | 🔲 | — |
+| Project (JD) switch | `GET /api/job-descriptions` | 🔲 | `JobDescription` |
+| Leaderboard table (data) | `GET /api/shortlist?jd_id=…&sort=ai_rank` | 🔲 | `Shortlist` + `ShortlistItem` + `Evaluation.score` |
+| **Semantic Search** | `POST /api/shortlist/search` `{ jd_id, query }` | 🔲 | Vector search over `Candidate.raw_text` / `CandidateSkill` |
+| **Filters** / chip **×** | query params on `GET /api/shortlist` | 🔲 | filter on `Evaluation`, `CandidateSkill`, experience |
 | **Sort: AI Rank** | `GET /api/shortlist?sort=ai_rank\|score\|name` | 🔲 | order by `Evaluation.score` |
 | **💡 explain score** (per row) | `GET /api/evaluations/{cv_id}` | 🔲 | `Evaluation.explanation` / `score_breakdown` |
-| **↗ open profile** (per row) | navigates to CV Analysis → `GET /api/candidates/{id}` | 🔲 | `Candidate` (+ `Evaluation`) |
-| **Prev / Next** | `GET /api/shortlist?page=N` | 🔲 | pagination |
+| **↗ open profile** (per row) | opens candidate popup → `GET /api/candidates/{id}` + `GET /api/evaluations/{cv_id}` | 🔲 | `Candidate` (+ `Evaluation`) |
+| **Compare** (select ≥2 → modal) | `GET /api/candidates?ids=…` (or compose client-side) | 🔲 | `Candidate` + `Evaluation` |
 
 ---
 
-## 📄 CV Analysis — [`pages/CVAnalysis.jsx`](src/pages/CVAnalysis.jsx)
+## 📄 Candidate popup — [`components/CandidateModal.jsx`](src/components/CandidateModal.jsx)
 
-| Control | Method & Endpoint | Status | Backs onto (model) |
+Replaces the old CV Analysis page. Opened from the Shortlisting leaderboard.
+
+| Control / handler | Method & Endpoint | Status | Backs onto (model) |
 |---|---|---|---|
-| Page data (resume + brief) | `GET /api/candidates/{id}` + `GET /api/evaluations/{cv_id}` | 🔲 | `Candidate`, `CandidateSkill`, `Evaluation` |
-| **← Back** | client-side history back | — | — |
+| Popup data (resume + brief) | `GET /api/candidates/{id}` + `GET /api/evaluations/{cv_id}` | 🔲 | `Candidate`, `CandidateSkill`, `Evaluation` |
 | **Original PDF** | `GET /api/candidates/{id}/file` (download) | 🔲 | `Candidate.file_path` |
-| **Approve Candidate** | `POST /api/shortlist/{item_id}/approve` | 🔲 | `ShortlistItem.candidate_status = "accepted"` |
-| **Hover to highlight source** | uses evidence offsets already in the brief payload | 🔲 | `Evaluation.evidence` (JSONB) |
-| **Acknowledge & Dismiss** (flag) | `PATCH /api/evaluations/{id}` `{ flag_acknowledged: true }` | 🔲 | `Evaluation` (add column) — hidden client-side for now |
+| **Proceed to Shortlist** → `toggleShortlist()` | `POST /api/shortlist/{item_id}/approve` (or `DELETE` to unshortlist) | 🔲 | `ShortlistItem.candidate_status` |
+| **Leaderboard** / **Compare** buttons | navigate / open compare (see Shortlisting) | — | — |
+| **✏️ Override AI evaluation** (pen) → `overrideCandidate()` | `PATCH /api/evaluations/{cv_id}` `{ score, summary }` | 🔲 | `Evaluation.score` (set `is_overridden=true`) |
+| → records edit history | `POST /api/evaluations/{cv_id}/history` *(or audit row on the PATCH)* `{ field, old_value, new_value, editor, timestamp }` | 🔲 | new `EvaluationEdit` audit table |
+| → re-rank leaderboard | server recomputes rank on the override `PATCH`; client re-sorts by `score` | 🔲 | order by `Evaluation.score` |
+
+> **Override contract (matches the use case):** on save the score/evaluation is
+> updated to HR's value, the profile is flagged **overridden** (`is_overridden`),
+> an edit-history record (`old_value`, `new_value`, `editor`, `timestamp`) is
+> appended, and the candidate's leaderboard position updates. All of this is done
+> client-side today in `overrideCandidate()`.
 
 ---
 
@@ -102,20 +157,29 @@ All three call the real backend via [`src/api/auth.js`](src/api/auth.js).
 
 ## How to wire one up (example)
 
-Today the buttons call `toast(...)` as a placeholder. To connect, e.g., **New Campaign**:
+Today the project state is mocked in
+[`src/context/ProjectContext.jsx`](src/context/ProjectContext.jsx). To connect,
+turn each handler into an API call. Example — **create project** (`addProject`):
 
 ```jsx
-// 1. add to src/api/ (new file, e.g. campaigns.js)
+// 1. add to src/api/ (new file, e.g. projects.js)
 import { apiFetch } from './client.js'
-export const createCampaign = (body) =>
+export const createProject = (body) =>
   apiFetch('/api/job-descriptions', { method: 'POST', body, auth: true })
 
-// 2. in Dashboard.jsx, replace the toast handler
-onClick={async () => {
-  const jd = await createCampaign({ title, raw_text: jobText })
-  // refresh list / navigate …
-}}
+// 2. in ProjectContext.jsx, make addProject async and call the API
+const addProject = useCallback(async ({ jdInput, ingestion }) => {
+  const jd = await createProject({ raw_text: jdInput, source: ingestion })
+  // jd already contains the AI-generated title + jd_markdown from the server
+  setProjects((list) => [jd, ...list])
+  return jd.id
+}, [])
 ```
+
+The same pattern applies to `addSource`
+(`POST /api/job-descriptions/{id}/sources`), `overrideCandidate`
+(`PATCH /api/evaluations/{cv_id}` + history), and `toggleShortlist`
+(`POST /api/shortlist/{item_id}/approve`).
 
 `apiFetch(path, { auth: true })` automatically attaches the
 `Authorization: Bearer <token>` header from `localStorage`.

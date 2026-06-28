@@ -4,8 +4,9 @@ import Login from './pages/Login.jsx'
 import SignUp from './pages/SignUp.jsx'
 import VerifyEmail from './pages/VerifyEmail.jsx'
 import Dashboard from './pages/Dashboard.jsx'
+import CreateProject from './pages/CreateProject.jsx'
+import ProjectDetail from './pages/ProjectDetail.jsx'
 import Shortlisting from './pages/Shortlisting.jsx'
-import CVAnalysis from './pages/CVAnalysis.jsx'
 import AdminGateway from './pages/AdminGateway.jsx'
 
 export default function App() {
@@ -20,8 +21,9 @@ export default function App() {
            page; sign in / sign up live in the sidebar's bottom-left corner. ---- */}
       <Route element={<Layout />}>
         <Route path="/" element={<Dashboard />} />
+        <Route path="/projects/new" element={<CreateProject />} />
+        <Route path="/projects/:id" element={<ProjectDetail />} />
         <Route path="/shortlisting" element={<Shortlisting />} />
-        <Route path="/cv-analysis" element={<CVAnalysis />} />
         <Route path="/admin" element={<AdminGateway />} />
       </Route>
 

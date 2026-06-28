@@ -3,7 +3,6 @@ import { useState } from 'react'
 import {
   LayoutDashboard,
   Users,
-  FileText,
   ShieldCheck,
   Settings,
   LogOut,
@@ -15,7 +14,6 @@ import { useAuth } from '../context/AuthContext.jsx'
 const NAV_ITEMS = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
   { to: '/shortlisting', label: 'Shortlisting', icon: Users },
-  { to: '/cv-analysis', label: 'CV Analysis', icon: FileText },
   { to: '/admin', label: 'Admin Gateway', icon: ShieldCheck },
 ]
 
