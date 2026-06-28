@@ -122,15 +122,19 @@ Replaces the old CV Analysis page. Opened from the Shortlisting leaderboard.
 | **Original PDF** | `GET /api/candidates/{id}/file` (download) | 🔲 | `Candidate.file_path` |
 | **Proceed to Shortlist** → `toggleShortlist()` | `POST /api/shortlist/{item_id}/approve` (or `DELETE` to unshortlist) | 🔲 | `ShortlistItem.candidate_status` |
 | **Leaderboard** / **Compare** buttons | navigate / open compare (see Shortlisting) | — | — |
-| **✏️ Override AI evaluation** (pen) → `overrideCandidate()` | `PATCH /api/evaluations/{cv_id}` `{ score, summary }` | 🔲 | `Evaluation.score` (set `is_overridden=true`) |
-| → records edit history | `POST /api/evaluations/{cv_id}/history` *(or audit row on the PATCH)* `{ field, old_value, new_value, editor, timestamp }` | 🔲 | new `EvaluationEdit` audit table |
+| **✏️ Override AI evaluation** (pen) → `overrideCandidate()` | `PATCH /api/evaluations/{cv_id}` `{ score, match_score, profile, verified_skills, deductions, flags, summary }` | 🔲 | `Evaluation` + `CandidateSkill` (set `is_overridden=true`) |
+| → records edit history (one row per changed field) | `POST /api/evaluations/{cv_id}/history` *(or audit rows on the PATCH)* `{ field, old_value, new_value, editor, timestamp }` | 🔲 | new `EvaluationEdit` audit table |
 | → re-rank leaderboard | server recomputes rank on the override `PATCH`; client re-sorts by `score` | 🔲 | order by `Evaluation.score` |
 
-> **Override contract (matches the use case):** on save the score/evaluation is
-> updated to HR's value, the profile is flagged **overridden** (`is_overridden`),
-> an edit-history record (`old_value`, `new_value`, `editor`, `timestamp`) is
+> **Override contract (matches the use case):** the pen toggles edit mode, where
+> HR can edit **every AI-written field** — suitability score, match %, extracted
+> profile (experience / education), verified skills, AI deductions (title +
+> evidence), and flags. On save: each changed field is updated to HR's value, the
+> profile is flagged **overridden** (`is_overridden`), one edit-history record per
+> changed field (`field`, `old_value`, `new_value`, `editor`, `timestamp`) is
 > appended, and the candidate's leaderboard position updates. All of this is done
-> client-side today in `overrideCandidate()`.
+> client-side today in `overrideCandidate()` (the popup computes the per-field
+> diff; the context applies the patch, stamps history, and re-ranks).
 
 ---
 

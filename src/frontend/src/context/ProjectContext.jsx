@@ -73,33 +73,32 @@ export function ProjectProvider({ children }) {
     [projects]
   )
 
-  // HR override: update a candidate's score (and optionally summary), flag the
-  // profile as overridden, append an edit-history record, and re-rank so the
-  // leaderboard position updates.
+  // HR override: apply a patch to a candidate (any AI-written field, including
+  // the nested `analysis`), flag the profile as overridden, append the supplied
+  // edit-history entries (the caller computes old→new diffs since it knows the
+  // human-readable labels), and re-rank so the leaderboard position updates.
   const overrideCandidate = useCallback(
-    (projectId, candidateId, changes, editor) => {
+    (projectId, candidateId, patch, history, editor) => {
+      if (!history || history.length === 0) return // nothing changed
       const timestamp = new Date().toISOString()
+      const stamped = history.map((h) => ({
+        ...h,
+        editor: editor || 'HR',
+        timestamp,
+      }))
       setProjects((list) =>
         list.map((p) => {
           if (p.id !== projectId) return p
-          const updated = p.candidates.map((c) => {
-            if (c.id !== candidateId) return c
-            const history = [...c.editHistory]
-            // Record each changed field as its own audit entry.
-            for (const [field, newValue] of Object.entries(changes)) {
-              const oldValue = c[field]
-              if (String(oldValue) === String(newValue)) continue
-              history.push({
-                field,
-                oldValue,
-                newValue,
-                editor: editor || 'HR',
-                timestamp,
-              })
-            }
-            if (history.length === c.editHistory.length) return c // nothing changed
-            return { ...c, ...changes, overridden: true, editHistory: history }
-          })
+          const updated = p.candidates.map((c) =>
+            c.id !== candidateId
+              ? c
+              : {
+                  ...c,
+                  ...patch,
+                  overridden: true,
+                  editHistory: [...c.editHistory, ...stamped],
+                }
+          )
           return { ...p, candidates: reRank(updated) }
         })
       )

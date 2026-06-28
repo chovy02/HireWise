@@ -13,6 +13,8 @@ import {
   Check,
   History,
   Save,
+  Plus,
+  Trash2,
 } from 'lucide-react'
 import { Tag, PrimaryButton, SecondaryButton, Badge } from './ui.jsx'
 import { useToast } from '../context/ToastContext.jsx'
@@ -28,8 +30,29 @@ function fmt(ts) {
   }
 }
 
+const clampScore = (v) => Math.max(0, Math.min(100, Number(v) || 0))
+
+// Build an editable draft from a candidate's current AI evaluation.
+function makeDraft(candidate) {
+  const a = candidate.analysis
+  return {
+    score: String(candidate.score),
+    matchScore: String(a.matchScore),
+    totalExperience: a.profile.totalExperience,
+    highestEducation: a.profile.highestEducation,
+    verifiedSkills: [...a.profile.verifiedSkills],
+    deductions: a.deductions.map((d) => ({
+      title: d.title,
+      evidence: d.evidence,
+      sources: d.sources || [],
+    })),
+    flags: a.flags.map((f) => ({ title: f.title, detail: f.detail })),
+    overrideSummary: candidate.overrideSummary || '',
+  }
+}
+
 // Candidate profile popup. Replaces the old CV Analysis page/tab. Lets HR review
-// the AI brief and (via the pen button) override the score / evaluation.
+// the AI brief and (via the pen button) override *any* AI-written field.
 export default function CandidateModal({
   project,
   candidate,
@@ -43,24 +66,135 @@ export default function CandidateModal({
   const editor = user?.name || user?.email || 'HR'
 
   const [editing, setEditing] = useState(false)
-  const [scoreDraft, setScoreDraft] = useState(String(candidate.score))
-  const [summaryDraft, setSummaryDraft] = useState(
-    candidate.overrideSummary || ''
-  )
+  const [draft, setDraft] = useState(() => makeDraft(candidate))
   // Résumé bullet keys currently highlighted by hovering an AI deduction.
   const [highlighted, setHighlighted] = useState([])
 
   if (!candidate) return null
   const a = candidate.analysis
 
+  function startEdit() {
+    setDraft(makeDraft(candidate))
+    setEditing(true)
+  }
+  function cancelEdit() {
+    setDraft(makeDraft(candidate))
+    setEditing(false)
+  }
+
+  // --- draft mutators ---
+  const setField = (k, v) => setDraft((d) => ({ ...d, [k]: v }))
+  const setSkill = (i, v) =>
+    setDraft((d) => ({
+      ...d,
+      verifiedSkills: d.verifiedSkills.map((s, k) => (k === i ? v : s)),
+    }))
+  const addSkill = () =>
+    setDraft((d) => ({ ...d, verifiedSkills: [...d.verifiedSkills, ''] }))
+  const removeSkill = (i) =>
+    setDraft((d) => ({
+      ...d,
+      verifiedSkills: d.verifiedSkills.filter((_, k) => k !== i),
+    }))
+  const setDeduction = (i, key, v) =>
+    setDraft((d) => ({
+      ...d,
+      deductions: d.deductions.map((x, k) =>
+        k === i ? { ...x, [key]: v } : x
+      ),
+    }))
+  const addDeduction = () =>
+    setDraft((d) => ({
+      ...d,
+      deductions: [...d.deductions, { title: '', evidence: '', sources: [] }],
+    }))
+  const removeDeduction = (i) =>
+    setDraft((d) => ({
+      ...d,
+      deductions: d.deductions.filter((_, k) => k !== i),
+    }))
+  const setFlag = (i, key, v) =>
+    setDraft((d) => ({
+      ...d,
+      flags: d.flags.map((x, k) => (k === i ? { ...x, [key]: v } : x)),
+    }))
+  const addFlag = () =>
+    setDraft((d) => ({ ...d, flags: [...d.flags, { title: '', detail: '' }] }))
+  const removeFlag = (i) =>
+    setDraft((d) => ({ ...d, flags: d.flags.filter((_, k) => k !== i) }))
+
   function saveOverride() {
-    const next = Math.max(0, Math.min(100, Number(scoreDraft) || 0))
-    const changes = { score: next }
-    if (summaryDraft.trim()) changes.overrideSummary = summaryDraft.trim()
-    overrideCandidate(project.id, candidate.id, changes, editor)
+    const history = []
+    const push = (field, oldValue, newValue) => {
+      if (String(oldValue) !== String(newValue))
+        history.push({ field, oldValue, newValue })
+    }
+
+    const newScore = clampScore(draft.score)
+    const newMatch = clampScore(draft.matchScore)
+    const newSkills = draft.verifiedSkills.map((s) => s.trim()).filter(Boolean)
+    const newDeductions = draft.deductions
+      .map((d) => ({
+        title: d.title.trim(),
+        evidence: d.evidence.trim(),
+        sources: d.sources || [],
+      }))
+      .filter((d) => d.title || d.evidence)
+    const newFlags = draft.flags
+      .map((f) => ({ title: f.title.trim(), detail: f.detail.trim() }))
+      .filter((f) => f.title || f.detail)
+    const newSummary = draft.overrideSummary.trim()
+
+    push('Suitability score', candidate.score, newScore)
+    push('Match %', a.matchScore, newMatch)
+    push('Total experience', a.profile.totalExperience, draft.totalExperience)
+    push('Highest education', a.profile.highestEducation, draft.highestEducation)
+    push(
+      'Verified skills',
+      a.profile.verifiedSkills.join(', '),
+      newSkills.join(', ')
+    )
+    push(
+      'AI deductions',
+      a.deductions.map((d) => `${d.title}: ${d.evidence}`).join(' | '),
+      newDeductions.map((d) => `${d.title}: ${d.evidence}`).join(' | ')
+    )
+    push(
+      'Flags',
+      a.flags.map((f) => `${f.title}: ${f.detail}`).join(' | '),
+      newFlags.map((f) => `${f.title}: ${f.detail}`).join(' | ')
+    )
+    push('Evaluation note', candidate.overrideSummary || '', newSummary)
+
+    if (history.length === 0) {
+      setEditing(false)
+      return
+    }
+
+    const newAnalysis = {
+      ...a,
+      matchScore: newMatch,
+      profile: {
+        ...a.profile,
+        totalExperience: draft.totalExperience,
+        highestEducation: draft.highestEducation,
+        verifiedSkills: newSkills,
+      },
+      deductions: newDeductions,
+      flags: newFlags,
+    }
+    const patch = { score: newScore, analysis: newAnalysis, overrideSummary: newSummary }
+    // Keep the leaderboard skill chips in sync when skills were edited.
+    if (newSkills.join(', ') !== a.profile.verifiedSkills.join(', '))
+      patch.skills = newSkills
+
+    overrideCandidate(project.id, candidate.id, patch, history, editor)
     setEditing(false)
     toast(`Evaluation overridden — leaderboard updated (editor: ${editor}).`)
   }
+
+  const inputCls =
+    'w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100'
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -101,18 +235,24 @@ export default function CandidateModal({
             </div>
           </div>
           <div className="flex items-center gap-2">
-            {/* PEN: toggle override edit mode */}
-            <button
-              onClick={() => setEditing((v) => !v)}
-              className={`rounded-lg border p-2 transition ${
-                editing
-                  ? 'border-indigo-300 bg-indigo-50 text-indigo-600'
-                  : 'border-slate-200 text-slate-500 hover:bg-slate-50'
-              }`}
-              title="Override AI evaluation"
-            >
-              <Pencil size={16} />
-            </button>
+            {editing ? (
+              <>
+                <SecondaryButton className="px-3 py-2" onClick={cancelEdit}>
+                  Cancel
+                </SecondaryButton>
+                <PrimaryButton className="px-3 py-2" onClick={saveOverride}>
+                  <Save size={15} /> Save
+                </PrimaryButton>
+              </>
+            ) : (
+              <button
+                onClick={startEdit}
+                className="rounded-lg border border-slate-200 p-2 text-slate-500 transition hover:bg-slate-50"
+                title="Override AI evaluation"
+              >
+                <Pencil size={16} />
+              </button>
+            )}
             <button
               onClick={onClose}
               className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
@@ -138,8 +278,8 @@ export default function CandidateModal({
                       type="number"
                       min={0}
                       max={100}
-                      value={scoreDraft}
-                      onChange={(e) => setScoreDraft(e.target.value)}
+                      value={draft.score}
+                      onChange={(e) => setField('score', e.target.value)}
                       className="w-20 rounded-lg border border-indigo-300 px-2.5 py-1.5 text-lg font-bold text-slate-900 outline-none focus:ring-2 focus:ring-indigo-100"
                     />
                     <span className="text-sm text-slate-400">/ 100</span>
@@ -158,194 +298,346 @@ export default function CandidateModal({
                   </p>
                 )}
               </div>
-              <span className="inline-flex items-center gap-1 rounded-md bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-600">
-                <Target size={12} /> {a.matchScore}% MATCH
-              </span>
+              <div>
+                <p className="text-xs uppercase tracking-wide text-slate-400">
+                  Match
+                </p>
+                {editing ? (
+                  <div className="mt-1 flex items-center gap-1">
+                    <input
+                      type="number"
+                      min={0}
+                      max={100}
+                      value={draft.matchScore}
+                      onChange={(e) => setField('matchScore', e.target.value)}
+                      className="w-20 rounded-lg border border-indigo-300 px-2.5 py-1.5 text-lg font-bold text-emerald-600 outline-none focus:ring-2 focus:ring-indigo-100"
+                    />
+                    <span className="text-sm text-slate-400">%</span>
+                  </div>
+                ) : (
+                  <span className="mt-1 inline-flex items-center gap-1 rounded-md bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-600">
+                    <Target size={12} /> {a.matchScore}% MATCH
+                  </span>
+                )}
+              </div>
             </div>
 
-            {/* HR actions: open profile (this modal), leaderboard, compare, proceed */}
-            <div className="flex flex-wrap gap-2">
-              <SecondaryButton
-                className="px-3 py-2"
-                onClick={() => {
-                  onViewLeaderboard?.()
-                  onClose()
-                }}
-              >
-                <Trophy size={15} /> Leaderboard
-              </SecondaryButton>
-              <SecondaryButton
-                className="px-3 py-2"
-                onClick={() => {
-                  onCompare?.()
-                  onClose()
-                }}
-              >
-                <GitCompare size={15} /> Compare
-              </SecondaryButton>
-              <PrimaryButton
-                className="px-3 py-2"
-                onClick={() => {
-                  toggleShortlist(project.id, candidate.id)
-                  toast(
-                    candidate.shortlisted
-                      ? 'Removed from shortlist.'
-                      : 'Proceeded to shortlist.'
-                  )
-                }}
-              >
-                <Check size={15} />{' '}
-                {candidate.shortlisted ? 'Shortlisted' : 'Proceed to Shortlist'}
-              </PrimaryButton>
-            </div>
-          </div>
-
-          {/* Override editor */}
-          {editing && (
-            <div className="border-b border-slate-100 bg-indigo-50/40 px-6 py-4">
-              <p className="text-sm font-semibold text-slate-800">
-                Override AI Evaluation
-              </p>
-              <p className="mt-0.5 text-xs text-slate-500">
-                Adjust the score and (optionally) add an evaluation note. The
-                profile will be flagged as overridden and the change recorded in
-                the edit history.
-              </p>
-              <textarea
-                value={summaryDraft}
-                onChange={(e) => setSummaryDraft(e.target.value)}
-                rows={2}
-                placeholder="Reason / evaluation note (optional)…"
-                className="mt-3 w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
-              />
-              <div className="mt-3 flex justify-end gap-2">
+            {/* HR actions: leaderboard, compare, proceed */}
+            {!editing && (
+              <div className="flex flex-wrap gap-2">
                 <SecondaryButton
                   className="px-3 py-2"
                   onClick={() => {
-                    setEditing(false)
-                    setScoreDraft(String(candidate.score))
-                    setSummaryDraft(candidate.overrideSummary || '')
+                    onViewLeaderboard?.()
+                    onClose()
                   }}
                 >
-                  Cancel
+                  <Trophy size={15} /> Leaderboard
                 </SecondaryButton>
-                <PrimaryButton className="px-3 py-2" onClick={saveOverride}>
-                  <Save size={15} /> Save Override
+                <SecondaryButton
+                  className="px-3 py-2"
+                  onClick={() => {
+                    onCompare?.()
+                    onClose()
+                  }}
+                >
+                  <GitCompare size={15} /> Compare
+                </SecondaryButton>
+                <PrimaryButton
+                  className="px-3 py-2"
+                  onClick={() => {
+                    toggleShortlist(project.id, candidate.id)
+                    toast(
+                      candidate.shortlisted
+                        ? 'Removed from shortlist.'
+                        : 'Proceeded to shortlist.'
+                    )
+                  }}
+                >
+                  <Check size={15} />{' '}
+                  {candidate.shortlisted ? 'Shortlisted' : 'Proceed to Shortlist'}
                 </PrimaryButton>
               </div>
+            )}
+          </div>
+
+          {editing && (
+            <div className="border-b border-slate-100 bg-indigo-50/40 px-6 py-3">
+              <p className="text-sm font-semibold text-indigo-800">
+                Editing AI evaluation
+              </p>
+              <p className="mt-0.5 text-xs text-indigo-700/80">
+                Adjust any field below. On save the profile is flagged as
+                overridden, every change is logged to the edit history, and the
+                leaderboard re-ranks.
+              </p>
             </div>
           )}
 
           <div className="grid grid-cols-1 gap-6 px-6 py-5 lg:grid-cols-2">
-            {/* Left: extracted profile + deductions + flags */}
+            {/* Left: editable evaluation */}
             <div>
-              {candidate.overrideSummary && (
-                <div className="mb-5 rounded-lg border border-indigo-200 bg-indigo-50 p-4">
-                  <p className="text-xs font-bold uppercase tracking-wide text-indigo-700">
+              {/* Evaluation note */}
+              {editing ? (
+                <div className="mb-5">
+                  <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
                     HR Evaluation Note
                   </p>
-                  <p className="mt-1 text-sm text-indigo-900">
-                    {candidate.overrideSummary}
-                  </p>
+                  <textarea
+                    value={draft.overrideSummary}
+                    onChange={(e) => setField('overrideSummary', e.target.value)}
+                    rows={2}
+                    placeholder="Reason / evaluation note (optional)…"
+                    className={`mt-2 resize-none ${inputCls}`}
+                  />
                 </div>
+              ) : (
+                candidate.overrideSummary && (
+                  <div className="mb-5 rounded-lg border border-indigo-200 bg-indigo-50 p-4">
+                    <p className="text-xs font-bold uppercase tracking-wide text-indigo-700">
+                      HR Evaluation Note
+                    </p>
+                    <p className="mt-1 text-sm text-indigo-900">
+                      {candidate.overrideSummary}
+                    </p>
+                  </div>
+                )
               )}
 
+              {/* Extracted profile */}
               <h3 className="text-xs font-bold uppercase tracking-wide text-slate-500">
                 Extracted Profile
               </h3>
               <div className="mt-3 grid grid-cols-2 gap-3">
                 <div className="rounded-lg border border-slate-200 p-3">
                   <p className="text-xs text-slate-400">Total Experience</p>
-                  <p className="mt-1 text-sm font-semibold text-slate-900">
-                    {a.profile.totalExperience}
-                  </p>
+                  {editing ? (
+                    <input
+                      value={draft.totalExperience}
+                      onChange={(e) =>
+                        setField('totalExperience', e.target.value)
+                      }
+                      className={`mt-1 ${inputCls}`}
+                    />
+                  ) : (
+                    <p className="mt-1 text-sm font-semibold text-slate-900">
+                      {a.profile.totalExperience}
+                    </p>
+                  )}
                 </div>
                 <div className="rounded-lg border border-slate-200 p-3">
                   <p className="text-xs text-slate-400">Highest Education</p>
-                  <p className="mt-1 text-sm font-semibold text-slate-900">
-                    {a.profile.highestEducation}
-                  </p>
+                  {editing ? (
+                    <input
+                      value={draft.highestEducation}
+                      onChange={(e) =>
+                        setField('highestEducation', e.target.value)
+                      }
+                      className={`mt-1 ${inputCls}`}
+                    />
+                  ) : (
+                    <p className="mt-1 text-sm font-semibold text-slate-900">
+                      {a.profile.highestEducation}
+                    </p>
+                  )}
                 </div>
               </div>
+
+              {/* Verified skills */}
               <p className="mt-4 text-xs text-slate-400">Verified Skills</p>
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                {a.profile.verifiedSkills.map((s) => (
-                  <Tag key={s} className="bg-indigo-50 text-indigo-700">
-                    {s}
-                  </Tag>
-                ))}
-              </div>
-
-              <h3 className="mt-6 text-xs font-bold uppercase tracking-wide text-slate-500">
-                AI Deductions &amp; Evidence
-              </h3>
-              <div className="mt-3 space-y-3">
-                {a.deductions.map((d) => (
-                  <div
-                    key={d.title}
-                    className="rounded-lg border border-slate-200 p-4"
-                  >
-                    <div className="flex items-start gap-2">
-                      <CheckCircle2
-                        size={16}
-                        className="mt-0.5 flex-shrink-0 text-slate-400"
+              {editing ? (
+                <div className="mt-2 space-y-2">
+                  {draft.verifiedSkills.map((s, i) => (
+                    <div key={i} className="flex items-center gap-2">
+                      <input
+                        value={s}
+                        onChange={(e) => setSkill(i, e.target.value)}
+                        className={inputCls}
                       />
-                      <div>
-                        <p className="text-sm font-semibold text-slate-800">
-                          {d.title}
-                        </p>
-                        <p className="mt-1 text-xs leading-relaxed text-slate-500">
-                          {d.evidence}
-                        </p>
-                        {d.sources?.length > 0 && (
-                          <button
-                            onMouseEnter={() => setHighlighted(d.sources)}
-                            onMouseLeave={() => setHighlighted([])}
-                            className="mt-2 flex items-center gap-1.5 text-xs font-medium text-indigo-600 hover:text-indigo-700"
-                          >
-                            <Sparkles size={13} /> Hover to highlight source in
-                            résumé
-                          </button>
-                        )}
-                      </div>
+                      <button
+                        onClick={() => removeSkill(i)}
+                        className="rounded-lg p-2 text-slate-400 hover:bg-red-50 hover:text-red-500"
+                        title="Remove skill"
+                      >
+                        <X size={15} />
+                      </button>
                     </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                  <button
+                    onClick={addSkill}
+                    className="inline-flex items-center gap-1.5 text-xs font-medium text-indigo-600 hover:text-indigo-700"
+                  >
+                    <Plus size={14} /> Add skill
+                  </button>
+                </div>
+              ) : (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {a.profile.verifiedSkills.map((s) => (
+                    <Tag key={s} className="bg-indigo-50 text-indigo-700">
+                      {s}
+                    </Tag>
+                  ))}
+                </div>
+              )}
 
-              {a.flags.length > 0 && (
-                <>
-                  <h3 className="mt-6 flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-amber-600">
-                    <ShieldAlert size={14} /> Missing / Flagged
-                  </h3>
-                  <div className="mt-3 space-y-3">
-                    {a.flags.map((f) => (
+              {/* AI deductions */}
+              <div className="mt-6 flex items-center justify-between">
+                <h3 className="text-xs font-bold uppercase tracking-wide text-slate-500">
+                  AI Deductions &amp; Evidence
+                </h3>
+                {editing && (
+                  <button
+                    onClick={addDeduction}
+                    className="inline-flex items-center gap-1.5 text-xs font-medium text-indigo-600 hover:text-indigo-700"
+                  >
+                    <Plus size={14} /> Add
+                  </button>
+                )}
+              </div>
+              <div className="mt-3 space-y-3">
+                {editing
+                  ? draft.deductions.map((d, i) => (
                       <div
-                        key={f.title}
-                        className="rounded-lg border border-amber-200 bg-amber-50 p-4"
+                        key={i}
+                        className="rounded-lg border border-slate-200 p-3"
+                      >
+                        <div className="flex items-center gap-2">
+                          <input
+                            value={d.title}
+                            onChange={(e) =>
+                              setDeduction(i, 'title', e.target.value)
+                            }
+                            placeholder="Deduction title"
+                            className={`${inputCls} font-semibold`}
+                          />
+                          <button
+                            onClick={() => removeDeduction(i)}
+                            className="rounded-lg p-2 text-slate-400 hover:bg-red-50 hover:text-red-500"
+                            title="Remove deduction"
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
+                        <textarea
+                          value={d.evidence}
+                          onChange={(e) =>
+                            setDeduction(i, 'evidence', e.target.value)
+                          }
+                          rows={2}
+                          placeholder="Evidence…"
+                          className={`mt-2 resize-none ${inputCls}`}
+                        />
+                      </div>
+                    ))
+                  : a.deductions.map((d) => (
+                      <div
+                        key={d.title}
+                        className="rounded-lg border border-slate-200 p-4"
                       >
                         <div className="flex items-start gap-2">
-                          <AlertTriangle
+                          <CheckCircle2
                             size={16}
-                            className="mt-0.5 flex-shrink-0 text-amber-500"
+                            className="mt-0.5 flex-shrink-0 text-slate-400"
                           />
                           <div>
-                            <p className="text-sm font-semibold text-amber-800">
-                              {f.title}
+                            <p className="text-sm font-semibold text-slate-800">
+                              {d.title}
                             </p>
-                            <p className="mt-1 text-xs leading-relaxed text-amber-700">
-                              {f.detail}
+                            <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                              {d.evidence}
                             </p>
+                            {d.sources?.length > 0 && (
+                              <button
+                                onMouseEnter={() => setHighlighted(d.sources)}
+                                onMouseLeave={() => setHighlighted([])}
+                                className="mt-2 flex items-center gap-1.5 text-xs font-medium text-indigo-600 hover:text-indigo-700"
+                              >
+                                <Sparkles size={13} /> Hover to highlight source
+                                in résumé
+                              </button>
+                            )}
                           </div>
                         </div>
                       </div>
                     ))}
-                  </div>
-                </>
-              )}
+              </div>
+
+              {/* Flags */}
+              <div className="mt-6 flex items-center justify-between">
+                <h3 className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-amber-600">
+                  <ShieldAlert size={14} /> Missing / Flagged
+                </h3>
+                {editing && (
+                  <button
+                    onClick={addFlag}
+                    className="inline-flex items-center gap-1.5 text-xs font-medium text-amber-600 hover:text-amber-700"
+                  >
+                    <Plus size={14} /> Add
+                  </button>
+                )}
+              </div>
+              <div className="mt-3 space-y-3">
+                {editing
+                  ? draft.flags.map((f, i) => (
+                      <div
+                        key={i}
+                        className="rounded-lg border border-amber-200 bg-amber-50 p-3"
+                      >
+                        <div className="flex items-center gap-2">
+                          <input
+                            value={f.title}
+                            onChange={(e) => setFlag(i, 'title', e.target.value)}
+                            placeholder="Flag title"
+                            className={`${inputCls} border-amber-200 font-semibold`}
+                          />
+                          <button
+                            onClick={() => removeFlag(i)}
+                            className="rounded-lg p-2 text-amber-500 hover:bg-amber-100"
+                            title="Remove flag"
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
+                        <textarea
+                          value={f.detail}
+                          onChange={(e) => setFlag(i, 'detail', e.target.value)}
+                          rows={2}
+                          placeholder="Detail…"
+                          className={`mt-2 resize-none ${inputCls} border-amber-200`}
+                        />
+                      </div>
+                    ))
+                  : a.flags.length > 0
+                    ? a.flags.map((f) => (
+                        <div
+                          key={f.title}
+                          className="rounded-lg border border-amber-200 bg-amber-50 p-4"
+                        >
+                          <div className="flex items-start gap-2">
+                            <AlertTriangle
+                              size={16}
+                              className="mt-0.5 flex-shrink-0 text-amber-500"
+                            />
+                            <div>
+                              <p className="text-sm font-semibold text-amber-800">
+                                {f.title}
+                              </p>
+                              <p className="mt-1 text-xs leading-relaxed text-amber-700">
+                                {f.detail}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      ))
+                    : (
+                        <p className="text-xs text-slate-400">
+                          No flags raised.
+                        </p>
+                      )}
+              </div>
             </div>
 
-            {/* Right: resume + edit history */}
+            {/* Right: resume (read-only source) + edit history */}
             <div>
               <div className="flex items-center justify-between">
                 <h3 className="text-xs font-bold uppercase tracking-wide text-slate-500">
@@ -420,18 +712,13 @@ export default function CandidateModal({
                       className="rounded-lg border border-slate-200 bg-slate-50/60 p-3 text-xs"
                     >
                       <p className="font-semibold text-slate-700">
-                        {h.field === 'score'
-                          ? 'Score'
-                          : h.field === 'overrideSummary'
-                            ? 'Evaluation note'
-                            : h.field}
-                        :{' '}
+                        {h.field}:{' '}
                         <span className="text-red-500 line-through">
-                          {String(h.oldValue ?? '—')}
+                          {String(h.oldValue ?? '—') || '—'}
                         </span>{' '}
                         →{' '}
                         <span className="text-emerald-600">
-                          {String(h.newValue)}
+                          {String(h.newValue) || '—'}
                         </span>
                       </p>
                       <p className="mt-0.5 text-slate-400">
