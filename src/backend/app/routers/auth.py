@@ -5,6 +5,7 @@ from jose import jwt, JWTError
 import os
 
 from app import models, schemas
+from app.core.dependencies import get_current_user
 from app.database import get_db
 from app.utils import security
 from app.services.email import send_verification_email
@@ -87,11 +88,18 @@ def login(user_credentials: schemas.UserLogin, db: Session = Depends(get_db)):
     access_token = security.create_access_token(data={"sub": user.email})
     
     return {
-        "access_token": access_token, 
+        "access_token": access_token,
         "token_type": "bearer",
         "user": {
             "id": user.id,
             "name": user.name,
-            "email": user.email
+            "email": user.email,
+            "role": user.role
         }
     }
+
+
+@router.get("/me", response_model=schemas.UserResponse)
+def get_me(current_user: models.User = Depends(get_current_user)):
+    """Trả thông tin + role của user đang đăng nhập, dùng để Frontend dựng UI theo RBAC."""
+    return current_user
