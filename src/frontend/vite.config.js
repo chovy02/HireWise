@@ -6,12 +6,19 @@ import tailwindcss from '@tailwindcss/vite'
 // We proxy auth/api calls there in dev so we never need to touch the backend
 // (no CORS middleware required on the Python side).
 //
+// Proxy target is env-driven so the same config works in both setups:
+//   - running `npm run dev` on the host  -> http://localhost:8000 (default)
+//   - running inside docker-compose      -> http://api:8000 (set VITE_PROXY_TARGET)
+// Inside the frontend container "localhost" is the container itself, NOT the
+// `api` service, so Docker must reach the backend by its service name.
+const PROXY_TARGET = process.env.VITE_PROXY_TARGET || 'http://localhost:8000'
+
 // If the backend is down or crashing (e.g. before it's fully built), the proxy
 // would otherwise surface a cryptic 500. This handler returns a clear 503 + JSON
 // message so the login/signup pages can show something helpful instead.
 function backendProxy() {
   return {
-    target: 'http://localhost:8000',
+    target: PROXY_TARGET,
     changeOrigin: true,
     configure: (proxy) => {
       proxy.on('error', (_err, _req, res) => {

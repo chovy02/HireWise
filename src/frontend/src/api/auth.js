@@ -28,3 +28,10 @@ export function login({ email, password }) {
     body: { email, password },
   })
 }
+
+// GET /auth/me -> { id, name, email, role, is_active, created_at }
+// Sends the stored Bearer token; used on app load to verify the session is
+// still valid (throws if the token is missing, expired, or invalid).
+export function me() {
+  return apiFetch('/auth/me', { auth: true })
+}

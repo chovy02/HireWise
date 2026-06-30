@@ -16,11 +16,39 @@ export function AuthProvider({ children }) {
     }
   })
 
+  // While true, a stored token is being verified against the backend.
+  const [loading, setLoading] = useState(() => Boolean(getToken()))
+
   // Keep the cached user object in sync with localStorage.
   useEffect(() => {
     if (user) localStorage.setItem(USER_KEY, JSON.stringify(user))
     else localStorage.removeItem(USER_KEY)
   }, [user])
+
+  // On mount: if a token is stored, verify it's still valid by fetching the
+  // current user from /auth/me. An expired/invalid token clears the session
+  // so the UI never trusts a stale localStorage token.
+  useEffect(() => {
+    let cancelled = false
+    async function verifyToken() {
+      if (!getToken()) return
+      try {
+        const me = await authApi.me()
+        if (!cancelled) setUser(me)
+      } catch {
+        if (!cancelled) {
+          setToken(null)
+          setUser(null)
+        }
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    verifyToken()
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   async function signIn(credentials) {
     const data = await authApi.login(credentials)
@@ -36,7 +64,8 @@ export function AuthProvider({ children }) {
 
   const value = {
     user,
-    isAuthenticated: Boolean(getToken()),
+    loading,
+    isAuthenticated: Boolean(user),
     signIn,
     signOut,
   }

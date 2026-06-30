@@ -41,6 +41,9 @@ services:
     restart: always
     ports:
       - "5173:5173"
+    environment:
+      # Inside Docker the backend is reachable by service name, not localhost.
+      - VITE_PROXY_TARGET=http://api:8000
     depends_on:
       - api
     volumes:
