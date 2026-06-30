@@ -4,7 +4,7 @@ import google.generativeai as genai
 
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
-SCORER_MODEL = "gemini-2.5-flash"
+SCORER_MODEL = "gemini-2.0-flash"
 
 SCORE_PROMPT = """Bạn là chuyên gia tuyển dụng. Đánh giá mức độ phù hợp của ứng viên với yêu cầu công việc.
 Trả về DUY NHẤT một object JSON, không kèm giải thích, không markdown.
