@@ -4,7 +4,7 @@ import google.generativeai as genai
 
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
-JD_MODEL = "gemini-2.5-flash"
+JD_MODEL = "gemini-2.0-flash"
 
 JD_PROMPT = """Bạn là chuyên gia tuyển dụng. HR sẽ nhập yêu cầu tuyển dụng bằng ngôn ngữ tự nhiên.
 Nhiệm vụ của bạn là phân tích và chuẩn hóa thành JSON có cấu trúc để hệ thống dùng cho việc chấm điểm CV.

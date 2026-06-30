@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from app.database import engine, SessionLocal
 from app import models
 from app.core.bootstrap import ensure_default_admin
-from app.routers import auth, users
+from app.routers import auth, users, cv
 
 models.Base.metadata.create_all(bind=engine)
 
@@ -14,6 +14,9 @@ app = FastAPI(
 
 app.include_router(auth.router)
 app.include_router(users.router)
+app.include_router(cv.jd_router)
+app.include_router(cv.candidate_router)
+app.include_router(cv.evaluation_router)
 
 
 @app.on_event("startup")

@@ -4,7 +4,7 @@ import google.generativeai as genai
 
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
-EVIDENCE_MODEL = "gemini-2.5-flash"
+EVIDENCE_MODEL = "gemini-2.0-flash"
 
 EVIDENCE_PROMPT = """Bạn là công cụ tìm bằng chứng. Dựa vào CV gốc, tìm đoạn văn bản NGUYÊN VĂN trong CV làm căn cứ cho từng nhận định.
 Trả về DUY NHẤT một object JSON, không kèm giải thích, không markdown.
