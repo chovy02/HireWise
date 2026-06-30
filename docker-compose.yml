@@ -35,6 +35,18 @@ services:
     volumes:
       - ./src/mcp_server:/app
     command: python server.py
-
+  frontend:
+    build: ./src/frontend
+    container_name: hirewise_frontend
+    restart: always
+    ports:
+      - "5173:5173"
+    depends_on:
+      - api
+    volumes:
+      # Sync local frontend code with container for hot-reloading
+      - ./src/frontend:/app
+      # Prevent local node_modules from overriding container node_modules
+      - /app/node_modules
 volumes:
   postgres_data:
