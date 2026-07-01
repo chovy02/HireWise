@@ -49,6 +49,10 @@ export default defineConfig({
     proxy: {
       '/auth': backendProxy(),
       '/api': backendProxy(),
+      // JD / CV / evaluation routers không có prefix /api ở backend.
+      '/jds': backendProxy(),
+      '/candidates': backendProxy(),
+      '/evaluations': backendProxy(),
     },
   },
 })

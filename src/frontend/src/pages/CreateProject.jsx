@@ -8,6 +8,7 @@ import {
   Mail,
   ArrowLeft,
   Check,
+  Loader2,
 } from 'lucide-react'
 import Topbar from '../components/Topbar.jsx'
 import { Card, PrimaryButton, SecondaryButton } from '../components/ui.jsx'
@@ -28,9 +29,23 @@ export default function CreateProject() {
   const [jobText, setJobText] = useState('')
   const [activeTab, setActiveTab] = useState('upload')
   const [sourceValue, setSourceValue] = useState('')
+  const [file, setFile] = useState(null) // actual ZIP File for the upload tab
+  const [submitting, setSubmitting] = useState(false)
   const fileInputRef = useRef(null)
 
-  function handleAdd() {
+  // Chọn file ZIP (từ input hoặc kéo-thả): giữ File thật để upload, hiện tên file.
+  function pickFile(f) {
+    if (!f) return
+    if (!f.name.toLowerCase().endsWith('.zip')) {
+      toast('Chỉ chấp nhận file .zip chứa nhiều CV PDF.')
+      return
+    }
+    setFile(f)
+    setSourceValue(f.name)
+    toast(`File ready: ${f.name}`)
+  }
+
+  async function handleAdd() {
     if (!jobText.trim()) {
       toast('Add a job description first so the AI can generate the JD.')
       return
@@ -39,12 +54,24 @@ export default function CreateProject() {
       method: activeTab,
       label: INGEST_TABS.find((t) => t.key === activeTab).label,
       source: sourceValue || undefined,
-      // Mock count so the project's source list shows ingested volume.
-      count: sourceValue ? Math.floor(Math.random() * 30) + 5 : 0,
     }
-    addProject({ jdInput: jobText, ingestion })
-    toast('Project created — JD generated.')
-    navigate('/') // back to the dashboard, where the new card now appears
+    // Chỉ gửi file ZIP thật khi đang ở tab Upload.
+    const zip = activeTab === 'upload' ? file : null
+
+    setSubmitting(true)
+    try {
+      const id = await addProject({ jdInput: jobText, ingestion, file: zip })
+      toast(
+        zip
+          ? 'JD đã tạo — CV đang được xử lý nền.'
+          : 'JD đã tạo từ mô tả.'
+      )
+      navigate(`/projects/${id}`) // sang trang chi tiết để xem tiến độ xử lý CV
+    } catch (err) {
+      toast(err.message || 'Tạo JD thất bại.')
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   return (
@@ -109,6 +136,7 @@ export default function CreateProject() {
                   onClick={() => {
                     setActiveTab(key)
                     setSourceValue('')
+                    setFile(null)
                   }}
                   className={`-mb-px flex items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-medium transition-colors ${
                     activeTab === key
@@ -128,10 +156,7 @@ export default function CreateProject() {
                   onDragOver={(e) => e.preventDefault()}
                   onDrop={(e) => {
                     e.preventDefault()
-                    if (e.dataTransfer.files?.length) {
-                      setSourceValue(e.dataTransfer.files[0].name)
-                      toast(`File ready: ${e.dataTransfer.files[0].name}`)
-                    }
+                    if (e.dataTransfer.files?.length) pickFile(e.dataTransfer.files[0])
                   }}
                   className="flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-slate-200 bg-slate-50/50 px-6 py-10 text-center"
                 >
@@ -142,18 +167,15 @@ export default function CreateProject() {
                     {sourceValue || 'Drop ZIP file of CVs here'}
                   </p>
                   <p className="mt-1 text-xs text-slate-400">
-                    Supports PDF, DOCX, up to 50MB
+                    File .zip chứa nhiều CV PDF
                   </p>
                   <input
                     ref={fileInputRef}
                     type="file"
-                    accept=".zip,.pdf,.docx"
+                    accept=".zip"
                     className="hidden"
                     onChange={(e) => {
-                      if (e.target.files?.length) {
-                        setSourceValue(e.target.files[0].name)
-                        toast(`File ready: ${e.target.files[0].name}`)
-                      }
+                      if (e.target.files?.length) pickFile(e.target.files[0])
                     }}
                   />
                   <button
@@ -206,9 +228,19 @@ export default function CreateProject() {
 
         {/* ---- Bottom: Add button ---- */}
         <div className="mt-6 flex justify-end gap-3">
-          <SecondaryButton onClick={() => navigate('/')}>Cancel</SecondaryButton>
-          <PrimaryButton onClick={handleAdd}>
-            <Plus size={16} /> Add
+          <SecondaryButton onClick={() => navigate('/')} disabled={submitting}>
+            Cancel
+          </SecondaryButton>
+          <PrimaryButton onClick={handleAdd} disabled={submitting}>
+            {submitting ? (
+              <>
+                <Loader2 size={16} className="animate-spin" /> Đang tạo…
+              </>
+            ) : (
+              <>
+                <Plus size={16} /> Add
+              </>
+            )}
           </PrimaryButton>
         </div>
       </main>

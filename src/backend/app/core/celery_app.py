@@ -20,6 +20,7 @@ celery_app.conf.update(
     accept_content=["json"],
     timezone="UTC",
     task_track_started=True,
+    broker_connection_retry_on_startup = True,
     # Chỉ ack task SAU khi chạy xong -> worker crash giữa chừng thì task được giao lại,
     # không mất CV đang xử lý.
     task_acks_late=True,

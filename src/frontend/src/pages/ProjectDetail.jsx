@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useParams, useNavigate, Navigate } from 'react-router-dom'
 import {
   Bot,
@@ -26,21 +26,23 @@ import {
 } from '../components/ui.jsx'
 import { useToast } from '../context/ToastContext.jsx'
 import { useProjects } from '../context/ProjectContext.jsx'
-import { ingestionQueue, systemAlerts } from '../data/mockData.js'
+import { getCandidates } from '../api/jds.js'
+import { systemAlerts } from '../data/mockData.js'
 
 const METHOD_ICON = { upload: UploadCloud, link: Link2, email: Mail }
+
+// Trạng thái xử lý CV thật (khớp models.Candidate.status ở backend).
+const STATUS_META = {
+  PENDING: { icon: RefreshCw, cls: 'text-indigo-500', variant: 'processing', label: 'Đang xử lý' },
+  COMPLETED: { icon: CheckCircle2, cls: 'text-emerald-500', variant: 'completed', label: 'Hoàn tất' },
+  FAILED: { icon: XCircle, cls: 'text-red-500', variant: 'error', label: 'Lỗi' },
+}
 
 const INGEST_TABS = [
   { key: 'upload', label: 'Direct Upload', icon: UploadCloud },
   { key: 'link', label: 'Link Sync', icon: Link2 },
   { key: 'email', label: 'Email Listener', icon: Mail },
 ]
-
-const QUEUE_STATUS = {
-  processing: { variant: 'processing', icon: RefreshCw },
-  completed: { variant: 'completed', icon: CheckCircle2 },
-  error: { variant: 'error', icon: XCircle },
-}
 
 const ALERT_STYLES = {
   success: { icon: CheckCircle2, cls: 'text-emerald-500' },
@@ -134,6 +136,112 @@ function GeneratedJD({ markdown }) {
     }
   }
   return <div>{blocks}</div>
+}
+
+// Poll GET /jds/{id}/candidates để hiển thị tiến độ chấm điểm CV thật (do Celery
+// worker xử lý nền). Tự dừng poll khi không còn CV nào ở trạng thái PENDING.
+function LiveProcessing({ jdId }) {
+  const [rows, setRows] = useState(null) // null = đang tải lần đầu
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let stopped = false
+    let timer
+
+    async function poll() {
+      try {
+        const data = await getCandidates(jdId)
+        if (stopped) return
+        setRows(data)
+        setError('')
+        if (data.some((c) => c.status === 'PENDING')) {
+          timer = setTimeout(poll, 3000) // còn CV đang xử lý -> poll tiếp
+        }
+      } catch (e) {
+        if (stopped) return
+        setError(e.message)
+        timer = setTimeout(poll, 5000)
+      }
+    }
+
+    poll()
+    return () => {
+      stopped = true
+      clearTimeout(timer)
+    }
+  }, [jdId])
+
+  if (rows === null && !error) {
+    return <p className="mt-4 text-sm text-slate-400">Đang tải trạng thái xử lý…</p>
+  }
+
+  const list = rows || []
+  const total = list.length
+  const completed = list.filter((c) => c.status === 'COMPLETED').length
+  const pending = list.filter((c) => c.status === 'PENDING').length
+  const failed = list.filter((c) => c.status === 'FAILED').length
+  const pct = total ? Math.round((completed / total) * 100) : 0
+
+  return (
+    <div className="mt-4">
+      {error && (
+        <p className="mb-3 text-xs text-red-500">Lỗi tải trạng thái: {error}</p>
+      )}
+
+      {total === 0 ? (
+        <p className="text-sm text-slate-400">
+          Chưa có CV nào cho vị trí này. Tải file ZIP ở bước tạo dự án để bắt đầu.
+        </p>
+      ) : (
+        <>
+          <div className="flex items-center justify-between text-xs text-slate-500">
+            <span>
+              {completed}/{total} xong
+              {pending > 0 && ` • ${pending} đang xử lý`}
+              {failed > 0 && ` • ${failed} lỗi`}
+            </span>
+            <span className="font-semibold text-slate-700">{pct}%</span>
+          </div>
+          <div className="mt-2">
+            <ProgressBar value={pct} />
+          </div>
+
+          <div className="mt-4 space-y-2">
+            {list.map((c) => {
+              const meta = STATUS_META[c.status] || STATUS_META.PENDING
+              const Icon = meta.icon
+              return (
+                <div
+                  key={c.id}
+                  className="flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2"
+                >
+                  <div className="flex min-w-0 items-center gap-2">
+                    <Icon
+                      size={14}
+                      className={`${meta.cls} ${c.status === 'PENDING' ? 'animate-spin' : ''}`}
+                    />
+                    <span className="truncate text-sm text-slate-700">
+                      {c.name || 'Đang trích xuất…'}
+                    </span>
+                  </div>
+                  <div className="flex flex-shrink-0 items-center gap-2">
+                    <Badge variant={meta.variant} upper={false}>
+                      {meta.label}
+                    </Badge>
+                    {c.score != null && (
+                      <span className="text-sm font-semibold text-slate-800">
+                        {c.score}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  )
 }
 
 export default function ProjectDetail() {
@@ -288,40 +396,9 @@ export default function ProjectDetail() {
             {/* Ingestion Queue */}
             <Card className="p-6">
               <h2 className="text-base font-semibold text-slate-900">
-                Ingestion Queue
+                CV Processing (live)
               </h2>
-              <div className="mt-4 space-y-3">
-                {ingestionQueue.map((item) => {
-                  const { variant, icon: Icon } = QUEUE_STATUS[item.status]
-                  return (
-                    <div
-                      key={item.id}
-                      className="rounded-xl border border-slate-200 p-4"
-                    >
-                      <div className="flex items-start justify-between">
-                        <div>
-                          <p className="text-sm font-semibold text-slate-800">
-                            {item.title}
-                          </p>
-                          <p className="text-xs text-slate-400">{item.source}</p>
-                        </div>
-                        <Badge variant={variant}>
-                          <Icon size={11} /> {item.statusLabel}
-                        </Badge>
-                      </div>
-                      <div className="mt-3 flex items-center justify-between text-xs">
-                        <span className="text-slate-500">{item.detail}</span>
-                        <span className="font-semibold text-slate-700">
-                          {item.progress}%
-                        </span>
-                      </div>
-                      <div className="mt-2">
-                        <ProgressBar value={item.progress} color={item.color} />
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
+              <LiveProcessing jdId={project.id} />
 
               <h2 className="mt-8 text-base font-semibold text-slate-900">
                 System Alerts

@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useCallback } from 'react'
-import { generateJD, makeSeedCandidates } from '../data/mockData.js'
+import { makeSeedCandidates } from '../data/mockData.js'
+import { createJd, uploadCvs } from '../api/jds.js'
 
 const ProjectContext = createContext(null)
 
@@ -18,29 +19,44 @@ export function ProjectProvider({ children }) {
   const [projects, setProjects] = useState([])
 
   // Create a project from the natural-language brief + chosen ingestion source.
-  // Returns the new project's id so the caller can navigate to it.
-  const addProject = useCallback(({ jdInput, ingestion }) => {
-    const generated = generateJD(jdInput)
-    const id = `proj-${Date.now()}`
+  // REAL backend calls: (1) POST /jds -> Gemini structures the JD, (2) if a ZIP
+  // file was chosen, POST /jds/{id}/cvs -> backend queues each CV to Celery.
+  // Async; returns the new project's (== backend JD) id so the caller can navigate.
+  //
+  // The local project keeps mock seed candidates so the existing Shortlisting /
+  // CandidateModal demo still works; the REAL processing status is polled live on
+  // the ProjectDetail page using `backendJdId` (== id).
+  const addProject = useCallback(async ({ jdInput, ingestion, file }) => {
+    // 1) Structure the JD on the backend.
+    const jd = await createJd(jdInput)
+
+    // 2) Upload the ZIP (if any) -> triggers background CV processing.
+    let uploadSummary = null
+    if (file) {
+      uploadSummary = await uploadCvs(jd.id, file)
+    }
+
     const firstSource = {
       id: `src-${Date.now()}`,
       method: ingestion?.method || 'upload',
       label: ingestion?.label || 'Direct Upload',
-      value: ingestion?.source || '',
-      count: ingestion?.count ?? 0,
+      value: file?.name || ingestion?.source || '',
+      // Số CV đã stage (đang được worker chấm điểm nền).
+      count: uploadSummary?.processing ?? ingestion?.count ?? 0,
       addedAt: new Date().toISOString(),
     }
     const project = {
-      id,
-      title: generated.title,
+      id: jd.id,
+      backendJdId: jd.id, // dùng để poll tiến độ xử lý CV thật trên ProjectDetail
+      title: jd.title,
       jdInput,
-      jdMarkdown: generated.markdown,
+      jdMarkdown: jd.jd_markdown,
       sources: [firstSource], // every source ever ingested for this project
-      createdAt: new Date().toISOString(),
+      createdAt: jd.created_at,
       candidates: reRank(makeSeedCandidates()),
     }
     setProjects((list) => [project, ...list])
-    return id
+    return jd.id
   }, [])
 
   // Add another ingestion source (more CVs / another link / another inbox) to an

@@ -20,7 +20,12 @@ export function setToken(token) {
  * Throws an Error with a readable `.message` (from FastAPI's `detail`) on failure.
  */
 export async function apiFetch(path, { method = 'GET', body, auth = false } = {}) {
-  const headers = { 'Content-Type': 'application/json' }
+  // FormData (file upload) must NOT be JSON-stringified; the browser sets its own
+  // multipart Content-Type with a boundary, so we leave the header off.
+  const isForm = typeof FormData !== 'undefined' && body instanceof FormData
+
+  const headers = {}
+  if (body !== undefined && !isForm) headers['Content-Type'] = 'application/json'
   if (auth) {
     const token = getToken()
     if (token) headers['Authorization'] = `Bearer ${token}`
@@ -31,7 +36,7 @@ export async function apiFetch(path, { method = 'GET', body, auth = false } = {}
     res = await fetch(`${API_BASE}${path}`, {
       method,
       headers,
-      body: body ? JSON.stringify(body) : undefined,
+      body: body === undefined ? undefined : isForm ? body : JSON.stringify(body),
     })
   } catch (networkErr) {
     throw new Error(
