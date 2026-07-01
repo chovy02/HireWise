@@ -68,9 +68,9 @@ class CandidateDetailResponse(BaseModel):
 
 
 class UploadResultItem(BaseModel):
-    """Kết quả xử lý 1 file CV trong batch upload ZIP."""
+    """Kết quả stage 1 file CV trong batch upload ZIP."""
     filename: str
-    status: str  # completed | failed | duplicated
+    status: str  # pending | duplicated | failed  (completed được set sau bởi worker)
     candidate_id: Optional[UUID] = None
     score: Optional[float] = None
     error: Optional[str] = None
@@ -80,6 +80,7 @@ class UploadBatchResponse(BaseModel):
     jd_id: UUID
     total: int
     completed: int
+    processing: int  # số CV đang được worker chấm điểm nền
     failed: int
     duplicated: int
     results: list[UploadResultItem]

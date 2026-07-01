@@ -2,9 +2,11 @@ import os
 import json
 import google.generativeai as genai
 
+from app.services.ai_agent.exceptions import AIServiceError
+
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
-JD_MODEL = "gemini-2.0-flash"
+JD_MODEL = "gemini-2.5-flash"
 
 JD_PROMPT = """Bạn là chuyên gia tuyển dụng. HR sẽ nhập yêu cầu tuyển dụng bằng ngôn ngữ tự nhiên.
 Nhiệm vụ của bạn là phân tích và chuẩn hóa thành JSON có cấu trúc để hệ thống dùng cho việc chấm điểm CV.
@@ -50,15 +52,20 @@ def _clean_json_response(text: str) -> str:
 
 
 def process_jd(jd_text: str) -> dict:
+    # Lỗi nhập liệu (JD rỗng) -> jd_error, để router trả 422.
     if not jd_text or not jd_text.strip():
         return {"jd_error": "JD rỗng, không có nội dung để xử lý."}
+
+    prompt = JD_PROMPT.replace("{jd_text}", jd_text)
+
     try:
-        prompt = JD_PROMPT.replace("{jd_text}", jd_text)
         model = genai.GenerativeModel(JD_MODEL)
         response = model.generate_content(prompt)
         response_text = _clean_json_response(response.text)
+    except Exception as e:
+        raise AIServiceError(f"Không gọi được dịch vụ AI: {e}") from e
+
+    try:
         return json.loads(response_text)
     except json.JSONDecodeError as e:
-        return {"jd_error": f"Không parse được JSON từ response: {e}"}
-    except Exception as e:
-        return {"jd_error": f"Lỗi gọi API: {e}"}
+        raise AIServiceError(f"Dịch vụ AI trả về dữ liệu không hợp lệ: {e}") from e

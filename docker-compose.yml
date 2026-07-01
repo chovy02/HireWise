@@ -19,8 +19,30 @@ services:
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     depends_on:
       - db
+      - redis
     ports:
       - "8000:8000"
+    volumes:
+      - ./src/backend:/app
+    env_file:
+      - .env
+
+  redis:
+    image: redis:7-alpine
+    container_name: hirewise_redis
+    restart: always
+    ports:
+      - "6379:6379"
+
+  worker:
+    build: ./src/backend
+    container_name: hirewise_worker
+    restart: always
+    # Worker Celery: lấy task từ Redis và chấm điểm CV nền. Dùng chung image với api.
+    command: celery -A app.core.celery_app worker --loglevel=info --concurrency=2
+    depends_on:
+      - db
+      - redis
     volumes:
       - ./src/backend:/app
     env_file:

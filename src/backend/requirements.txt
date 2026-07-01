@@ -24,3 +24,7 @@ pydantic-settings==2.2.1
 pymupdf==1.24.0
 google-generativeai==0.8.3
 python-dotenv==1.0.1
+
+# Task queue nền: xử lý/chấm điểm CV bất đồng bộ, không chặn request upload
+celery[redis]==5.3.6
+redis==5.0.3

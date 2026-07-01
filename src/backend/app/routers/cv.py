@@ -7,6 +7,8 @@ from app import models, schemas
 from app.core.dependencies import get_current_user, require_role
 from app.database import get_db
 from app.services.ai_agent import pipeline
+from app.services.ai_agent.exceptions import AIServiceError
+from app.services.ai_agent.tasks import evaluate_candidate_task
 
 # ────────────────────────────────────────────────────────────
 # Router 1: Job Description
@@ -24,7 +26,11 @@ def create_jd(
     try:
         jd = pipeline.create_jd_from_text(db, payload.raw_text, created_by=current_user.id)
     except ValueError as e:
+        # JD thiếu thông tin tối thiểu -> lỗi nhập liệu của HR.
         raise HTTPException(status_code=422, detail=str(e))
+    except AIServiceError as e:
+        # Gemini lỗi/không cấu hình -> lỗi hạ tầng, HR nhập đúng vẫn gặp.
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(e))
     return jd
 
 
@@ -48,7 +54,11 @@ def get_jd(
     return jd
 
 
-@jd_router.post("/{jd_id}/cvs", response_model=schemas.UploadBatchResponse)
+@jd_router.post(
+    "/{jd_id}/cvs",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=schemas.UploadBatchResponse,
+)
 async def upload_cvs(
     jd_id: UUID,
     file: UploadFile = File(..., description="File ZIP chứa nhiều CV dạng PDF"),
@@ -56,8 +66,11 @@ async def upload_cvs(
     current_user: models.User = Depends(require_role("hr_staff", "admin")),
 ):
     """
-    UC U002 (Monitor & Fetch CVs / Extract & Validate Files) + U003 (Score Suitability
-    & Generate Evaluation Evidence). Nhận ZIP CV, chạy toàn bộ pipeline AI, lưu kết quả vào DB.
+    UC U002 + U003. Nhận ZIP CV -> giải nén + tạo Candidate PENDING (nhanh) rồi
+    ĐẨY việc chấm điểm AI mỗi CV vào hàng đợi Celery và TRẢ VỀ NGAY (202 Accepted).
+
+    Frontend poll GET /jds/{jd_id}/candidates để thấy status/điểm cập nhật dần,
+    không phải chờ toàn bộ CV xử lý xong.
     """
     jd = db.query(models.JobDescription).filter(models.JobDescription.id == jd_id).first()
     if not jd:
@@ -67,19 +80,27 @@ async def upload_cvs(
         raise HTTPException(status_code=400, detail="Chỉ chấp nhận file .zip chứa nhiều CV PDF.")
 
     zip_bytes = await file.read()
-    results = pipeline.process_zip_pipeline_and_save(db, jd, zip_bytes)
 
-    completed = sum(1 for r in results if r["status"] == "completed")
-    failed = sum(1 for r in results if r["status"] == "failed")
-    duplicated = sum(1 for r in results if r["status"] == "duplicated")
+    # PHA 1 (đồng bộ, nhanh): tạo Candidate PENDING, không gọi AI.
+    staged = pipeline.stage_cvs(db, jd, zip_bytes)
+
+    # PHA 2 (nền): mỗi CV PENDING thành 1 task Celery chạy trên worker riêng.
+    for item in staged:
+        if item["status"] == "pending":
+            evaluate_candidate_task.delay(str(item["candidate_id"]))
+
+    processing = sum(1 for r in staged if r["status"] == "pending")
+    failed = sum(1 for r in staged if r["status"] == "failed")
+    duplicated = sum(1 for r in staged if r["status"] == "duplicated")
 
     return schemas.UploadBatchResponse(
         jd_id=jd.id,
-        total=len(results),
-        completed=completed,
+        total=len(staged),
+        completed=0,
+        processing=processing,
         failed=failed,
         duplicated=duplicated,
-        results=results,
+        results=staged,
     )
 
 

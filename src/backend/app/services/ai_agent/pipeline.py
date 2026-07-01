@@ -1,3 +1,5 @@
+import uuid
+
 from sqlalchemy.orm import Session
 
 from app import models
@@ -157,20 +159,21 @@ def create_jd_from_text(db: Session, raw_text: str, created_by) -> models.JobDes
     return jd
 
 
-def process_zip_pipeline_and_save(
+def stage_cvs(
     db: Session, jd: models.JobDescription, zip_bytes: bytes
 ) -> list[dict]:
     """
-    UC U002 + U003 - Nhận ZIP nhiều CV, giải nén, trích xuất, parse, chấm điểm,
-    sinh bằng chứng, và LƯU TOÀN BỘ vào database (Candidate, CandidateSkill,
-    CandidateProject, Evaluation). Mỗi CV được commit riêng để 1 CV lỗi không
-    làm hỏng cả batch.
+    PHA 1 (đồng bộ, nhanh, KHÔNG gọi AI): giải nén ZIP, trích text, check trùng,
+    và tạo bản ghi Candidate ở trạng thái PENDING cho từng CV hợp lệ. Trả về ngay
+    để endpoint không phải chờ phần chấm điểm AI (do Celery worker làm ở PHA 2).
 
-    Returns:
-        list dict, mỗi phần tử gồm: filename, status, candidate_id, score, error.
+    Trả về list item {filename, status, candidate_id, score, error}, với status:
+      - "pending"    : đã tạo Candidate, đang chờ worker chấm điểm.
+      - "duplicated" : CV đã nộp trước đó cho JD này.
+      - "failed"     : không đọc được text (file hỏng / scan ảnh).
     """
     cvs = ingest_zip(zip_bytes)
-    results: list[dict] = []
+    staged: list[dict] = []
 
     for cv in cvs:
         item = {
@@ -181,14 +184,14 @@ def process_zip_pipeline_and_save(
             "error": None,
         }
 
-        # Bước 1: CV lỗi đọc (file hỏng / scan ảnh không có text)
+        # CV lỗi đọc (file hỏng / scan ảnh không có text)
         if cv["error"] or not cv["raw_text"]:
             item["status"] = "failed"
             item["error"] = cv["error"] or "Không đọc được text từ PDF (có thể là file scan/ảnh)."
-            results.append(item)
+            staged.append(item)
             continue
 
-        # Bước 2: Kiểm tra trùng lặp CV (FR-3.3 - SHA-256 hash)
+        # Kiểm tra trùng lặp CV (FR-3.3 - SHA-256 hash)
         existing = (
             db.query(models.Candidate)
             .filter(
@@ -201,10 +204,10 @@ def process_zip_pipeline_and_save(
             item["status"] = "duplicated"
             item["candidate_id"] = existing.id
             item["error"] = "CV đã được nộp trước đó cho vị trí này."
-            results.append(item)
+            staged.append(item)
             continue
 
-        # Bước 3: Tạo bản ghi Candidate (trạng thái PENDING)
+        # Tạo bản ghi Candidate (PENDING) - phần AI để worker xử lý sau.
         candidate = models.Candidate(
             jd_id=jd.id,
             raw_text=cv["raw_text"],
@@ -216,83 +219,132 @@ def process_zip_pipeline_and_save(
         db.commit()
         db.refresh(candidate)
 
-        try:
-            # Bước 4: Parse thông tin ứng viên (UC U003 - Extract Raw Text, Standardize & Parse Skills)
-            parsed = parse_cv(cv["raw_text"])
-            if parsed.get("parse_error"):
-                candidate.status = "FAILED"
-                db.commit()
-                item["status"] = "failed"
-                item["candidate_id"] = candidate.id
-                item["error"] = parsed["parse_error"]
-                results.append(item)
-                continue
+        item["status"] = "pending"
+        item["candidate_id"] = candidate.id
+        staged.append(item)
 
-            candidate.name = parsed.get("full_name")
-            candidate.email = parsed.get("email")
-            candidate.phone = parsed.get("phone")
+    return staged
 
-            # Lưu skills (gộp cả 4 nhóm technical/soft/languages/tools vào candidate_skills,
-            # vì model hiện tại chưa có cột phân loại category)
-            skills_data = parsed.get("skills") or {}
-            for category in ("technical", "soft", "languages", "tools"):
-                for skill_name in skills_data.get(category, []) or []:
-                    db.add(models.CandidateSkill(
-                        cv_id=candidate.id,
-                        skill_name=skill_name,
-                        normalized_name=skill_name.strip().lower(),
-                    ))
 
-            # Lưu projects (kèm github_url để dùng cho ProjectEvaluation sau này)
-            for proj in parsed.get("projects", []) or []:
-                db.add(models.CandidateProject(
-                    candidate_id=candidate.id,
-                    name=proj.get("name") or "Untitled project",
-                    description=proj.get("description"),
-                    github_url=proj.get("github_url"),
-                    tech_stack=proj.get("tech") or [],
-                    source="from_cv",
-                ))
+def evaluate_candidate(db: Session, candidate_id) -> dict:
+    """
+    PHA 2 (chạy trong Celery worker): chấm điểm 1 Candidate đang PENDING.
+    parse -> lưu skills/projects -> score -> evidence -> lưu Evaluation, rồi cập
+    nhật status COMPLETED/FAILED. Tự commit. Nhận candidate_id (UUID hoặc str vì
+    Celery serialize sang JSON).
 
-            # Bước 5: Chấm điểm (UC U003 - Score Suitability)
-            score_result = score_cv(parsed, jd.requirements)
-            if score_result.get("score_error"):
-                candidate.status = "FAILED"
-                db.commit()
-                item["status"] = "failed"
-                item["candidate_id"] = candidate.id
-                item["error"] = score_result["score_error"]
-                results.append(item)
-                continue
+    Mỗi CV commit riêng để 1 CV lỗi không làm hỏng các CV khác trong batch.
+    """
+    if isinstance(candidate_id, str):
+        candidate_id = uuid.UUID(candidate_id)
 
-            # Bước 6: Sinh bằng chứng (UC U003 - Generate Evaluation Evidence)
-            evidence = generate_evidence(cv["raw_text"], score_result)
+    item = {"candidate_id": candidate_id, "status": None, "score": None, "error": None}
 
-            evaluation = models.Evaluation(
-                cv_id=candidate.id,
-                jd_id=jd.id,
-                score=score_result.get("score", 0),
-                score_breakdown=score_result.get("score_breakdown") or {},
-                explanation=score_result.get("explanation"),
-                evidence=evidence,
-            )
-            db.add(evaluation)
+    candidate = (
+        db.query(models.Candidate)
+        .filter(models.Candidate.id == candidate_id)
+        .first()
+    )
+    if candidate is None:
+        item["status"] = "failed"
+        item["error"] = "Không tìm thấy candidate."
+        return item
 
-            candidate.status = "COMPLETED"
-            db.commit()
+    jd = (
+        db.query(models.JobDescription)
+        .filter(models.JobDescription.id == candidate.jd_id)
+        .first()
+    )
 
-            item["status"] = "completed"
-            item["candidate_id"] = candidate.id
-            item["score"] = evaluation.score
-            results.append(item)
-
-        except Exception as e:
-            db.rollback()
+    try:
+        # Parse thông tin ứng viên (UC U003 - Extract Raw Text, Standardize & Parse Skills)
+        parsed = parse_cv(candidate.raw_text)
+        if parsed.get("parse_error"):
             candidate.status = "FAILED"
             db.commit()
             item["status"] = "failed"
-            item["candidate_id"] = candidate.id
-            item["error"] = f"Lỗi xử lý không xác định: {e}"
-            results.append(item)
+            item["error"] = parsed["parse_error"]
+            return item
 
+        candidate.name = parsed.get("full_name")
+        candidate.email = parsed.get("email")
+        candidate.phone = parsed.get("phone")
+
+        # Lưu skills (gộp cả 4 nhóm technical/soft/languages/tools vào candidate_skills,
+        # vì model hiện tại chưa có cột phân loại category)
+        skills_data = parsed.get("skills") or {}
+        for category in ("technical", "soft", "languages", "tools"):
+            for skill_name in skills_data.get(category, []) or []:
+                db.add(models.CandidateSkill(
+                    cv_id=candidate.id,
+                    skill_name=skill_name,
+                    normalized_name=skill_name.strip().lower(),
+                ))
+
+        # Lưu projects (kèm github_url để dùng cho ProjectEvaluation sau này)
+        for proj in parsed.get("projects", []) or []:
+            db.add(models.CandidateProject(
+                candidate_id=candidate.id,
+                name=proj.get("name") or "Untitled project",
+                description=proj.get("description"),
+                github_url=proj.get("github_url"),
+                tech_stack=proj.get("tech") or [],
+                source="from_cv",
+            ))
+
+        # Chấm điểm (UC U003 - Score Suitability)
+        score_result = score_cv(parsed, jd.requirements)
+        if score_result.get("score_error"):
+            candidate.status = "FAILED"
+            db.commit()
+            item["status"] = "failed"
+            item["error"] = score_result["score_error"]
+            return item
+
+        # Sinh bằng chứng (UC U003 - Generate Evaluation Evidence)
+        evidence = generate_evidence(candidate.raw_text, score_result)
+
+        evaluation = models.Evaluation(
+            cv_id=candidate.id,
+            jd_id=candidate.jd_id,
+            score=score_result.get("score", 0),
+            score_breakdown=score_result.get("score_breakdown") or {},
+            explanation=score_result.get("explanation"),
+            evidence=evidence,
+        )
+        db.add(evaluation)
+
+        candidate.status = "COMPLETED"
+        db.commit()
+
+        item["status"] = "completed"
+        item["score"] = evaluation.score
+        return item
+
+    except Exception as e:
+        db.rollback()
+        candidate.status = "FAILED"
+        db.commit()
+        item["status"] = "failed"
+        item["error"] = f"Lỗi xử lý không xác định: {e}"
+        return item
+
+
+def process_zip_pipeline_and_save(
+    db: Session, jd: models.JobDescription, zip_bytes: bytes
+) -> list[dict]:
+    """
+    Phiên bản ĐỒNG BỘ (stage + chấm điểm ngay trong 1 lời gọi). Giữ lại cho test
+    và các luồng không dùng Celery. Luồng upload thực tế dùng stage_cvs + Celery
+    task (xem routers/cv.py) để không chặn request.
+    """
+    staged = stage_cvs(db, jd, zip_bytes)
+    results: list[dict] = []
+    for s in staged:
+        if s["status"] == "pending":
+            r = evaluate_candidate(db, s["candidate_id"])
+            r["filename"] = s["filename"]
+            results.append(r)
+        else:
+            results.append(s)
     return results
