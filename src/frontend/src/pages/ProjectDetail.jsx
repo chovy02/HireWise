@@ -26,7 +26,7 @@ import {
 } from '../components/ui.jsx'
 import { useToast } from '../context/ToastContext.jsx'
 import { useProjects } from '../context/ProjectContext.jsx'
-import { getCandidates } from '../api/jds.js'
+import { getCandidates, getJd, uploadCvs } from '../api/jds.js'
 import { systemAlerts } from '../data/mockData.js'
 
 const METHOD_ICON = { upload: UploadCloud, link: Link2, email: Mail }
@@ -140,7 +140,7 @@ function GeneratedJD({ markdown }) {
 
 // Poll GET /jds/{id}/candidates để hiển thị tiến độ chấm điểm CV thật (do Celery
 // worker xử lý nền). Tự dừng poll khi không còn CV nào ở trạng thái PENDING.
-function LiveProcessing({ jdId }) {
+function LiveProcessing({ jdId, refreshKey }) {
   const [rows, setRows] = useState(null) // null = đang tải lần đầu
   const [error, setError] = useState('')
 
@@ -169,7 +169,7 @@ function LiveProcessing({ jdId }) {
       stopped = true
       clearTimeout(timer)
     }
-  }, [jdId])
+  }, [jdId, refreshKey])
 
   if (rows === null && !error) {
     return <p className="mt-4 text-sm text-slate-400">Đang tải trạng thái xử lý…</p>
@@ -247,11 +247,38 @@ function LiveProcessing({ jdId }) {
 export default function ProjectDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
-  const { getProject } = useProjects()
+  const { getProject, loading, setProjectDetail } = useProjects()
   const [showAddSource, setShowAddSource] = useState(false)
+  // Tăng để buộc LiveProcessing poll lại sau khi upload thêm nguồn CV mới.
+  const [liveKey, setLiveKey] = useState(0)
   const project = getProject(id)
 
-  if (!project) return <Navigate to="/" replace />
+  // Project được hydrate từ listJds() không kèm jd_markdown -> fetch đầy đủ 1 lần.
+  useEffect(() => {
+    if (project && !project.jdMarkdown) {
+      getJd(id)
+        .then((jd) =>
+          setProjectDetail(id, { jdMarkdown: jd.jd_markdown, jdInput: jd.raw_text })
+        )
+        .catch(() => {})
+    }
+  }, [id, project, setProjectDetail])
+
+  // Chưa tìm thấy project: nếu đang nạp từ backend (vd reload deep-link) thì chờ,
+  // đừng redirect vội về dashboard.
+  if (!project) {
+    if (loading) {
+      return (
+        <>
+          <Topbar />
+          <main className="flex-1 px-8 py-7">
+            <p className="text-sm text-slate-400">Đang tải dự án…</p>
+          </main>
+        </>
+      )
+    }
+    return <Navigate to="/" replace />
+  }
 
   const shortlisted = project.candidates.filter((c) => c.shortlisted).length
   const totalIngested = project.sources.reduce((n, s) => n + (s.count || 0), 0)
@@ -342,7 +369,11 @@ export default function ProjectDetail() {
                 <Badge variant="ai">AI Generated</Badge>
               </div>
               <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50/50 p-5">
-                <GeneratedJD markdown={project.jdMarkdown} />
+                {project.jdMarkdown ? (
+                  <GeneratedJD markdown={project.jdMarkdown} />
+                ) : (
+                  <p className="text-sm text-slate-400">Đang tải mô tả công việc…</p>
+                )}
               </div>
             </Card>
           </div>
@@ -398,7 +429,7 @@ export default function ProjectDetail() {
               <h2 className="text-base font-semibold text-slate-900">
                 CV Processing (live)
               </h2>
-              <LiveProcessing jdId={project.id} />
+              <LiveProcessing jdId={project.id} refreshKey={liveKey} />
 
               <h2 className="mt-8 text-base font-semibold text-slate-900">
                 System Alerts
@@ -428,6 +459,7 @@ export default function ProjectDetail() {
         <AddSourceModal
           projectId={project.id}
           onClose={() => setShowAddSource(false)}
+          onUploaded={() => setLiveKey((k) => k + 1)}
         />
       )}
     </>
@@ -435,23 +467,63 @@ export default function ProjectDetail() {
 }
 
 // Modal to add another ingestion source (more CVs / link / inbox) to a project.
-function AddSourceModal({ projectId, onClose }) {
+function AddSourceModal({ projectId, onClose, onUploaded }) {
   const toast = useToast()
   const { addSource } = useProjects()
   const [activeTab, setActiveTab] = useState('upload')
   const [value, setValue] = useState('')
+  const [file, setFile] = useState(null) // File ZIP thật để upload lên backend
+  const [submitting, setSubmitting] = useState(false)
   const fileInputRef = useRef(null)
 
-  function handleAdd() {
-    if (activeTab !== 'upload' && !value.trim()) {
+  // Chọn file ZIP (input hoặc kéo-thả): giữ File thật + hiện tên, chặn định dạng sai.
+  function pickFile(f) {
+    if (!f) return
+    if (!f.name.toLowerCase().endsWith('.zip')) {
+      toast('Chỉ chấp nhận file .zip chứa nhiều CV PDF.')
+      return
+    }
+    setFile(f)
+    setValue(f.name)
+  }
+
+  async function handleAdd() {
+    // Tab Upload: GỬI FILE ZIP THẬT lên backend -> mỗi CV được Celery chấm điểm nền.
+    // (Trước đây chỉ ghi 1 số CV ngẫu nhiên vào state, không upload gì cả -> lần 2
+    //  không hề có tiến độ xử lý.)
+    if (activeTab === 'upload') {
+      if (!file) {
+        toast('Chọn file .zip chứa CV trước.')
+        return
+      }
+      setSubmitting(true)
+      try {
+        const summary = await uploadCvs(projectId, file)
+        addSource(projectId, {
+          method: 'upload',
+          label: 'Direct Upload',
+          value: file.name,
+          count: summary.processing ?? 0,
+        })
+        toast(`Đã nhận ${summary.processing ?? 0} CV — đang xử lý nền.`)
+        onUploaded?.() // buộc LiveProcessing poll lại để thấy CV mới
+        onClose()
+      } catch (err) {
+        toast(err.message || 'Upload thất bại.')
+      } finally {
+        setSubmitting(false)
+      }
+      return
+    }
+
+    // Tab Link/Email: backend chưa có endpoint -> tạm chỉ ghi lại nguồn (chưa ingest).
+    if (!value.trim()) {
       toast('Enter a URL / inbox first.')
       return
     }
     const label = INGEST_TABS.find((t) => t.key === activeTab).label
-    // Mock CV count so the source list shows something meaningful.
-    const count = Math.floor(Math.random() * 30) + 5
-    addSource(projectId, { method: activeTab, label, value, count })
-    toast(`Added ${label} source (+${count} CVs ingested).`)
+    addSource(projectId, { method: activeTab, label, value, count: 0 })
+    toast(`Added ${label} source.`)
     onClose()
   }
 
@@ -502,7 +574,7 @@ function AddSourceModal({ projectId, onClose }) {
                 onDrop={(e) => {
                   e.preventDefault()
                   if (e.dataTransfer.files?.length)
-                    setValue(e.dataTransfer.files[0].name)
+                    pickFile(e.dataTransfer.files[0])
                 }}
                 className="flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-slate-200 bg-slate-50/50 px-6 py-8 text-center"
               >
@@ -513,15 +585,15 @@ function AddSourceModal({ projectId, onClose }) {
                   {value || 'Drop ZIP file of CVs here'}
                 </p>
                 <p className="mt-1 text-xs text-slate-400">
-                  Supports PDF, DOCX, up to 50MB
+                  File .zip chứa nhiều CV PDF
                 </p>
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept=".zip,.pdf,.docx"
+                  accept=".zip"
                   className="hidden"
                   onChange={(e) => {
-                    if (e.target.files?.length) setValue(e.target.files[0].name)
+                    if (e.target.files?.length) pickFile(e.target.files[0])
                   }}
                 />
                 <button
@@ -566,9 +638,19 @@ function AddSourceModal({ projectId, onClose }) {
         </div>
 
         <div className="flex justify-end gap-2 border-t border-slate-200 px-6 py-4">
-          <SecondaryButton onClick={onClose}>Cancel</SecondaryButton>
-          <PrimaryButton onClick={handleAdd}>
-            <Plus size={16} /> Add Source
+          <SecondaryButton onClick={onClose} disabled={submitting}>
+            Cancel
+          </SecondaryButton>
+          <PrimaryButton onClick={handleAdd} disabled={submitting}>
+            {submitting ? (
+              <>
+                <RefreshCw size={16} className="animate-spin" /> Đang tải lên…
+              </>
+            ) : (
+              <>
+                <Plus size={16} /> Add Source
+              </>
+            )}
           </PrimaryButton>
         </div>
       </div>

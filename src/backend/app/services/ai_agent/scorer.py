@@ -1,8 +1,6 @@
-import os
 import json
-import google.generativeai as genai
 
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+from app.services.ai_agent.gemini_client import generate_text
 
 SCORER_MODEL = "gemini-2.5-flash"
 
@@ -61,9 +59,7 @@ def score_cv(candidate_info: dict, jd_requirements: dict) -> dict:
             "{candidate_info}",
             json.dumps(candidate_info, ensure_ascii=False, indent=2),
         )
-        model = genai.GenerativeModel(SCORER_MODEL)
-        response = model.generate_content(prompt)
-        response_text = _clean_json_response(response.text)
+        response_text = _clean_json_response(generate_text(SCORER_MODEL, prompt))
         return json.loads(response_text)
     except json.JSONDecodeError as e:
         return {"score_error": f"Không parse được JSON từ response: {e}"}

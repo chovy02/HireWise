@@ -120,6 +120,9 @@ def get_leaderboard(
             email=c.email,
             status=c.status,
             score=c.evaluation.score if c.evaluation else None,
+            # Kỹ năng đã trích (khử trùng, giữ thứ tự) để FE hiển thị chip trên bảng.
+            skills=list(dict.fromkeys(s.skill_name for s in c.skills))[:15],
+            is_overridden=c.evaluation.is_overridden if c.evaluation else False,
         )
         for c in candidates
     ]

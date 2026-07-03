@@ -1,10 +1,8 @@
-import os
 import json
-import google.generativeai as genai
 
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+from app.services.ai_agent.gemini_client import generate_text
 
-EVIDENCE_MODEL = "gemini-2.0-flash"
+EVIDENCE_MODEL = "gemini-2.5-flash"
 
 EVIDENCE_PROMPT = """Bạn là công cụ tìm bằng chứng. Dựa vào CV gốc, tìm đoạn văn bản NGUYÊN VĂN trong CV làm căn cứ cho từng nhận định.
 Trả về DUY NHẤT một object JSON, không kèm giải thích, không markdown.
@@ -59,9 +57,7 @@ def generate_evidence(cv_text: str, score_result: dict) -> dict:
         ).replace(
             "{weaknesses}", json.dumps(weaknesses, ensure_ascii=False)
         )
-        model = genai.GenerativeModel(EVIDENCE_MODEL)
-        response = model.generate_content(prompt)
-        response_text = _clean_json_response(response.text)
+        response_text = _clean_json_response(generate_text(EVIDENCE_MODEL, prompt))
         return json.loads(response_text)
     except json.JSONDecodeError as e:
         return {"evidence_error": f"Không parse được JSON từ response: {e}"}

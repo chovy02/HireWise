@@ -1,10 +1,8 @@
-import os
 import json
-import google.generativeai as genai
 
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+from app.services.ai_agent.gemini_client import generate_text
 
-PARSER_MODEL = "gemini-2.0-flash"
+PARSER_MODEL = "gemini-2.5-flash"
 
 PARSE_PROMPT = """Bạn là công cụ trích xuất thông tin CV. Đọc nội dung CV dưới đây và trả về DUY NHẤT một object JSON, không kèm giải thích, không markdown.
 
@@ -101,9 +99,7 @@ def parse_cv(raw_text: str) -> dict:
         return {"parse_error": "CV rỗng, không có text để parse."}
     try:
         prompt = PARSE_PROMPT.replace("{cv_text}", raw_text)
-        model = genai.GenerativeModel(PARSER_MODEL)
-        response = model.generate_content(prompt)
-        response_text = _clean_json_response(response.text)
+        response_text = _clean_json_response(generate_text(PARSER_MODEL, prompt))
         return json.loads(response_text)
     except json.JSONDecodeError as e:
         return {"parse_error": f"Không parse được JSON từ response: {e}"}

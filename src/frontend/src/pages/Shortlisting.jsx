@@ -1,20 +1,19 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import {
   Search,
-  SlidersHorizontal,
   ArrowUpDown,
-  X,
   ExternalLink,
   Lightbulb,
   Trophy,
   GitCompare,
-  CheckCircle2,
   FolderPlus,
   Plus,
   Briefcase,
   ArrowRight,
   ArrowLeft,
+  RefreshCw,
+  X,
 } from 'lucide-react'
 import Topbar from '../components/Topbar.jsx'
 import {
@@ -25,10 +24,23 @@ import {
   SecondaryButton,
   PrimaryButton,
 } from '../components/ui.jsx'
-import CandidateModal from '../components/CandidateModal.jsx'
+import CandidateDetailModal from '../components/CandidateDetailModal.jsx'
 import { useToast } from '../context/ToastContext.jsx'
 import { useProjects } from '../context/ProjectContext.jsx'
-import { shortlistFilters } from '../data/mockData.js'
+import { getCandidates } from '../api/jds.js'
+
+const STATUS_BADGE = {
+  COMPLETED: { variant: 'completed', label: 'Hoàn tất' },
+  PENDING: { variant: 'processing', label: 'Đang xử lý' },
+  FAILED: { variant: 'error', label: 'Lỗi' },
+}
+
+// COMPLETED (có điểm) xếp trước theo điểm giảm dần; PENDING/FAILED (không điểm) xếp cuối.
+function sortRows(rows) {
+  return [...rows].sort(
+    (a, b) => (a.score == null) - (b.score == null) || (b.score ?? 0) - (a.score ?? 0)
+  )
+}
 
 export default function Shortlisting() {
   const navigate = useNavigate()
@@ -36,8 +48,6 @@ export default function Shortlisting() {
   const toast = useToast()
   const { projects } = useProjects()
 
-  // Which project (JD) are we shortlisting against? If arriving without a
-  // specific project (and more than one exists), we show a picker first.
   const initialId =
     location.state?.projectId &&
     projects.some((p) => p.id === location.state.projectId)
@@ -48,13 +58,32 @@ export default function Shortlisting() {
   const [projectId, setProjectId] = useState(initialId)
 
   const [query, setQuery] = useState('')
-  const [filters, setFilters] = useState(shortlistFilters)
-  const [openId, setOpenId] = useState(null) // candidate popup
+  const [openId, setOpenId] = useState(null)
   const [compareMode, setCompareMode] = useState(false)
-  const [selected, setSelected] = useState([]) // ids picked for comparison
+  const [selected, setSelected] = useState([])
   const [showCompare, setShowCompare] = useState(false)
 
-  // ---- No projects: nudge the user to create one first ----
+  // Ứng viên THẬT của JD đang chọn (GET /jds/{id}/candidates).
+  const [rows, setRows] = useState(null) // null = chưa tải
+  const [loadErr, setLoadErr] = useState('')
+
+  useEffect(() => {
+    if (!projectId) {
+      setRows(null)
+      return
+    }
+    let cancelled = false
+    setRows(null)
+    setLoadErr('')
+    getCandidates(projectId)
+      .then((data) => !cancelled && setRows(sortRows(data)))
+      .catch((e) => !cancelled && setLoadErr(e.message))
+    return () => {
+      cancelled = true
+    }
+  }, [projectId])
+
+  // ---- No projects ----
   if (projects.length === 0) {
     return (
       <>
@@ -74,10 +103,7 @@ export default function Shortlisting() {
               Create a project (job description) first — then candidates can be
               ranked and shortlisted against it.
             </p>
-            <PrimaryButton
-              className="mt-6"
-              onClick={() => navigate('/projects/new')}
-            >
+            <PrimaryButton className="mt-6" onClick={() => navigate('/projects/new')}>
               <Plus size={16} /> Create a project
             </PrimaryButton>
           </div>
@@ -88,7 +114,7 @@ export default function Shortlisting() {
 
   const project = projectId ? projects.find((p) => p.id === projectId) : null
 
-  // ---- Project picker: choose which JD to shortlist (like the dashboard) ----
+  // ---- Project picker ----
   if (!project) {
     return (
       <>
@@ -103,62 +129,63 @@ export default function Shortlisting() {
             </p>
           </div>
           <div className="mt-6 grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
-            {projects.map((p) => {
-              const shortlisted = p.candidates.filter((c) => c.shortlisted).length
-              return (
-                <button
-                  key={p.id}
-                  onClick={() => setProjectId(p.id)}
-                  className="group flex flex-col text-left"
-                >
-                  <Card className="flex h-full flex-col p-5 transition hover:border-indigo-300 hover:shadow-md">
-                    <div className="flex items-start gap-3">
-                      <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600">
-                        <Briefcase size={18} />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <h3 className="truncate text-base font-semibold text-slate-900">
-                          {p.title}
-                        </h3>
-                        <p className="mt-0.5 text-xs text-slate-400">
-                          {p.candidates.length} candidates • {shortlisted}{' '}
-                          shortlisted
-                        </p>
-                      </div>
+            {projects.map((p) => (
+              <button
+                key={p.id}
+                onClick={() => setProjectId(p.id)}
+                className="group flex flex-col text-left"
+              >
+                <Card className="flex h-full flex-col p-5 transition hover:border-indigo-300 hover:shadow-md">
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600">
+                      <Briefcase size={18} />
                     </div>
-                    <p className="mt-3 line-clamp-2 flex-1 text-sm leading-relaxed text-slate-500">
-                      {p.jdInput || 'No description provided.'}
-                    </p>
-                    <div className="mt-4 flex items-center justify-end border-t border-slate-100 pt-3 text-xs">
-                      <span className="inline-flex items-center gap-1 font-medium text-indigo-600 group-hover:gap-1.5">
-                        Shortlist <ArrowRight size={14} />
-                      </span>
+                    <div className="min-w-0 flex-1">
+                      <h3 className="truncate text-base font-semibold text-slate-900">
+                        {p.title}
+                      </h3>
                     </div>
-                  </Card>
-                </button>
-              )
-            })}
+                  </div>
+                  <p className="mt-3 line-clamp-2 flex-1 text-sm leading-relaxed text-slate-500">
+                    {p.jdInput || 'No description provided.'}
+                  </p>
+                  <div className="mt-4 flex items-center justify-end border-t border-slate-100 pt-3 text-xs">
+                    <span className="inline-flex items-center gap-1 font-medium text-indigo-600 group-hover:gap-1.5">
+                      Shortlist <ArrowRight size={14} />
+                    </span>
+                  </div>
+                </Card>
+              </button>
+            ))}
           </div>
         </main>
       </>
     )
   }
 
-  // Read live from context so overrides + re-ranking reflect instantly.
-  const candidates = project.candidates
-  const visible = candidates.filter((c) =>
+  const list = rows || []
+  const visible = list.filter((c) =>
     query.trim()
-      ? (c.name + ' ' + c.title + ' ' + c.skills.join(' '))
+      ? (`${c.name || ''} ${(c.skills || []).join(' ')}`)
           .toLowerCase()
           .includes(query.trim().toLowerCase())
       : true
   )
-  const openCandidate = candidates.find((c) => c.id === openId) || null
-  const compareList = candidates.filter((c) => selected.includes(c.id))
+  const compareList = list.filter((c) => selected.includes(c.id))
+  const completedCount = list.filter((c) => c.status === 'COMPLETED').length
 
   function toggleSelect(id) {
-    setSelected((list) =>
-      list.includes(id) ? list.filter((x) => x !== id) : [...list, id]
+    setSelected((l) => (l.includes(id) ? l.filter((x) => x !== id) : [...l, id]))
+  }
+
+  // Sau khi override: cập nhật điểm + cờ trong row rồi xếp lại hạng.
+  function handleOverridden(candidateId, { score, is_overridden }) {
+    setRows((prev) =>
+      sortRows(
+        (prev || []).map((c) =>
+          c.id === candidateId ? { ...c, score, is_overridden } : c
+        )
+      )
     )
   }
 
@@ -169,7 +196,6 @@ export default function Shortlisting() {
         {/* Header */}
         <div className="flex items-start justify-between">
           <div className="flex items-center gap-3">
-            {/* Back to the project picker (only when there's a choice to make) */}
             {projects.length > 1 && (
               <button
                 onClick={() => {
@@ -205,19 +231,14 @@ export default function Shortlisting() {
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder='Semantic Search: e.g. "managed a team of at least 5 and knows React"'
+              placeholder="Tìm theo tên hoặc kỹ năng…"
               className="w-full flex-1 bg-transparent text-sm text-slate-700 placeholder-slate-400 outline-none"
             />
-            <Badge variant="ai">AI Powered</Badge>
           </div>
           <div className="h-7 w-px bg-slate-200" />
-          <SecondaryButton onClick={() => toast('Filters → opens filter panel')}>
-            <SlidersHorizontal size={15} /> Filters
-          </SecondaryButton>
-          <SecondaryButton onClick={() => toast('Sort → AI Rank')}>
+          <SecondaryButton onClick={() => toast('Đang sắp theo điểm AI giảm dần.')}>
             <ArrowUpDown size={15} /> Sort: AI Rank
           </SecondaryButton>
-          {/* Compare mode toggle */}
           <SecondaryButton
             className={
               compareMode ? 'border-indigo-300 bg-indigo-50 text-indigo-600' : ''
@@ -231,31 +252,11 @@ export default function Shortlisting() {
           </SecondaryButton>
         </Card>
 
-        {/* Active filter chips */}
-        {filters.length > 0 && (
-          <div className="mt-4 flex flex-wrap gap-2">
-            {filters.map((f) => (
-              <span
-                key={f}
-                className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-600"
-              >
-                {f}
-                <button
-                  onClick={() => setFilters((l) => l.filter((x) => x !== f))}
-                  className="text-slate-400 hover:text-slate-600"
-                >
-                  <X size={14} />
-                </button>
-              </span>
-            ))}
-          </div>
-        )}
-
         {/* Compare action bar */}
         {compareMode && (
           <div className="mt-4 flex items-center justify-between rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-3">
             <p className="text-sm text-indigo-700">
-              Select candidates to compare ({selected.length} selected).
+              Chọn ứng viên để so sánh ({selected.length} đã chọn).
             </p>
             <PrimaryButton
               className="px-3 py-2"
@@ -267,147 +268,160 @@ export default function Shortlisting() {
           </div>
         )}
 
-        {/* Leaderboard table */}
+        {/* Leaderboard */}
         <Card className="mt-5 overflow-hidden">
           <div className="flex items-center gap-2 border-b border-slate-200 px-6 py-3">
             <Trophy size={16} className="text-amber-500" />
             <h2 className="text-sm font-semibold text-slate-800">Leaderboard</h2>
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[760px] text-left">
-              <thead>
-                <tr className="border-b border-slate-200 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                  {compareMode && <th className="px-6 py-3">Pick</th>}
-                  <th className="px-6 py-3">Rank</th>
-                  <th className="px-6 py-3">Candidate</th>
-                  <th className="px-6 py-3 text-center">Suitability</th>
-                  <th className="px-6 py-3">Key Skills</th>
-                  <th className="px-6 py-3 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {visible.map((c) => (
-                  <tr key={c.id} className="hover:bg-slate-50/60">
-                    {compareMode && (
-                      <td className="px-6 py-4">
-                        <input
-                          type="checkbox"
-                          checked={selected.includes(c.id)}
-                          onChange={() => toggleSelect(c.id)}
-                          className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
-                        />
-                      </td>
-                    )}
-                    <td className="px-6 py-4 text-sm font-semibold text-slate-400">
-                      #{c.rank}
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-3">
-                        <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-indigo-50 text-sm font-semibold text-indigo-600">
-                          {c.name[0]}
-                        </div>
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm font-semibold text-slate-900">
-                              {c.name}
-                            </span>
-                            {c.isNew && (
-                              <Badge variant="new" upper={false}>
-                                New
-                              </Badge>
-                            )}
-                            {c.overridden && (
-                              <Badge variant="ai" upper={false}>
-                                Overridden
-                              </Badge>
-                            )}
-                            {c.shortlisted && (
-                              <Badge variant="completed" upper={false}>
-                                <CheckCircle2 size={11} /> Shortlisted
-                              </Badge>
-                            )}
-                          </div>
-                          <p className="text-xs text-slate-400">
-                            {c.title} • {c.years} years
-                          </p>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="flex items-center justify-center gap-1.5">
-                        <ScoreRing value={c.score} />
-                        <button
-                          onClick={() =>
-                            toast(`Why ${c.score}? → AI explanation (mock)`)
-                          }
-                          className="text-slate-300 hover:text-amber-500"
-                          title="Why this score?"
-                        >
-                          <Lightbulb size={16} />
-                        </button>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="flex flex-wrap gap-1.5">
-                        {c.skills.map((s) => (
-                          <Tag key={s}>{s}</Tag>
-                        ))}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="flex justify-end">
-                        {/* Opens the candidate popup (no page nav, no CV tab) */}
-                        <button
-                          onClick={() => setOpenId(c.id)}
-                          className="rounded-lg border border-indigo-200 bg-indigo-50 p-2 text-indigo-600 transition hover:bg-indigo-100"
-                          title="Open candidate profile"
-                        >
-                          <ExternalLink size={16} />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
 
-          <div className="flex items-center justify-between border-t border-slate-200 px-6 py-3.5">
-            <p className="text-sm text-slate-500">
-              Showing {visible.length} of {candidates.length} candidates
+          {/* Trạng thái tải */}
+          {rows === null && !loadErr && (
+            <p className="px-6 py-10 text-sm text-slate-400">Đang tải ứng viên…</p>
+          )}
+          {loadErr && (
+            <p className="px-6 py-10 text-sm text-red-500">
+              Lỗi tải ứng viên: {loadErr}
             </p>
-          </div>
+          )}
+          {rows && list.length === 0 && (
+            <p className="px-6 py-10 text-sm text-slate-400">
+              Chưa có ứng viên nào cho vị trí này. Tải CV ở trang chi tiết dự án để
+              bắt đầu.
+            </p>
+          )}
+
+          {rows && list.length > 0 && (
+            <>
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[760px] text-left">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                      {compareMode && <th className="px-6 py-3">Pick</th>}
+                      <th className="px-6 py-3">Rank</th>
+                      <th className="px-6 py-3">Candidate</th>
+                      <th className="px-6 py-3 text-center">Suitability</th>
+                      <th className="px-6 py-3">Key Skills</th>
+                      <th className="px-6 py-3 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {visible.map((c, i) => {
+                      const meta = STATUS_BADGE[c.status] || STATUS_BADGE.PENDING
+                      return (
+                        <tr key={c.id} className="hover:bg-slate-50/60">
+                          {compareMode && (
+                            <td className="px-6 py-4">
+                              <input
+                                type="checkbox"
+                                checked={selected.includes(c.id)}
+                                onChange={() => toggleSelect(c.id)}
+                                className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                              />
+                            </td>
+                          )}
+                          <td className="px-6 py-4 text-sm font-semibold text-slate-400">
+                            #{i + 1}
+                          </td>
+                          <td className="px-6 py-4">
+                            <div className="flex items-center gap-3">
+                              <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-indigo-50 text-sm font-semibold text-indigo-600">
+                                {(c.name || '?')[0]}
+                              </div>
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="truncate text-sm font-semibold text-slate-900">
+                                    {c.name || 'Đang trích xuất…'}
+                                  </span>
+                                  {c.is_overridden && (
+                                    <Badge variant="ai" upper={false}>
+                                      Overridden
+                                    </Badge>
+                                  )}
+                                </div>
+                                <p className="truncate text-xs text-slate-400">
+                                  {c.email || '—'}
+                                </p>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4">
+                            <div className="flex items-center justify-center gap-1.5">
+                              {c.score != null ? (
+                                <>
+                                  <ScoreRing value={c.score} />
+                                  <Lightbulb
+                                    size={16}
+                                    className="text-slate-300"
+                                  />
+                                </>
+                              ) : (
+                                <Badge variant={meta.variant} upper={false}>
+                                  {c.status === 'PENDING' && (
+                                    <RefreshCw size={11} className="animate-spin" />
+                                  )}
+                                  {meta.label}
+                                </Badge>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-6 py-4">
+                            <div className="flex flex-wrap gap-1.5">
+                              {(c.skills || []).slice(0, 5).map((s) => (
+                                <Tag key={s}>{s}</Tag>
+                              ))}
+                              {(!c.skills || c.skills.length === 0) && (
+                                <span className="text-xs text-slate-300">—</span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-6 py-4">
+                            <div className="flex justify-end">
+                              <button
+                                onClick={() => setOpenId(c.id)}
+                                className="rounded-lg border border-indigo-200 bg-indigo-50 p-2 text-indigo-600 transition hover:bg-indigo-100"
+                                title="Xem chi tiết ứng viên"
+                              >
+                                <ExternalLink size={16} />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="flex items-center justify-between border-t border-slate-200 px-6 py-3.5 text-sm text-slate-500">
+                <span>
+                  Hiển thị {visible.length}/{list.length} ứng viên • {completedCount}{' '}
+                  đã chấm điểm
+                </span>
+              </div>
+            </>
+          )}
         </Card>
       </main>
 
-      {/* Candidate profile popup */}
-      {openCandidate && (
-        <CandidateModal
-          project={project}
-          candidate={openCandidate}
+      {/* Candidate detail popup (real data) */}
+      {openId && (
+        <CandidateDetailModal
+          candidateId={openId}
           onClose={() => setOpenId(null)}
-          onViewLeaderboard={() =>
-            toast('Showing the leaderboard for this project.')
-          }
-          onCompare={() => {
-            setCompareMode(true)
-            setSelected([openCandidate.id])
-          }}
+          onOverridden={handleOverridden}
         />
       )}
 
       {/* Compare popup */}
       {showCompare && compareList.length >= 2 && (
-        <CompareModal
-          candidates={compareList}
-          onClose={() => setShowCompare(false)}
-        />
+        <CompareModal candidates={compareList} onClose={() => setShowCompare(false)} />
       )}
     </>
   )
 }
 
-// Side-by-side comparison of the selected candidates.
+// So sánh cạnh nhau các ứng viên đã chọn (dữ liệu thật: điểm + kỹ năng).
 function CompareModal({ candidates, onClose }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -418,8 +432,7 @@ function CompareModal({ candidates, onClose }) {
       <div className="relative flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
         <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
           <h2 className="flex items-center gap-2 text-base font-bold text-slate-900">
-            <GitCompare size={18} className="text-indigo-600" /> Compare
-            Candidates
+            <GitCompare size={18} className="text-indigo-600" /> Compare Candidates
           </h2>
           <button
             onClick={onClose}
@@ -441,29 +454,24 @@ function CompareModal({ candidates, onClose }) {
                 className="rounded-xl border border-slate-200 p-4 text-center"
               >
                 <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-indigo-50 text-base font-semibold text-indigo-600">
-                  {c.name[0]}
+                  {(c.name || '?')[0]}
                 </div>
-                <p className="mt-2 text-sm font-semibold text-slate-900">
-                  {c.name}
+                <p className="mt-2 truncate text-sm font-semibold text-slate-900">
+                  {c.name || 'Đang trích xuất…'}
                 </p>
-                <p className="text-xs text-slate-400">{c.title}</p>
+                <p className="truncate text-xs text-slate-400">{c.email || '—'}</p>
                 <div className="mt-3 flex justify-center">
-                  <ScoreRing value={c.score} />
+                  {c.score != null ? (
+                    <ScoreRing value={c.score} />
+                  ) : (
+                    <span className="text-xs text-slate-400">Chưa có điểm</span>
+                  )}
                 </div>
-                <p className="mt-3 text-xs text-slate-400">Rank #{c.rank}</p>
-                <p className="mt-1 text-xs text-slate-400">
-                  {c.years} years experience
-                </p>
                 <div className="mt-3 flex flex-wrap justify-center gap-1.5">
-                  {c.skills.map((s) => (
+                  {(c.skills || []).slice(0, 6).map((s) => (
                     <Tag key={s}>{s}</Tag>
                   ))}
                 </div>
-                {c.overridden && (
-                  <p className="mt-3 text-[11px] font-semibold uppercase text-indigo-600">
-                    Overridden (AI: {c.aiScore})
-                  </p>
-                )}
               </div>
             ))}
           </div>

@@ -31,3 +31,19 @@ export function uploadCvs(jdId, file) {
   form.append('file', file)
   return apiFetch(`/jds/${jdId}/cvs`, { method: 'POST', body: form, auth: true })
 }
+
+// GET /candidates/{id} -> CandidateDetailResponse
+// Chi tiết ứng viên: skills, projects, và evaluation (score_breakdown, explanation, evidence).
+export function getCandidate(candidateId) {
+  return apiFetch(`/candidates/${candidateId}`, { auth: true })
+}
+
+// PATCH /evaluations/{id}/override  { new_score, reason } -> EvaluationResponse
+// UC U005 - HR chỉnh điểm AI chấm; backend lưu lịch sử vào evaluation_overrides.
+export function overrideEvaluation(evaluationId, { new_score, reason }) {
+  return apiFetch(`/evaluations/${evaluationId}/override`, {
+    method: 'PATCH',
+    body: { new_score, reason },
+    auth: true,
+  })
+}

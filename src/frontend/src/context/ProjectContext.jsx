@@ -1,6 +1,7 @@
-import { createContext, useContext, useState, useCallback } from 'react'
+import { createContext, useContext, useState, useCallback, useEffect } from 'react'
 import { makeSeedCandidates } from '../data/mockData.js'
-import { createJd, uploadCvs } from '../api/jds.js'
+import { createJd, uploadCvs, listJds } from '../api/jds.js'
+import { useAuth } from './AuthContext.jsx'
 
 const ProjectContext = createContext(null)
 
@@ -15,8 +16,48 @@ function reRank(candidates) {
 // logic. Frontend-only: state lives here, no backend calls. Replace the bodies
 // with fetch() when the API exists.
 export function ProjectProvider({ children }) {
-  // Starts empty so the Dashboard shows the "Create your first project" state.
+  const { isAuthenticated } = useAuth()
   const [projects, setProjects] = useState([])
+  // true trong lúc nạp danh sách JD từ backend (để trang chi tiết không vội redirect).
+  const [loading, setLoading] = useState(false)
+
+  // Hydrate danh sách project từ backend mỗi khi đăng nhập. TRƯỚC ĐÂY state chỉ nằm
+  // trong RAM nên F5 / mở lại là mất sạch dù JD vẫn còn trong DB. Chạy lại khi
+  // login/logout. Vẫn gắn seed candidates (mock) để trang Shortlisting demo hoạt động;
+  // trạng thái xử lý CV THẬT được poll riêng ở ProjectDetail.
+  useEffect(() => {
+    let cancelled = false
+    if (!isAuthenticated) {
+      setProjects([])
+      return
+    }
+    setLoading(true)
+    listJds()
+      .then((jds) => {
+        if (cancelled) return
+        setProjects(
+          jds.map((jd) => ({
+            id: jd.id,
+            backendJdId: jd.id,
+            title: jd.title,
+            jdInput: '', // mô tả gốc + markdown được fetch lazy ở ProjectDetail
+            jdMarkdown: '',
+            sources: [], // nguồn ingest cũ chưa lưu server-side
+            createdAt: jd.created_at,
+            candidates: reRank(makeSeedCandidates()),
+          }))
+        )
+      })
+      .catch(() => {
+        if (!cancelled) setProjects([])
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [isAuthenticated])
 
   // Create a project from the natural-language brief + chosen ingestion source.
   // REAL backend calls: (1) POST /jds -> Gemini structures the JD, (2) if a ZIP
@@ -89,6 +130,14 @@ export function ProjectProvider({ children }) {
     [projects]
   )
 
+  // Ghi bổ sung chi tiết JD (markdown, mô tả gốc) vào project sau khi ProjectDetail
+  // fetch đầy đủ từ backend — vì listJds() chỉ trả bản rút gọn.
+  const setProjectDetail = useCallback((id, patch) => {
+    setProjects((list) =>
+      list.map((p) => (p.id === id ? { ...p, ...patch } : p))
+    )
+  }, [])
+
   // HR override: apply a patch to a candidate (any AI-written field, including
   // the nested `analysis`), flag the profile as overridden, append the supplied
   // edit-history entries (the caller computes old→new diffs since it knows the
@@ -144,9 +193,11 @@ export function ProjectProvider({ children }) {
     <ProjectContext.Provider
       value={{
         projects,
+        loading,
         addProject,
         addSource,
         getProject,
+        setProjectDetail,
         overrideCandidate,
         toggleShortlist,
       }}

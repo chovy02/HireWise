@@ -1,10 +1,7 @@
-import os
 import json
-import google.generativeai as genai
 
 from app.services.ai_agent.exceptions import AIServiceError
-
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+from app.services.ai_agent.gemini_client import generate_text
 
 JD_MODEL = "gemini-2.5-flash"
 
@@ -59,9 +56,7 @@ def process_jd(jd_text: str) -> dict:
     prompt = JD_PROMPT.replace("{jd_text}", jd_text)
 
     try:
-        model = genai.GenerativeModel(JD_MODEL)
-        response = model.generate_content(prompt)
-        response_text = _clean_json_response(response.text)
+        response_text = _clean_json_response(generate_text(JD_MODEL, prompt))
     except Exception as e:
         raise AIServiceError(f"Không gọi được dịch vụ AI: {e}") from e
 

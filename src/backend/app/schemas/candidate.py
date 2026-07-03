@@ -45,6 +45,8 @@ class CandidateListItem(BaseModel):
     email: Optional[str] = None
     status: str
     score: Optional[float] = None
+    skills: list[str] = []          # tên kỹ năng để hiển thị chip trên bảng xếp hạng
+    is_overridden: bool = False     # HR đã chỉnh điểm chưa
 
     class Config:
         from_attributes = True
@@ -58,6 +60,7 @@ class CandidateDetailResponse(BaseModel):
     phone: Optional[str] = None
     status: str
     file_hash: Optional[str] = None
+    raw_text: Optional[str] = None   # text CV gốc, để đối chiếu/highlight bằng chứng
     created_at: datetime
     skills: list[CandidateSkillResponse] = []
     projects: list[CandidateProjectResponse] = []
