@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import {
   X,
+  ArrowLeft,
   Pencil,
   Save,
   Target,
@@ -170,16 +171,18 @@ export default function CandidateDetailModal({ candidateId, onClose, onOverridde
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div
-        className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm"
-        onClick={onClose}
-      />
-
-      <div className="relative flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+    <div className="fixed inset-0 z-50 flex flex-col bg-white">
+      <div className="relative flex h-full w-full flex-col overflow-hidden bg-white">
         {/* Header */}
         <div className="flex items-start justify-between border-b border-slate-200 px-6 py-4">
           <div className="flex items-center gap-3">
+            <button
+              onClick={onClose}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
+              title="Quay lại danh sách"
+            >
+              <ArrowLeft size={16} /> Quay lại
+            </button>
             <div className="flex h-11 w-11 items-center justify-center rounded-full bg-indigo-50 text-base font-semibold text-indigo-600">
               {name[0]}
             </div>
