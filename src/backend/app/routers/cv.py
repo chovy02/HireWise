@@ -1,6 +1,8 @@
+import os
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app import models, schemas
@@ -147,6 +149,28 @@ def get_candidate(
     if not candidate:
         raise HTTPException(status_code=404, detail="Không tìm thấy ứng viên.")
     return candidate
+
+
+@candidate_router.get("/{candidate_id}/cv")
+def get_candidate_cv(
+    candidate_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Trả file PDF gốc của ứng viên để hiển thị lại cho HR (nhúng trong CandidateModal)."""
+    candidate = db.query(models.Candidate).filter(models.Candidate.id == candidate_id).first()
+    if not candidate:
+        raise HTTPException(status_code=404, detail="Không tìm thấy ứng viên.")
+    if not candidate.file_path or not os.path.exists(candidate.file_path):
+        raise HTTPException(status_code=404, detail="Chưa lưu file CV gốc cho ứng viên này.")
+
+    return FileResponse(
+        candidate.file_path,
+        media_type="application/pdf",
+        filename=f"{candidate.name or 'cv'}.pdf",
+        # inline để trình duyệt hiển thị trong <iframe> thay vì tải xuống.
+        content_disposition_type="inline",
+    )
 
 
 # ────────────────────────────────────────────────────────────

@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.services.cv_processing.extractor import extract_text_from_pdf
+from app.services.cv_processing.storage import save_cv_pdf
 from app.services.data_ingestion.ingestion import ingest_zip
 from app.services.ai_agent.parser import parse_cv
 from app.services.ai_agent.scorer import score_cv
@@ -218,6 +219,11 @@ def stage_cvs(
         db.add(candidate)
         db.commit()
         db.refresh(candidate)
+
+        # Lưu file PDF gốc ra đĩa (đặt tên theo candidate.id) để hiển thị lại cho HR.
+        if cv.get("content"):
+            candidate.file_path = save_cv_pdf(candidate.id, cv["content"])
+            db.commit()
 
         item["status"] = "pending"
         item["candidate_id"] = candidate.id

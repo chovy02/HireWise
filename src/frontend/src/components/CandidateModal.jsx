@@ -1,8 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   X,
   Pencil,
-  Sparkles,
   Target,
   CheckCircle2,
   ShieldAlert,
@@ -15,11 +14,69 @@ import {
   Save,
   Plus,
   Trash2,
+  FileText,
+  Loader2,
 } from 'lucide-react'
 import { Tag, PrimaryButton, SecondaryButton, Badge } from './ui.jsx'
 import { useToast } from '../context/ToastContext.jsx'
 import { useProjects } from '../context/ProjectContext.jsx'
 import { useAuth } from '../context/AuthContext.jsx'
+import { getCandidateCv } from '../api/jds.js'
+
+// Nhúng file PDF gốc của ứng viên: fetch kèm token -> blob URL -> <iframe>.
+// (iframe không tự gửi được header Authorization, nên phải fetch rồi tạo blob URL.)
+function CvPdf({ candidateId }) {
+  const [url, setUrl] = useState(null)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    let objectUrl
+    setUrl(null)
+    setError('')
+    getCandidateCv(candidateId)
+      .then((blob) => {
+        if (cancelled) return
+        objectUrl = URL.createObjectURL(blob)
+        setUrl(objectUrl)
+      })
+      .catch((e) => {
+        if (!cancelled) setError(e.message || 'Không tải được CV.')
+      })
+    return () => {
+      cancelled = true
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [candidateId])
+
+  if (error) {
+    return (
+      <div className="mt-3 flex h-[60vh] flex-col items-center justify-center rounded-lg border border-dashed border-slate-200 bg-slate-50/50 p-6 text-center">
+        <FileText size={28} className="text-slate-300" />
+        <p className="mt-3 text-sm font-medium text-slate-600">
+          Không hiển thị được CV gốc
+        </p>
+        <p className="mt-1 max-w-xs text-xs text-slate-400">{error}</p>
+      </div>
+    )
+  }
+
+  if (!url) {
+    return (
+      <div className="mt-3 flex h-[60vh] items-center justify-center rounded-lg border border-slate-200 bg-slate-50/50">
+        <Loader2 size={20} className="animate-spin text-slate-400" />
+      </div>
+    )
+  }
+
+  return (
+    <iframe
+      src={url}
+      title="CV gốc"
+      className="mt-3 h-[72vh] w-full rounded-lg border border-slate-200"
+    />
+  )
+}
 
 // Friendly timestamp for the edit-history log.
 function fmt(ts) {
@@ -67,8 +124,6 @@ export default function CandidateModal({
 
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(() => makeDraft(candidate))
-  // Résumé bullet keys currently highlighted by hovering an AI deduction.
-  const [highlighted, setHighlighted] = useState([])
 
   if (!candidate) return null
   const a = candidate.analysis
@@ -80,6 +135,21 @@ export default function CandidateModal({
   function cancelEdit() {
     setDraft(makeDraft(candidate))
     setEditing(false)
+  }
+
+  // Tải file PDF gốc về máy (fetch kèm token -> blob -> anchor download).
+  async function downloadCv() {
+    try {
+      const blob = await getCandidateCv(candidate.id)
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `${candidate.name || 'cv'}.pdf`
+      link.click()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      toast(e.message || 'Không tải được CV.')
+    }
   }
 
   // --- draft mutators ---
@@ -263,8 +333,9 @@ export default function CandidateModal({
           </div>
         </div>
 
-        {/* Scrollable body */}
-        <div className="flex-1 overflow-y-auto">
+        {/* Body: score band stays fixed; on desktop each column scrolls
+            independently (own scrollbar), on mobile the whole body scrolls. */}
+        <div className="flex flex-1 flex-col overflow-y-auto lg:min-h-0 lg:overflow-hidden">
           {/* Score + match band */}
           <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 bg-slate-50/60 px-6 py-4">
             <div className="flex items-center gap-6">
@@ -374,9 +445,9 @@ export default function CandidateModal({
             </div>
           )}
 
-          <div className="grid grid-cols-1 gap-6 px-6 py-5 lg:grid-cols-2">
-            {/* Left: editable evaluation */}
-            <div>
+          <div className="grid grid-cols-1 lg:min-h-0 lg:flex-1 lg:grid-cols-2 lg:grid-rows-1">
+            {/* Left: editable evaluation — own scrollbar on desktop */}
+            <div className="px-6 py-5 lg:min-h-0 lg:overflow-y-auto lg:border-r lg:border-slate-100">
               {/* Evaluation note */}
               {editing ? (
                 <div className="mb-5">
@@ -546,16 +617,6 @@ export default function CandidateModal({
                             <p className="mt-1 text-xs leading-relaxed text-slate-500">
                               {d.evidence}
                             </p>
-                            {d.sources?.length > 0 && (
-                              <button
-                                onMouseEnter={() => setHighlighted(d.sources)}
-                                onMouseLeave={() => setHighlighted([])}
-                                className="mt-2 flex items-center gap-1.5 text-xs font-medium text-indigo-600 hover:text-indigo-700"
-                              >
-                                <Sparkles size={13} /> Hover to highlight source
-                                in résumé
-                              </button>
-                            )}
                           </div>
                         </div>
                       </div>
@@ -637,64 +698,22 @@ export default function CandidateModal({
               </div>
             </div>
 
-            {/* Right: resume (read-only source) + edit history */}
-            <div>
+            {/* Right: original CV + edit history — own scrollbar on desktop */}
+            <div className="px-6 py-5 lg:min-h-0 lg:overflow-y-auto">
               <div className="flex items-center justify-between">
                 <h3 className="text-xs font-bold uppercase tracking-wide text-slate-500">
-                  Résumé
+                  CV gốc
                 </h3>
                 <button
-                  onClick={() => toast('Original PDF → download (mock)')}
+                  onClick={downloadCv}
                   className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700"
                 >
-                  <Download size={13} /> {a.fileName}
+                  <Download size={13} /> Tải PDF
                 </button>
               </div>
-              <div className="mt-3 rounded-lg border border-slate-200 bg-white p-5">
-                <h4 className="font-serif text-2xl font-bold text-slate-900">
-                  {a.resume.name}
-                </h4>
-                <p className="mt-1 text-sm text-slate-500">
-                  {a.resume.headline}
-                </p>
-                <hr className="my-4 border-slate-200" />
-                <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
-                  Experience
-                </p>
-                <div className="mt-3 space-y-4">
-                  {a.resume.experience.map((job, ji) => (
-                    <div key={ji}>
-                      <div className="flex items-baseline justify-between">
-                        <h5 className="text-sm font-bold text-slate-900">
-                          {job.role}
-                        </h5>
-                        <span className="text-xs text-slate-500">
-                          {job.company} • {job.period}
-                        </span>
-                      </div>
-                      <ul className="mt-1.5 space-y-1">
-                        {job.bullets.map((b, bi) => {
-                          const key = `exp-${ji}-${bi}`
-                          const hot = highlighted.includes(key)
-                          return (
-                            <li
-                              key={bi}
-                              className={`flex gap-2 rounded px-1 text-xs leading-relaxed transition-colors ${
-                                hot
-                                  ? 'bg-amber-100 text-slate-800'
-                                  : 'text-slate-600'
-                              }`}
-                            >
-                              <span className="mt-1.5 h-1 w-1 flex-shrink-0 rounded-full bg-slate-400" />
-                              <span>{b}</span>
-                            </li>
-                          )
-                        })}
-                      </ul>
-                    </div>
-                  ))}
-                </div>
-              </div>
+
+              {/* File PDF gốc của ứng viên (nhúng từ backend). */}
+              <CvPdf candidateId={candidate.id} />
 
               {/* Edit history audit trail */}
               <h3 className="mt-6 flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-slate-500">
