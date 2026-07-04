@@ -24,8 +24,11 @@ services:
       - "8000:8000"
     volumes:
       - ./src/backend:/app
+      - cv_storage:/data/cv_storage
     env_file:
       - .env
+    environment:
+      - CV_STORAGE_DIR=/data/cv_storage
 
   redis:
     image: redis:7-alpine
@@ -75,3 +78,4 @@ services:
       - /app/node_modules
 volumes:
   postgres_data:
+  cv_storage:

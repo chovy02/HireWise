@@ -16,6 +16,41 @@ export function setToken(token) {
 }
 
 /**
+ * Fetch a binary response (e.g. a PDF) as a Blob, sending the Bearer token.
+ * Used for embedding files an <iframe> can't auth for on its own.
+ */
+export async function apiFetchBlob(path, { auth = true } = {}) {
+  const headers = {}
+  if (auth) {
+    const token = getToken()
+    if (token) headers['Authorization'] = `Bearer ${token}`
+  }
+
+  let res
+  try {
+    res = await fetch(`${API_BASE}${path}`, { headers })
+  } catch {
+    throw new Error(
+      'Cannot reach the server. Make sure the backend is running on port 8000.'
+    )
+  }
+
+  if (!res.ok) {
+    // Lỗi thường trả JSON { detail }, thử đọc để hiện thông báo dễ hiểu.
+    let detail = `Request failed (${res.status})`
+    try {
+      const data = await res.json()
+      if (typeof data?.detail === 'string') detail = data.detail
+    } catch {
+      /* body không phải JSON — giữ message mặc định */
+    }
+    throw new Error(detail)
+  }
+
+  return res.blob()
+}
+
+/**
  * Make a JSON request to the API.
  * Throws an Error with a readable `.message` (from FastAPI's `detail`) on failure.
  */

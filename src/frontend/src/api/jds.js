@@ -1,4 +1,4 @@
-import { apiFetch } from './client.js'
+import { apiFetch, apiFetchBlob } from './client.js'
 
 // ---- JD + CV ingestion API. Maps 1:1 to src/backend/app/routers/cv.py ----
 // Tất cả endpoint đều yêu cầu đăng nhập (auth: true).
@@ -36,6 +36,11 @@ export function uploadCvs(jdId, file) {
 // Chi tiết ứng viên: skills, projects, và evaluation (score_breakdown, explanation, evidence).
 export function getCandidate(candidateId) {
   return apiFetch(`/candidates/${candidateId}`, { auth: true })
+}
+
+// GET /candidates/{id}/cv -> Blob (application/pdf)  file CV gốc để nhúng
+export function getCandidateCv(candidateId) {
+  return apiFetchBlob(`/candidates/${candidateId}/cv`, { auth: true })
 }
 
 // PATCH /evaluations/{id}/override  { new_score, reason } -> EvaluationResponse

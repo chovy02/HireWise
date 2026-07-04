@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import {
   X,
+  ArrowLeft,
   Pencil,
   Save,
   Target,
@@ -14,7 +15,7 @@ import {
 } from 'lucide-react'
 import { Tag, Badge, ProgressBar, PrimaryButton, SecondaryButton } from './ui.jsx'
 import { useToast } from '../context/ToastContext.jsx'
-import { getCandidate, overrideEvaluation } from '../api/jds.js'
+import { getCandidate, overrideEvaluation, getCandidateCv } from '../api/jds.js'
 
 const STATUS_BADGE = {
   COMPLETED: { variant: 'completed', label: 'Hoàn tất' },
@@ -30,24 +31,59 @@ const BREAKDOWN_LABEL = {
 
 const clampScore = (v) => Math.max(0, Math.min(100, Number(v) || 0))
 
-// Tô sáng đoạn `quote` (nguyên văn) bên trong text CV gốc để đối chiếu bằng chứng.
-// Trả về mảng node cho React; nếu không tìm thấy thì trả nguyên text.
-function highlightCV(text, quote) {
-  if (!text) return null
-  if (!quote) return text
-  const idx = text.toLowerCase().indexOf(quote.toLowerCase())
-  if (idx === -1) return text
-  return [
-    text.slice(0, idx),
-    <mark key="hl" className="rounded bg-amber-200 px-0.5 text-slate-900">
-      {text.slice(idx, idx + quote.length)}
-    </mark>,
-    text.slice(idx + quote.length),
-  ]
+// Nhúng file PDF gốc của ứng viên: fetch kèm token -> blob URL -> <iframe>.
+// (iframe không tự gửi được header Authorization nên phải fetch rồi tạo blob URL.)
+function CvPdf({ candidateId }) {
+  const [url, setUrl] = useState(null)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    let objectUrl
+    setUrl(null)
+    setError('')
+    getCandidateCv(candidateId)
+      .then((blob) => {
+        if (cancelled) return
+        objectUrl = URL.createObjectURL(blob)
+        setUrl(objectUrl)
+      })
+      .catch((e) => !cancelled && setError(e.message || 'Không tải được CV.'))
+    return () => {
+      cancelled = true
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [candidateId])
+
+  if (error) {
+    return (
+      <div className="flex h-full min-h-[60vh] flex-col items-center justify-center rounded-lg border border-dashed border-slate-200 bg-slate-50/50 p-6 text-center">
+        <FileText size={28} className="text-slate-300" />
+        <p className="mt-3 text-sm font-medium text-slate-600">
+          Không hiển thị được CV gốc (PDF)
+        </p>
+        <p className="mt-1 max-w-xs text-xs text-slate-400">{error}</p>
+      </div>
+    )
+  }
+  if (!url) {
+    return (
+      <div className="flex h-full min-h-[60vh] items-center justify-center rounded-lg border border-slate-200 bg-slate-50/50">
+        <Loader2 size={20} className="animate-spin text-slate-400" />
+      </div>
+    )
+  }
+  return (
+    <iframe
+      src={url}
+      title="CV gốc"
+      className="h-full min-h-[60vh] w-full rounded-lg border border-slate-200"
+    />
+  )
 }
 
-// Modal chi tiết ứng viên — dữ liệu THẬT từ backend. Hover 1 nhận định (điểm
-// mạnh/yếu) sẽ tô sáng đúng đoạn bằng chứng trong CV gốc bên phải.
+// Modal chi tiết ứng viên — dữ liệu THẬT từ backend. Cột phải nhúng file PDF gốc;
+// bằng chứng điểm mạnh/yếu hiển thị nguyên văn (trích dẫn) ở cột trái.
 export default function CandidateDetailModal({ candidateId, onClose, onOverridden }) {
   const toast = useToast()
   const [detail, setDetail] = useState(null)
@@ -56,8 +92,6 @@ export default function CandidateDetailModal({ candidateId, onClose, onOverridde
   const [draftScore, setDraftScore] = useState('')
   const [reason, setReason] = useState('')
   const [saving, setSaving] = useState(false)
-  // Đoạn bằng chứng đang được hover -> tô sáng trong CV gốc.
-  const [highlight, setHighlight] = useState(null)
 
   useEffect(() => {
     let cancelled = false
@@ -120,17 +154,12 @@ export default function CandidateDetailModal({ candidateId, onClose, onOverridde
         : 'border-amber-200 bg-amber-50'
     const titleCls = tone === 'strength' ? 'text-slate-800' : 'text-amber-800'
     return (
-      <div
-        onMouseEnter={() => quote && setHighlight(quote)}
-        onMouseLeave={() => setHighlight(null)}
-        className={`rounded-lg border p-4 transition ${styles} ${
-          quote ? 'cursor-pointer hover:ring-2 hover:ring-amber-200' : ''
-        }`}
-      >
+      <div className={`rounded-lg border p-4 ${styles}`}>
         <p className={`text-sm font-semibold ${titleCls}`}>{stmt}</p>
         {quote ? (
-          <p className="mt-2 inline-flex items-center gap-1.5 text-xs font-medium text-indigo-600">
-            <Sparkles size={13} /> Di chuột để soi trong CV
+          <p className="mt-2 border-l-2 border-indigo-300 pl-2 text-xs italic leading-relaxed text-slate-500">
+            <Sparkles size={12} className="mr-1 inline text-indigo-500" />
+            “{quote}”
           </p>
         ) : (
           <p className="mt-1 text-xs italic text-slate-400">
@@ -142,16 +171,18 @@ export default function CandidateDetailModal({ candidateId, onClose, onOverridde
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div
-        className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm"
-        onClick={onClose}
-      />
-
-      <div className="relative flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+    <div className="fixed inset-y-0 right-0 left-60 z-50 flex flex-col bg-white">
+      <div className="relative flex h-full w-full flex-col overflow-hidden bg-white">
         {/* Header */}
         <div className="flex items-start justify-between border-b border-slate-200 px-6 py-4">
           <div className="flex items-center gap-3">
+            <button
+              onClick={onClose}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
+              title="Quay lại danh sách"
+            >
+              <ArrowLeft size={16} /> Quay lại
+            </button>
             <div className="flex h-11 w-11 items-center justify-center rounded-full bg-indigo-50 text-base font-semibold text-indigo-600">
               {name[0]}
             </div>
@@ -195,8 +226,9 @@ export default function CandidateDetailModal({ candidateId, onClose, onOverridde
           </div>
         </div>
 
-        {/* Body */}
-        <div className="flex-1 overflow-y-auto">
+        {/* Body: score band + override editor stay fixed; on desktop each column
+            scrolls independently (own scrollbar), on mobile the whole body scrolls. */}
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto lg:overflow-hidden">
           {error && (
             <p className="px-6 py-8 text-sm text-red-500">Lỗi tải chi tiết: {error}</p>
           )}
@@ -212,96 +244,106 @@ export default function CandidateDetailModal({ candidateId, onClose, onOverridde
 
           {detail && evaluation && (
             <>
-              {/* Score band + breakdown */}
-              <div className="border-b border-slate-100 bg-slate-50/60 px-6 py-4">
-                <div>
-                  <p className="text-xs uppercase tracking-wide text-slate-400">
-                    Điểm phù hợp
-                  </p>
-                  {editing ? (
-                    <div className="mt-1 flex items-center gap-2">
-                      <input
-                        type="number"
-                        min={0}
-                        max={100}
-                        value={draftScore}
-                        onChange={(e) => setDraftScore(e.target.value)}
-                        className="w-24 rounded-lg border border-indigo-300 px-2.5 py-1.5 text-2xl font-bold text-slate-900 outline-none focus:ring-2 focus:ring-indigo-100"
-                      />
-                      <span className="text-sm text-slate-400">/100</span>
-                    </div>
-                  ) : (
-                    <p className="mt-1 text-3xl font-bold text-slate-900">
-                      {evaluation.score}
-                      <span className="text-base font-medium text-slate-400">
-                        /100
-                      </span>
-                    </p>
-                  )}
-                </div>
-
-                {/* Breakdown bars */}
-                <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-3">
-                  {Object.entries(evaluation.score_breakdown || {}).map(
-                    ([key, val]) => (
-                      <div key={key}>
-                        <div className="flex items-center justify-between text-xs text-slate-500">
-                          <span>{BREAKDOWN_LABEL[key] || key}</span>
-                          <span className="font-semibold text-slate-700">{val}</span>
+              {/* Two-column: đánh giá + điểm (trái) + CV gốc đối chiếu (phải).
+                  Mỗi cột tự cuộn trên desktop (grid-rows-1 -> row = minmax(0,1fr)
+                  để cột bị giới hạn chiều cao và cuộn riêng, không kéo cột kia). */}
+              <div className="grid grid-cols-1 lg:min-h-0 lg:flex-1 lg:grid-cols-2 lg:grid-rows-1">
+                {/* Left — điểm + breakdown + editor + đánh giá; own scrollbar on desktop */}
+                <div className="px-6 py-5 lg:min-h-0 lg:overflow-y-auto lg:border-r lg:border-slate-100">
+                  {/* Score + breakdown */}
+                  <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4">
+                    <div>
+                      <p className="text-xs uppercase tracking-wide text-slate-400">
+                        Điểm phù hợp
+                      </p>
+                      {editing ? (
+                        <div className="mt-1 flex items-center gap-2">
+                          <input
+                            type="number"
+                            min={0}
+                            max={100}
+                            value={draftScore}
+                            onChange={(e) => setDraftScore(e.target.value)}
+                            className="w-24 rounded-lg border border-indigo-300 px-2.5 py-1.5 text-2xl font-bold text-slate-900 outline-none focus:ring-2 focus:ring-indigo-100"
+                          />
+                          <span className="text-sm text-slate-400">/100</span>
                         </div>
-                        <div className="mt-1">
-                          <ProgressBar value={Number(val) || 0} />
-                        </div>
-                      </div>
-                    )
-                  )}
-                </div>
-              </div>
-
-              {/* Override editor */}
-              {editing && (
-                <div className="border-b border-slate-100 bg-indigo-50/50 px-6 py-4">
-                  <p className="text-xs font-bold uppercase tracking-wide text-indigo-700">
-                    Lý do chỉnh điểm (bắt buộc)
-                  </p>
-                  <textarea
-                    value={reason}
-                    onChange={(e) => setReason(e.target.value)}
-                    rows={2}
-                    placeholder="Vd: AI đánh giá thấp kinh nghiệm thực tế của ứng viên…"
-                    className={`mt-2 resize-none ${inputCls}`}
-                  />
-                  <div className="mt-3 flex justify-end gap-2">
-                    <SecondaryButton
-                      className="px-3 py-2"
-                      onClick={() => {
-                        setEditing(false)
-                        setReason('')
-                        setDraftScore(String(evaluation.score))
-                      }}
-                      disabled={saving}
-                    >
-                      Hủy
-                    </SecondaryButton>
-                    <PrimaryButton className="px-3 py-2" onClick={saveOverride} disabled={saving}>
-                      {saving ? (
-                        <>
-                          <Loader2 size={15} className="animate-spin" /> Đang lưu…
-                        </>
                       ) : (
-                        <>
-                          <Save size={15} /> Lưu
-                        </>
+                        <p className="mt-1 text-3xl font-bold text-slate-900">
+                          {evaluation.score}
+                          <span className="text-base font-medium text-slate-400">
+                            /100
+                          </span>
+                        </p>
                       )}
-                    </PrimaryButton>
-                  </div>
-                </div>
-              )}
+                    </div>
 
-              {/* Two-column: đánh giá (trái) + CV gốc để đối chiếu (phải) */}
-              <div className="grid grid-cols-1 gap-6 px-6 py-5 lg:grid-cols-2">
-                {/* Left */}
-                <div>
+                    {/* Breakdown bars */}
+                    <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                      {Object.entries(evaluation.score_breakdown || {}).map(
+                        ([key, val]) => (
+                          <div key={key}>
+                            <div className="flex items-center justify-between text-xs text-slate-500">
+                              <span>{BREAKDOWN_LABEL[key] || key}</span>
+                              <span className="font-semibold text-slate-700">
+                                {val}
+                              </span>
+                            </div>
+                            <div className="mt-1">
+                              <ProgressBar value={Number(val) || 0} />
+                            </div>
+                          </div>
+                        )
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Override editor */}
+                  {editing && (
+                    <div className="mt-4 rounded-xl border border-indigo-100 bg-indigo-50/50 p-4">
+                      <p className="text-xs font-bold uppercase tracking-wide text-indigo-700">
+                        Lý do chỉnh điểm (bắt buộc)
+                      </p>
+                      <textarea
+                        value={reason}
+                        onChange={(e) => setReason(e.target.value)}
+                        rows={2}
+                        placeholder="Vd: AI đánh giá thấp kinh nghiệm thực tế của ứng viên…"
+                        className={`mt-2 resize-none ${inputCls}`}
+                      />
+                      <div className="mt-3 flex justify-end gap-2">
+                        <SecondaryButton
+                          className="px-3 py-2"
+                          onClick={() => {
+                            setEditing(false)
+                            setReason('')
+                            setDraftScore(String(evaluation.score))
+                          }}
+                          disabled={saving}
+                        >
+                          Hủy
+                        </SecondaryButton>
+                        <PrimaryButton
+                          className="px-3 py-2"
+                          onClick={saveOverride}
+                          disabled={saving}
+                        >
+                          {saving ? (
+                            <>
+                              <Loader2 size={15} className="animate-spin" /> Đang
+                              lưu…
+                            </>
+                          ) : (
+                            <>
+                              <Save size={15} /> Lưu
+                            </>
+                          )}
+                        </PrimaryButton>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="mt-5" />
                   {evaluation.explanation && (
                     <div className="mb-5">
                       <h3 className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-slate-500">
@@ -403,24 +445,13 @@ export default function CandidateDetailModal({ candidateId, onClose, onOverridde
                   )}
                 </div>
 
-                {/* Right: CV gốc + highlight */}
-                <div>
-                  <h3 className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-slate-500">
-                    <FileText size={14} /> CV gốc
-                    {highlight && (
-                      <span className="ml-1 font-medium normal-case text-amber-600">
-                        • đang soi bằng chứng
-                      </span>
-                    )}
+                {/* Right: file PDF gốc — chiếm hết chiều cao cột */}
+                <div className="flex flex-col px-6 py-5 lg:min-h-0 lg:overflow-hidden">
+                  <h3 className="mb-3 flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-slate-500">
+                    <FileText size={14} /> CV gốc (PDF)
                   </h3>
-                  <div className="mt-3 max-h-[60vh] overflow-y-auto rounded-lg border border-slate-200 bg-white p-4">
-                    {detail.raw_text ? (
-                      <p className="whitespace-pre-wrap text-xs leading-relaxed text-slate-600">
-                        {highlightCV(detail.raw_text, highlight)}
-                      </p>
-                    ) : (
-                      <p className="text-xs text-slate-400">Không có text CV gốc.</p>
-                    )}
+                  <div className="min-h-0 flex-1">
+                    <CvPdf candidateId={candidateId} />
                   </div>
                 </div>
               </div>
