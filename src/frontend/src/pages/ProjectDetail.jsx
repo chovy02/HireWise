@@ -28,6 +28,7 @@ import { useToast } from '../context/ToastContext.jsx'
 import { useProjects } from '../context/ProjectContext.jsx'
 import { getCandidates, getJd, uploadCvs } from '../api/jds.js'
 import { systemAlerts } from '../data/mockData.js'
+import CandidateDetailModal from '../components/CandidateDetailModal.jsx'
 
 const METHOD_ICON = { upload: UploadCloud, link: Link2, email: Mail }
 
@@ -140,7 +141,7 @@ function GeneratedJD({ markdown }) {
 
 // Poll GET /jds/{id}/candidates để hiển thị tiến độ chấm điểm CV thật (do Celery
 // worker xử lý nền). Tự dừng poll khi không còn CV nào ở trạng thái PENDING.
-function LiveProcessing({ jdId, refreshKey }) {
+function LiveProcessing({ jdId, refreshKey, onOpenCandidate }) {
   const [rows, setRows] = useState(null) // null = đang tải lần đầu
   const [error, setError] = useState('')
 
@@ -210,10 +211,31 @@ function LiveProcessing({ jdId, refreshKey }) {
             {list.map((c) => {
               const meta = STATUS_META[c.status] || STATUS_META.PENDING
               const Icon = meta.icon
+              // Ứng viên đã chấm xong -> click để mở popup chi tiết đánh giá ngay
+              // tại trang này (không cần sang trang Shortlisting).
+              const clickable = c.status === 'COMPLETED'
               return (
                 <div
                   key={c.id}
-                  className="flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2"
+                  onClick={clickable ? () => onOpenCandidate?.(c.id) : undefined}
+                  role={clickable ? 'button' : undefined}
+                  tabIndex={clickable ? 0 : undefined}
+                  onKeyDown={
+                    clickable
+                      ? (e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault()
+                            onOpenCandidate?.(c.id)
+                          }
+                        }
+                      : undefined
+                  }
+                  title={clickable ? 'Xem chi tiết đánh giá' : undefined}
+                  className={`flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2 ${
+                    clickable
+                      ? 'cursor-pointer transition hover:border-indigo-300 hover:bg-indigo-50/40'
+                      : ''
+                  }`}
                 >
                   <div className="flex min-w-0 items-center gap-2">
                     <Icon
@@ -251,6 +273,8 @@ export default function ProjectDetail() {
   const [showAddSource, setShowAddSource] = useState(false)
   // Tăng để buộc LiveProcessing poll lại sau khi upload thêm nguồn CV mới.
   const [liveKey, setLiveKey] = useState(0)
+  // Ứng viên đang mở popup chi tiết đánh giá (ngay trên trang này).
+  const [openCandidateId, setOpenCandidateId] = useState(null)
   const project = getProject(id)
 
   // Project được hydrate từ listJds() không kèm jd_markdown -> fetch đầy đủ 1 lần.
@@ -429,7 +453,11 @@ export default function ProjectDetail() {
               <h2 className="text-base font-semibold text-slate-900">
                 CV Processing (live)
               </h2>
-              <LiveProcessing jdId={project.id} refreshKey={liveKey} />
+              <LiveProcessing
+                jdId={project.id}
+                refreshKey={liveKey}
+                onOpenCandidate={setOpenCandidateId}
+              />
 
               <h2 className="mt-8 text-base font-semibold text-slate-900">
                 System Alerts
@@ -460,6 +488,15 @@ export default function ProjectDetail() {
           projectId={project.id}
           onClose={() => setShowAddSource(false)}
           onUploaded={() => setLiveKey((k) => k + 1)}
+        />
+      )}
+
+      {/* Popup chi tiết đánh giá ứng viên — mở ngay tại trang dự án. */}
+      {openCandidateId && (
+        <CandidateDetailModal
+          candidateId={openCandidateId}
+          onClose={() => setOpenCandidateId(null)}
+          onOverridden={() => setLiveKey((k) => k + 1)}
         />
       )}
     </>
