@@ -57,7 +57,7 @@ function CvPdf({ candidateId }) {
 
   if (error) {
     return (
-      <div className="mt-3 flex h-[60vh] flex-col items-center justify-center rounded-lg border border-dashed border-slate-200 bg-slate-50/50 p-6 text-center">
+      <div className="flex h-full min-h-[60vh] flex-col items-center justify-center rounded-lg border border-dashed border-slate-200 bg-slate-50/50 p-6 text-center">
         <FileText size={28} className="text-slate-300" />
         <p className="mt-3 text-sm font-medium text-slate-600">
           Không hiển thị được CV gốc (PDF)
@@ -68,7 +68,7 @@ function CvPdf({ candidateId }) {
   }
   if (!url) {
     return (
-      <div className="mt-3 flex h-[60vh] items-center justify-center rounded-lg border border-slate-200 bg-slate-50/50">
+      <div className="flex h-full min-h-[60vh] items-center justify-center rounded-lg border border-slate-200 bg-slate-50/50">
         <Loader2 size={20} className="animate-spin text-slate-400" />
       </div>
     )
@@ -77,7 +77,7 @@ function CvPdf({ candidateId }) {
     <iframe
       src={url}
       title="CV gốc"
-      className="mt-3 h-[72vh] w-full rounded-lg border border-slate-200"
+      className="h-full min-h-[60vh] w-full rounded-lg border border-slate-200"
     />
   )
 }
@@ -171,7 +171,7 @@ export default function CandidateDetailModal({ candidateId, onClose, onOverridde
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-white">
+    <div className="fixed inset-y-0 right-0 left-60 z-50 flex flex-col bg-white">
       <div className="relative flex h-full w-full flex-col overflow-hidden bg-white">
         {/* Header */}
         <div className="flex items-start justify-between border-b border-slate-200 px-6 py-4">
@@ -244,98 +244,106 @@ export default function CandidateDetailModal({ candidateId, onClose, onOverridde
 
           {detail && evaluation && (
             <>
-              {/* Score band + breakdown */}
-              <div className="border-b border-slate-100 bg-slate-50/60 px-6 py-4">
-                <div>
-                  <p className="text-xs uppercase tracking-wide text-slate-400">
-                    Điểm phù hợp
-                  </p>
-                  {editing ? (
-                    <div className="mt-1 flex items-center gap-2">
-                      <input
-                        type="number"
-                        min={0}
-                        max={100}
-                        value={draftScore}
-                        onChange={(e) => setDraftScore(e.target.value)}
-                        className="w-24 rounded-lg border border-indigo-300 px-2.5 py-1.5 text-2xl font-bold text-slate-900 outline-none focus:ring-2 focus:ring-indigo-100"
-                      />
-                      <span className="text-sm text-slate-400">/100</span>
-                    </div>
-                  ) : (
-                    <p className="mt-1 text-3xl font-bold text-slate-900">
-                      {evaluation.score}
-                      <span className="text-base font-medium text-slate-400">
-                        /100
-                      </span>
-                    </p>
-                  )}
-                </div>
-
-                {/* Breakdown bars */}
-                <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-3">
-                  {Object.entries(evaluation.score_breakdown || {}).map(
-                    ([key, val]) => (
-                      <div key={key}>
-                        <div className="flex items-center justify-between text-xs text-slate-500">
-                          <span>{BREAKDOWN_LABEL[key] || key}</span>
-                          <span className="font-semibold text-slate-700">{val}</span>
-                        </div>
-                        <div className="mt-1">
-                          <ProgressBar value={Number(val) || 0} />
-                        </div>
-                      </div>
-                    )
-                  )}
-                </div>
-              </div>
-
-              {/* Override editor */}
-              {editing && (
-                <div className="border-b border-slate-100 bg-indigo-50/50 px-6 py-4">
-                  <p className="text-xs font-bold uppercase tracking-wide text-indigo-700">
-                    Lý do chỉnh điểm (bắt buộc)
-                  </p>
-                  <textarea
-                    value={reason}
-                    onChange={(e) => setReason(e.target.value)}
-                    rows={2}
-                    placeholder="Vd: AI đánh giá thấp kinh nghiệm thực tế của ứng viên…"
-                    className={`mt-2 resize-none ${inputCls}`}
-                  />
-                  <div className="mt-3 flex justify-end gap-2">
-                    <SecondaryButton
-                      className="px-3 py-2"
-                      onClick={() => {
-                        setEditing(false)
-                        setReason('')
-                        setDraftScore(String(evaluation.score))
-                      }}
-                      disabled={saving}
-                    >
-                      Hủy
-                    </SecondaryButton>
-                    <PrimaryButton className="px-3 py-2" onClick={saveOverride} disabled={saving}>
-                      {saving ? (
-                        <>
-                          <Loader2 size={15} className="animate-spin" /> Đang lưu…
-                        </>
-                      ) : (
-                        <>
-                          <Save size={15} /> Lưu
-                        </>
-                      )}
-                    </PrimaryButton>
-                  </div>
-                </div>
-              )}
-
-              {/* Two-column: đánh giá (trái) + CV gốc để đối chiếu (phải).
+              {/* Two-column: đánh giá + điểm (trái) + CV gốc đối chiếu (phải).
                   Mỗi cột tự cuộn trên desktop (grid-rows-1 -> row = minmax(0,1fr)
                   để cột bị giới hạn chiều cao và cuộn riêng, không kéo cột kia). */}
               <div className="grid grid-cols-1 lg:min-h-0 lg:flex-1 lg:grid-cols-2 lg:grid-rows-1">
-                {/* Left — own scrollbar on desktop */}
+                {/* Left — điểm + breakdown + editor + đánh giá; own scrollbar on desktop */}
                 <div className="px-6 py-5 lg:min-h-0 lg:overflow-y-auto lg:border-r lg:border-slate-100">
+                  {/* Score + breakdown */}
+                  <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4">
+                    <div>
+                      <p className="text-xs uppercase tracking-wide text-slate-400">
+                        Điểm phù hợp
+                      </p>
+                      {editing ? (
+                        <div className="mt-1 flex items-center gap-2">
+                          <input
+                            type="number"
+                            min={0}
+                            max={100}
+                            value={draftScore}
+                            onChange={(e) => setDraftScore(e.target.value)}
+                            className="w-24 rounded-lg border border-indigo-300 px-2.5 py-1.5 text-2xl font-bold text-slate-900 outline-none focus:ring-2 focus:ring-indigo-100"
+                          />
+                          <span className="text-sm text-slate-400">/100</span>
+                        </div>
+                      ) : (
+                        <p className="mt-1 text-3xl font-bold text-slate-900">
+                          {evaluation.score}
+                          <span className="text-base font-medium text-slate-400">
+                            /100
+                          </span>
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Breakdown bars */}
+                    <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                      {Object.entries(evaluation.score_breakdown || {}).map(
+                        ([key, val]) => (
+                          <div key={key}>
+                            <div className="flex items-center justify-between text-xs text-slate-500">
+                              <span>{BREAKDOWN_LABEL[key] || key}</span>
+                              <span className="font-semibold text-slate-700">
+                                {val}
+                              </span>
+                            </div>
+                            <div className="mt-1">
+                              <ProgressBar value={Number(val) || 0} />
+                            </div>
+                          </div>
+                        )
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Override editor */}
+                  {editing && (
+                    <div className="mt-4 rounded-xl border border-indigo-100 bg-indigo-50/50 p-4">
+                      <p className="text-xs font-bold uppercase tracking-wide text-indigo-700">
+                        Lý do chỉnh điểm (bắt buộc)
+                      </p>
+                      <textarea
+                        value={reason}
+                        onChange={(e) => setReason(e.target.value)}
+                        rows={2}
+                        placeholder="Vd: AI đánh giá thấp kinh nghiệm thực tế của ứng viên…"
+                        className={`mt-2 resize-none ${inputCls}`}
+                      />
+                      <div className="mt-3 flex justify-end gap-2">
+                        <SecondaryButton
+                          className="px-3 py-2"
+                          onClick={() => {
+                            setEditing(false)
+                            setReason('')
+                            setDraftScore(String(evaluation.score))
+                          }}
+                          disabled={saving}
+                        >
+                          Hủy
+                        </SecondaryButton>
+                        <PrimaryButton
+                          className="px-3 py-2"
+                          onClick={saveOverride}
+                          disabled={saving}
+                        >
+                          {saving ? (
+                            <>
+                              <Loader2 size={15} className="animate-spin" /> Đang
+                              lưu…
+                            </>
+                          ) : (
+                            <>
+                              <Save size={15} /> Lưu
+                            </>
+                          )}
+                        </PrimaryButton>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="mt-5" />
                   {evaluation.explanation && (
                     <div className="mb-5">
                       <h3 className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-slate-500">
@@ -437,12 +445,14 @@ export default function CandidateDetailModal({ candidateId, onClose, onOverridde
                   )}
                 </div>
 
-                {/* Right: file PDF gốc — own scrollbar on desktop */}
-                <div className="px-6 py-5 lg:min-h-0 lg:overflow-y-auto">
-                  <h3 className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-slate-500">
+                {/* Right: file PDF gốc — chiếm hết chiều cao cột */}
+                <div className="flex flex-col px-6 py-5 lg:min-h-0 lg:overflow-hidden">
+                  <h3 className="mb-3 flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-slate-500">
                     <FileText size={14} /> CV gốc (PDF)
                   </h3>
-                  <CvPdf candidateId={candidateId} />
+                  <div className="min-h-0 flex-1">
+                    <CvPdf candidateId={candidateId} />
+                  </div>
                 </div>
               </div>
             </>
