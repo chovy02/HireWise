@@ -1,44 +1,55 @@
 import os
-import re
 import time
 
-import google.generativeai as genai
+from groq import Groq
 
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+# LƯU Ý: file vẫn tên gemini_client vì lịch sử; hiện dùng Groq (OpenAI-compatible,
+# free tier). Giữ nguyên hàm generate_text() nên parser/scorer/jd_processor/evidence
+# KHÔNG cần sửa gì.
 
-# Số lần thử tối đa cho 1 lời gọi Gemini trước khi bỏ cuộc (override bằng env khi cần).
-MAX_RETRIES = int(os.getenv("GEMINI_MAX_RETRIES", "5"))
+_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+
+# Model Groq thực dùng; model_name (tên Gemini cũ) do các module truyền vào bị bỏ qua.
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+
+# Số lần thử tối đa cho 1 lời gọi trước khi bỏ cuộc (override bằng env khi cần).
+MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "5"))
 # Trần thời gian chờ mỗi lần retry (giây), tránh treo worker quá lâu.
-MAX_WAIT = float(os.getenv("GEMINI_MAX_WAIT", "60"))
-
-_RETRY_HINT_RE = re.compile(r"retry in ([\d.]+)s", re.IGNORECASE)
+MAX_WAIT = float(os.getenv("LLM_MAX_WAIT", "60"))
 
 
 def _is_retryable(err: Exception) -> bool:
-    """429 (hết RPM/quota tạm thời) và 503 là lỗi TẠM THỜI -> nên thử lại,
-    khác với lỗi nội dung/bad request là fail thật."""
+    """429 (rate limit) và 5xx là lỗi TẠM THỜI -> nên thử lại; khác với lỗi nội
+    dung/bad request/auth là fail thật."""
     msg = str(err).lower()
-    return any(k in msg for k in ("429", "resource_exhausted", "quota", "503", "unavailable"))
+    return any(
+        k in msg
+        for k in ("429", "rate", "quota", "resource_exhausted",
+                  "500", "502", "503", "overloaded", "unavailable", "timeout")
+    )
 
 
 def generate_text(model_name: str, prompt: str) -> str:
     """
-    Gọi Gemini và trả về response.text, tự retry với exponential backoff khi bị
-    rate limit (429) hoặc service tạm lỗi (503).
+    Gọi Groq và trả về text kết quả, tự retry với exponential backoff khi bị rate
+    limit (429) hoặc service tạm lỗi (5xx).
 
-    Free tier giới hạn vài request/phút; upload 1 batch CV bắn nhiều lời gọi cùng lúc
-    rất dễ dính 429. Nếu message có gợi ý "retry in Xs" thì chờ đúng khoảng đó, nếu
-    không thì backoff 5s, 10s, 20s... Vượt quá MAX_RETRIES mới ném lỗi ra ngoài.
+    `model_name` (tên model Gemini cũ mà các module truyền vào) được BỎ QUA; model
+    thật lấy từ GROQ_MODEL. Bật JSON mode vì mọi prompt trong pipeline đều yêu cầu
+    trả về JSON thuần -> đảm bảo output parse được, khỏi cần strip markdown.
     """
-    model = genai.GenerativeModel(model_name)
     backoff = 5.0
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            return model.generate_content(prompt).text
+            resp = _client.chat.completions.create(
+                model=GROQ_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.2,
+                response_format={"type": "json_object"},
+            )
+            return resp.choices[0].message.content
         except Exception as e:  # noqa: BLE001 - phân loại lại qua _is_retryable
             if attempt == MAX_RETRIES or not _is_retryable(e):
                 raise
-            hint = _RETRY_HINT_RE.search(str(e))
-            wait = float(hint.group(1)) + 1 if hint else backoff
-            time.sleep(min(wait, MAX_WAIT))
+            time.sleep(min(backoff, MAX_WAIT))
             backoff *= 2

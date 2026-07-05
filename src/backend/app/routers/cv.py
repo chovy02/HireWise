@@ -3,6 +3,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app import models, schemas
@@ -41,7 +42,27 @@ def list_jds(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    return db.query(models.JobDescription).order_by(models.JobDescription.created_at.desc()).all()
+    jds = (
+        db.query(models.JobDescription)
+        .order_by(models.JobDescription.created_at.desc())
+        .all()
+    )
+    # Đếm số ứng viên theo từng JD trong 1 query (tránh N+1) để trả kèm dashboard.
+    counts = dict(
+        db.query(models.Candidate.jd_id, func.count(models.Candidate.id))
+        .group_by(models.Candidate.jd_id)
+        .all()
+    )
+    return [
+        schemas.JDListItem(
+            id=jd.id,
+            title=jd.title,
+            status=jd.status,
+            created_at=jd.created_at,
+            candidate_count=counts.get(jd.id, 0),
+        )
+        for jd in jds
+    ]
 
 
 @jd_router.get("/{jd_id}", response_model=schemas.JDResponse)

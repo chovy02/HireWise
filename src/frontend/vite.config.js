@@ -53,6 +53,8 @@ export default defineConfig({
       '/jds': backendProxy(),
       '/candidates': backendProxy(),
       '/evaluations': backendProxy(),
+      '/shortlists': backendProxy(),
+      '/users': backendProxy(),
     },
   },
 })

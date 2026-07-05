@@ -86,7 +86,7 @@ export default function Dashboard() {
                   </p>
                   <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3 text-xs text-slate-500">
                     <span className="inline-flex items-center gap-1.5">
-                      <Users size={14} /> {p.candidates.length} candidates
+                      <Users size={14} /> {p.candidateCount ?? 0} candidates
                     </span>
                     <span className="inline-flex items-center gap-1 font-medium text-indigo-600 group-hover:gap-1.5">
                       Open <ArrowRight size={14} />

@@ -25,3 +25,14 @@ from .candidate import (
     UploadBatchResponse,
     EvaluationOverrideRequest,
 )
+
+from .shortlist import (
+    ShortlistItemStatus,
+    ShortlistCreate,
+    ShortlistItemAdd,
+    ShortlistItemStatusUpdate,
+    ShortlistCandidate,
+    ShortlistItemResponse,
+    ShortlistListItem,
+    ShortlistResponse,
+)

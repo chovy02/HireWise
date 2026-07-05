@@ -14,6 +14,13 @@ import {
   ArrowLeft,
   RefreshCw,
   X,
+  ListChecks,
+  ListPlus,
+  Check,
+  Trash2,
+  CheckCircle2,
+  XCircle,
+  Circle,
 } from 'lucide-react'
 import Topbar from '../components/Topbar.jsx'
 import {
@@ -21,6 +28,7 @@ import {
   Badge,
   Tag,
   ScoreRing,
+  Segmented,
   SecondaryButton,
   PrimaryButton,
 } from '../components/ui.jsx'
@@ -28,6 +36,15 @@ import CandidateDetailModal from '../components/CandidateDetailModal.jsx'
 import { useToast } from '../context/ToastContext.jsx'
 import { useProjects } from '../context/ProjectContext.jsx'
 import { getCandidates } from '../api/jds.js'
+import {
+  listShortlists,
+  createShortlist,
+  getShortlist,
+  deleteShortlist,
+  addShortlistItem,
+  updateShortlistItemStatus,
+  removeShortlistItem,
+} from '../api/shortlists.js'
 
 const STATUS_BADGE = {
   COMPLETED: { variant: 'completed', label: 'Hoàn tất' },
@@ -67,6 +84,14 @@ export default function Shortlisting() {
   const [rows, setRows] = useState(null) // null = chưa tải
   const [loadErr, setLoadErr] = useState('')
 
+  // Shortlist THẬT (GET /jds/{id}/shortlists + /shortlists/{id}).
+  const [view, setView] = useState('leaderboard') // 'leaderboard' | 'shortlist'
+  const [shortlists, setShortlists] = useState(null) // danh sách shortlist của JD
+  const [activeSlId, setActiveSlId] = useState(null) // shortlist đang chọn
+  const [slDetail, setSlDetail] = useState(null) // chi tiết shortlist đang chọn
+  const [creating, setCreating] = useState(false)
+  const [newName, setNewName] = useState('')
+
   useEffect(() => {
     if (!projectId) {
       setRows(null)
@@ -82,6 +107,123 @@ export default function Shortlisting() {
       cancelled = true
     }
   }, [projectId])
+
+  // Nạp danh sách shortlist khi đổi JD; tự chọn shortlist đầu tiên nếu có.
+  useEffect(() => {
+    if (!projectId) {
+      setShortlists(null)
+      setActiveSlId(null)
+      setSlDetail(null)
+      return
+    }
+    let cancelled = false
+    listShortlists(projectId)
+      .then((data) => {
+        if (cancelled) return
+        setShortlists(data)
+        setActiveSlId(data[0]?.id ?? null)
+      })
+      .catch(() => !cancelled && setShortlists([]))
+    return () => {
+      cancelled = true
+    }
+  }, [projectId])
+
+  // Nạp chi tiết shortlist đang chọn.
+  useEffect(() => {
+    if (!activeSlId) {
+      setSlDetail(null)
+      return
+    }
+    let cancelled = false
+    setSlDetail(null)
+    getShortlist(activeSlId)
+      .then((d) => !cancelled && setSlDetail(d))
+      .catch(() => !cancelled && setSlDetail(null))
+    return () => {
+      cancelled = true
+    }
+  }, [activeSlId])
+
+  // Nạp lại cả danh sách (item_count) lẫn chi tiết sau mỗi thay đổi.
+  async function refreshShortlist() {
+    if (projectId) {
+      try {
+        setShortlists(await listShortlists(projectId))
+      } catch {
+        /* giữ nguyên nếu lỗi tạm thời */
+      }
+    }
+    if (activeSlId) {
+      try {
+        setSlDetail(await getShortlist(activeSlId))
+      } catch {
+        /* giữ nguyên */
+      }
+    }
+  }
+
+  async function handleCreateShortlist() {
+    const name = newName.trim()
+    if (!name) return
+    try {
+      const sl = await createShortlist(projectId, name)
+      setNewName('')
+      setCreating(false)
+      setShortlists(await listShortlists(projectId))
+      setActiveSlId(sl.id)
+      toast(`Đã tạo shortlist "${name}".`)
+    } catch (e) {
+      toast(e.message)
+    }
+  }
+
+  async function handleDeleteShortlist() {
+    if (!activeSlId) return
+    if (!window.confirm('Xóa shortlist này? Các ứng viên trong đó sẽ bị gỡ (không xóa CV).'))
+      return
+    try {
+      await deleteShortlist(activeSlId)
+      const list = await listShortlists(projectId)
+      setShortlists(list)
+      setActiveSlId(list[0]?.id ?? null)
+      toast('Đã xóa shortlist.')
+    } catch (e) {
+      toast(e.message)
+    }
+  }
+
+  async function handleAddToShortlist(candidateId) {
+    if (!activeSlId) {
+      toast('Hãy tạo hoặc chọn một shortlist trước.')
+      return
+    }
+    try {
+      await addShortlistItem(activeSlId, candidateId)
+      await refreshShortlist()
+      toast('Đã thêm vào shortlist.')
+    } catch (e) {
+      toast(e.message) // 409 đã có / 400 khác JD -> hiện đúng thông báo backend
+    }
+  }
+
+  async function handleItemStatus(itemId, statusValue) {
+    try {
+      await updateShortlistItemStatus(activeSlId, itemId, statusValue)
+      await refreshShortlist()
+    } catch (e) {
+      toast(e.message)
+    }
+  }
+
+  async function handleRemoveItem(itemId) {
+    try {
+      await removeShortlistItem(activeSlId, itemId)
+      await refreshShortlist()
+    } catch (e) {
+      toast(e.message)
+    }
+  }
 
   // ---- No projects ----
   if (projects.length === 0) {
@@ -173,12 +315,15 @@ export default function Shortlisting() {
   )
   const compareList = list.filter((c) => selected.includes(c.id))
   const completedCount = list.filter((c) => c.status === 'COMPLETED').length
+  // id ứng viên đã nằm trong shortlist đang chọn (để đổi nút "thêm" thành "đã thêm").
+  const shortlistedIds = new Set((slDetail?.items || []).map((i) => i.candidate.id))
 
   function toggleSelect(id) {
     setSelected((l) => (l.includes(id) ? l.filter((x) => x !== id) : [...l, id]))
   }
 
-  // Sau khi override: cập nhật điểm + cờ trong row rồi xếp lại hạng.
+  // Sau khi override: cập nhật điểm + cờ trong row rồi xếp lại hạng, và làm mới
+  // shortlist để điểm hiển thị trong tab Shortlist cũng cập nhật theo.
   function handleOverridden(candidateId, { score, is_overridden }) {
     setRows((prev) =>
       sortRows(
@@ -187,6 +332,7 @@ export default function Shortlisting() {
         )
       )
     )
+    if (activeSlId) refreshShortlist()
   }
 
   return (
@@ -224,8 +370,94 @@ export default function Shortlisting() {
           </div>
         </div>
 
+        {/* Shortlist selector + view toggle */}
+        <Card className="mt-6 flex flex-wrap items-center gap-3 p-3">
+          <div className="flex items-center gap-2">
+            <ListChecks size={18} className="text-indigo-600" />
+            <span className="text-sm font-semibold text-slate-700">Shortlist</span>
+          </div>
+
+          {shortlists && shortlists.length > 0 ? (
+            <select
+              value={activeSlId || ''}
+              onChange={(e) => setActiveSlId(e.target.value)}
+              className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-400"
+            >
+              {shortlists.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name} ({s.item_count})
+                </option>
+              ))}
+            </select>
+          ) : (
+            shortlists && (
+              <span className="text-sm text-slate-400">Chưa có shortlist nào.</span>
+            )
+          )}
+
+          {creating ? (
+            <div className="flex items-center gap-2">
+              <input
+                autoFocus
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleCreateShortlist()
+                  if (e.key === 'Escape') {
+                    setCreating(false)
+                    setNewName('')
+                  }
+                }}
+                placeholder="Tên shortlist mới…"
+                className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-400"
+              />
+              <PrimaryButton className="px-3 py-2" onClick={handleCreateShortlist}>
+                Tạo
+              </PrimaryButton>
+              <SecondaryButton
+                className="px-3 py-2"
+                onClick={() => {
+                  setCreating(false)
+                  setNewName('')
+                }}
+              >
+                Hủy
+              </SecondaryButton>
+            </div>
+          ) : (
+            <SecondaryButton className="px-3 py-2" onClick={() => setCreating(true)}>
+              <Plus size={15} /> New shortlist
+            </SecondaryButton>
+          )}
+
+          {activeSlId && !creating && (
+            <SecondaryButton
+              className="border-red-200 px-3 py-2 text-red-600 hover:bg-red-50"
+              onClick={handleDeleteShortlist}
+            >
+              <Trash2 size={15} /> Delete
+            </SecondaryButton>
+          )}
+
+          <div className="ml-auto">
+            <Segmented
+              options={[
+                { value: 'leaderboard', label: 'Leaderboard' },
+                {
+                  value: 'shortlist',
+                  label: `Shortlist${slDetail?.items ? ` (${slDetail.items.length})` : ''}`,
+                },
+              ]}
+              value={view}
+              onChange={setView}
+            />
+          </div>
+        </Card>
+
+        {view === 'leaderboard' && (
+        <>
         {/* Search + controls */}
-        <Card className="mt-6 flex items-center gap-3 p-3">
+        <Card className="mt-4 flex items-center gap-3 p-3">
           <div className="flex flex-1 items-center gap-2">
             <Search size={18} className="ml-2 flex-shrink-0 text-slate-400" />
             <input
@@ -376,7 +608,25 @@ export default function Shortlisting() {
                             </div>
                           </td>
                           <td className="px-6 py-4">
-                            <div className="flex justify-end">
+                            <div className="flex justify-end gap-2">
+                              <button
+                                onClick={() => handleAddToShortlist(c.id)}
+                                disabled={!activeSlId || shortlistedIds.has(c.id)}
+                                className="rounded-lg border border-slate-200 bg-white p-2 text-slate-600 transition hover:bg-slate-50 disabled:opacity-50 disabled:hover:bg-white"
+                                title={
+                                  !activeSlId
+                                    ? 'Tạo/chọn một shortlist trước'
+                                    : shortlistedIds.has(c.id)
+                                      ? 'Đã có trong shortlist'
+                                      : 'Thêm vào shortlist'
+                                }
+                              >
+                                {shortlistedIds.has(c.id) ? (
+                                  <Check size={16} className="text-emerald-600" />
+                                ) : (
+                                  <ListPlus size={16} />
+                                )}
+                              </button>
                               <button
                                 onClick={() => setOpenId(c.id)}
                                 className="rounded-lg border border-indigo-200 bg-indigo-50 p-2 text-indigo-600 transition hover:bg-indigo-100"
@@ -402,6 +652,154 @@ export default function Shortlisting() {
             </>
           )}
         </Card>
+        </>
+        )}
+
+        {view === 'shortlist' && (
+          <Card className="mt-4 overflow-hidden">
+            <div className="flex items-center gap-2 border-b border-slate-200 px-6 py-3">
+              <ListChecks size={16} className="text-indigo-600" />
+              <h2 className="text-sm font-semibold text-slate-800">
+                {slDetail ? slDetail.name : 'Shortlist'}
+              </h2>
+            </div>
+
+            {!activeSlId && (
+              <p className="px-6 py-10 text-sm text-slate-400">
+                Chưa có shortlist. Bấm “New shortlist” ở trên để tạo, rồi thêm ứng
+                viên từ tab Leaderboard.
+              </p>
+            )}
+            {activeSlId && slDetail === null && (
+              <p className="px-6 py-10 text-sm text-slate-400">Đang tải shortlist…</p>
+            )}
+            {slDetail?.items && slDetail.items.length === 0 && (
+              <p className="px-6 py-10 text-sm text-slate-400">
+                Shortlist trống. Sang tab Leaderboard và bấm nút thêm để đưa ứng viên
+                vào đây.
+              </p>
+            )}
+
+            {slDetail?.items && slDetail.items.length > 0 && (
+              <>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[760px] text-left">
+                    <thead>
+                      <tr className="border-b border-slate-200 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                        <th className="px-6 py-3">Rank</th>
+                        <th className="px-6 py-3">Candidate</th>
+                        <th className="px-6 py-3 text-center">Suitability</th>
+                        <th className="px-6 py-3">Decision</th>
+                        <th className="px-6 py-3 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {slDetail.items.map((it, i) => {
+                        const c = it.candidate
+                        return (
+                          <tr key={it.id} className="hover:bg-slate-50/60">
+                            <td className="px-6 py-4 text-sm font-semibold text-slate-400">
+                              #{i + 1}
+                            </td>
+                            <td className="px-6 py-4">
+                              <div className="flex items-center gap-3">
+                                <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-indigo-50 text-sm font-semibold text-indigo-600">
+                                  {(c.name || '?')[0]}
+                                </div>
+                                <div className="min-w-0">
+                                  <span className="block truncate text-sm font-semibold text-slate-900">
+                                    {c.name || 'Đang trích xuất…'}
+                                  </span>
+                                  <p className="truncate text-xs text-slate-400">
+                                    {c.email || '—'}
+                                  </p>
+                                </div>
+                              </div>
+                            </td>
+                            <td className="px-6 py-4">
+                              <div className="flex items-center justify-center">
+                                {c.score != null ? (
+                                  <ScoreRing value={c.score} />
+                                ) : (
+                                  <span className="text-xs text-slate-300">—</span>
+                                )}
+                              </div>
+                            </td>
+                            <td className="px-6 py-4">
+                              <div className="flex items-center gap-1.5">
+                                <button
+                                  onClick={() => handleItemStatus(it.id, 'accepted')}
+                                  title="Chọn"
+                                  className={`rounded-md p-1.5 transition ${
+                                    it.candidate_status === 'accepted'
+                                      ? 'bg-emerald-100 text-emerald-600'
+                                      : 'text-slate-400 hover:bg-slate-100'
+                                  }`}
+                                >
+                                  <CheckCircle2 size={17} />
+                                </button>
+                                <button
+                                  onClick={() => handleItemStatus(it.id, 'rejected')}
+                                  title="Từ chối"
+                                  className={`rounded-md p-1.5 transition ${
+                                    it.candidate_status === 'rejected'
+                                      ? 'bg-red-100 text-red-600'
+                                      : 'text-slate-400 hover:bg-slate-100'
+                                  }`}
+                                >
+                                  <XCircle size={17} />
+                                </button>
+                                <button
+                                  onClick={() => handleItemStatus(it.id, 'pending')}
+                                  title="Chờ quyết định"
+                                  className={`rounded-md p-1.5 transition ${
+                                    it.candidate_status === 'pending'
+                                      ? 'bg-slate-200 text-slate-600'
+                                      : 'text-slate-400 hover:bg-slate-100'
+                                  }`}
+                                >
+                                  <Circle size={17} />
+                                </button>
+                              </div>
+                            </td>
+                            <td className="px-6 py-4">
+                              <div className="flex justify-end gap-2">
+                                <button
+                                  onClick={() => setOpenId(c.id)}
+                                  className="rounded-lg border border-indigo-200 bg-indigo-50 p-2 text-indigo-600 transition hover:bg-indigo-100"
+                                  title="Xem chi tiết ứng viên"
+                                >
+                                  <ExternalLink size={16} />
+                                </button>
+                                <button
+                                  onClick={() => handleRemoveItem(it.id)}
+                                  className="rounded-lg border border-red-200 bg-white p-2 text-red-500 transition hover:bg-red-50"
+                                  title="Gỡ khỏi shortlist"
+                                >
+                                  <Trash2 size={16} />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="flex items-center justify-between border-t border-slate-200 px-6 py-3.5 text-sm text-slate-500">
+                  <span>
+                    {slDetail.items.length} ứng viên •{' '}
+                    {slDetail.items.filter((i) => i.candidate_status === 'accepted').length}{' '}
+                    đã chọn •{' '}
+                    {slDetail.items.filter((i) => i.candidate_status === 'rejected').length}{' '}
+                    từ chối
+                  </span>
+                </div>
+              </>
+            )}
+          </Card>
+        )}
       </main>
 
       {/* Candidate detail popup (real data) */}

@@ -23,6 +23,9 @@ pydantic-settings==2.2.1
 
 pymupdf==1.24.0
 google-generativeai==0.8.3
+groq==0.11.0
+# groq 0.11 gọi httpx theo kiểu cũ (tham số proxies); httpx>=0.28 đã bỏ -> ghim bản tương thích.
+httpx==0.27.2
 python-dotenv==1.0.1
 
 # Task queue nền: xử lý/chấm điểm CV bất đồng bộ, không chặn request upload

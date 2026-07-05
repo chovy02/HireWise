@@ -29,6 +29,7 @@ class JDListItem(BaseModel):
     title: str
     status: str
     created_at: datetime
+    candidate_count: int = 0   # số ứng viên thật của JD (để hiển thị trên dashboard)
 
     class Config:
         from_attributes = True

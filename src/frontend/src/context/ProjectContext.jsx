@@ -1,5 +1,4 @@
 import { createContext, useContext, useState, useCallback, useEffect } from 'react'
-import { makeSeedCandidates } from '../data/mockData.js'
 import { createJd, uploadCvs, listJds } from '../api/jds.js'
 import { useAuth } from './AuthContext.jsx'
 
@@ -44,7 +43,8 @@ export function ProjectProvider({ children }) {
             jdMarkdown: '',
             sources: [], // nguồn ingest cũ chưa lưu server-side
             createdAt: jd.created_at,
-            candidates: reRank(makeSeedCandidates()),
+            candidates: [], // dữ liệu ứng viên THẬT được fetch riêng ở ProjectDetail
+            candidateCount: jd.candidate_count ?? 0, // số thật từ backend (cho dashboard)
           }))
         )
       })
@@ -94,7 +94,9 @@ export function ProjectProvider({ children }) {
       jdMarkdown: jd.jd_markdown,
       sources: [firstSource], // every source ever ingested for this project
       createdAt: jd.created_at,
-      candidates: reRank(makeSeedCandidates()),
+      candidates: [],
+      // Số CV vừa nạp (stage) để dashboard hiện ngay; sẽ khớp số thật sau khi reload.
+      candidateCount: uploadSummary?.total ?? 0,
     }
     setProjects((list) => [project, ...list])
     return jd.id

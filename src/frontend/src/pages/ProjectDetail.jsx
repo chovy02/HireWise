@@ -27,7 +27,7 @@ import {
 import { useToast } from '../context/ToastContext.jsx'
 import { useProjects } from '../context/ProjectContext.jsx'
 import { getCandidates, getJd, uploadCvs } from '../api/jds.js'
-import { systemAlerts } from '../data/mockData.js'
+import { listShortlists } from '../api/shortlists.js'
 
 const METHOD_ICON = { upload: UploadCloud, link: Link2, email: Mail }
 
@@ -43,12 +43,6 @@ const INGEST_TABS = [
   { key: 'link', label: 'Link Sync', icon: Link2 },
   { key: 'email', label: 'Email Listener', icon: Mail },
 ]
-
-const ALERT_STYLES = {
-  success: { icon: CheckCircle2, cls: 'text-emerald-500' },
-  warning: { icon: AlertTriangle, cls: 'text-amber-500' },
-  error: { icon: XCircle, cls: 'text-red-500' },
-}
 
 // Minimal markdown renderer for the generated JD (headings, bullets, tables).
 function GeneratedJD({ markdown }) {
@@ -251,6 +245,9 @@ export default function ProjectDetail() {
   const [showAddSource, setShowAddSource] = useState(false)
   // Tăng để buộc LiveProcessing poll lại sau khi upload thêm nguồn CV mới.
   const [liveKey, setLiveKey] = useState(0)
+  // Số liệu THẬT cho stat cards (null = đang tải).
+  const [candidateCount, setCandidateCount] = useState(null)
+  const [shortlistedCount, setShortlistedCount] = useState(null)
   const project = getProject(id)
 
   // Project được hydrate từ listJds() không kèm jd_markdown -> fetch đầy đủ 1 lần.
@@ -263,6 +260,25 @@ export default function ProjectDetail() {
         .catch(() => {})
     }
   }, [id, project, setProjectDetail])
+
+  // Đếm số ứng viên thật + số đã đưa vào shortlist (không dùng mock). Chạy lại khi
+  // upload thêm CV (liveKey đổi) để số cập nhật.
+  useEffect(() => {
+    if (!id) return
+    let cancelled = false
+    getCandidates(id)
+      .then((data) => !cancelled && setCandidateCount(data.length))
+      .catch(() => {})
+    listShortlists(id)
+      .then((sls) =>
+        !cancelled &&
+        setShortlistedCount(sls.reduce((n, s) => n + (s.item_count || 0), 0))
+      )
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [id, liveKey])
 
   // Chưa tìm thấy project: nếu đang nạp từ backend (vd reload deep-link) thì chờ,
   // đừng redirect vội về dashboard.
@@ -280,7 +296,6 @@ export default function ProjectDetail() {
     return <Navigate to="/" replace />
   }
 
-  const shortlisted = project.candidates.filter((c) => c.shortlisted).length
   const totalIngested = project.sources.reduce((n, s) => n + (s.count || 0), 0)
 
   const stats = [
@@ -289,7 +304,7 @@ export default function ProjectDetail() {
       icon: Users,
       cls: 'bg-indigo-50 text-indigo-600',
       label: 'Candidates',
-      value: String(project.candidates.length),
+      value: candidateCount == null ? '…' : String(candidateCount),
       footnote: 'Ranked for this role',
     },
     {
@@ -297,7 +312,7 @@ export default function ProjectDetail() {
       icon: CheckCircle2,
       cls: 'bg-emerald-50 text-emerald-600',
       label: 'Shortlisted',
-      value: String(shortlisted),
+      value: shortlistedCount == null ? '…' : String(shortlistedCount),
       footnote: 'Proceeded to next step',
     },
     {
@@ -430,26 +445,6 @@ export default function ProjectDetail() {
                 CV Processing (live)
               </h2>
               <LiveProcessing jdId={project.id} refreshKey={liveKey} />
-
-              <h2 className="mt-8 text-base font-semibold text-slate-900">
-                System Alerts
-              </h2>
-              <div className="mt-4 space-y-3">
-                {systemAlerts.map((alert) => {
-                  const { icon: Icon, cls } = ALERT_STYLES[alert.level]
-                  return (
-                    <div key={alert.id} className="flex items-start gap-2.5">
-                      <Icon
-                        size={16}
-                        className={`mt-0.5 flex-shrink-0 ${cls}`}
-                      />
-                      <p className="text-sm leading-relaxed text-slate-600">
-                        {alert.text}
-                      </p>
-                    </div>
-                  )
-                })}
-              </div>
             </Card>
           </div>
         </div>
