@@ -55,6 +55,7 @@ export default defineConfig({
       '/evaluations': backendProxy(),
       '/shortlists': backendProxy(),
       '/users': backendProxy(),
+      '/admin': backendProxy(),
     },
   },
 })

@@ -49,7 +49,12 @@ def _get_shortlist_or_404(db: Session, shortlist_id: UUID) -> models.Shortlist:
 # ────────────────────────────────────────────────────────────
 # Router 1: shortlists lồng dưới một JD (tạo / liệt kê)
 # ────────────────────────────────────────────────────────────
-jd_shortlist_router = APIRouter(prefix="/jds", tags=["Shortlists"])
+# Shortlist thuộc pipeline tuyển dụng -> chỉ HR (không phải admin).
+jd_shortlist_router = APIRouter(
+    prefix="/jds",
+    tags=["Shortlists"],
+    dependencies=[Depends(require_role("hr_staff"))],
+)
 
 
 @jd_shortlist_router.post(
@@ -61,7 +66,7 @@ def create_shortlist(
     jd_id: UUID,
     payload: schemas.ShortlistCreate,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(require_role("hr_staff", "admin")),
+    current_user: models.User = Depends(get_current_user),
 ):
     """Tạo một shortlist mới cho vị trí tuyển dụng."""
     jd = db.query(models.JobDescription).filter(models.JobDescription.id == jd_id).first()
@@ -118,7 +123,11 @@ def list_shortlists(
 # ────────────────────────────────────────────────────────────
 # Router 2: thao tác trên một shortlist cụ thể
 # ────────────────────────────────────────────────────────────
-shortlist_router = APIRouter(prefix="/shortlists", tags=["Shortlists"])
+shortlist_router = APIRouter(
+    prefix="/shortlists",
+    tags=["Shortlists"],
+    dependencies=[Depends(require_role("hr_staff"))],
+)
 
 
 @shortlist_router.get("/{shortlist_id}", response_model=schemas.ShortlistResponse)
@@ -148,7 +157,7 @@ def get_shortlist(
 def delete_shortlist(
     shortlist_id: UUID,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(require_role("hr_staff", "admin")),
+    current_user: models.User = Depends(get_current_user),
 ):
     """Xóa cả shortlist (kèm các item bên trong, do cascade)."""
     shortlist = _get_shortlist_or_404(db, shortlist_id)
@@ -165,7 +174,7 @@ def add_item(
     shortlist_id: UUID,
     payload: schemas.ShortlistItemAdd,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(require_role("hr_staff", "admin")),
+    current_user: models.User = Depends(get_current_user),
 ):
     """Thêm 1 ứng viên vào shortlist. Ứng viên phải thuộc đúng JD của shortlist."""
     shortlist = _get_shortlist_or_404(db, shortlist_id)
@@ -217,7 +226,7 @@ def update_item_status(
     item_id: UUID,
     payload: schemas.ShortlistItemStatusUpdate,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(require_role("hr_staff", "admin")),
+    current_user: models.User = Depends(get_current_user),
 ):
     """HR quyết định ứng viên trong shortlist: accepted / rejected / pending."""
     item = (
@@ -245,7 +254,7 @@ def remove_item(
     shortlist_id: UUID,
     item_id: UUID,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(require_role("hr_staff", "admin")),
+    current_user: models.User = Depends(get_current_user),
 ):
     """Gỡ 1 ứng viên khỏi shortlist (không xóa ứng viên khỏi hệ thống)."""
     item = (

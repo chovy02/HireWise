@@ -6,6 +6,7 @@ from app import models, schemas
 from app.core.dependencies import get_current_user, require_role
 from app.database import get_db
 from app.utils import security
+from app.services.logging import write_system_log
 
 # Toàn bộ router này chỉ dành cho Admin (RBAC - FR-1: quản lý tài khoản người dùng).
 router = APIRouter(
@@ -29,7 +30,11 @@ def get_user(user_id: UUID, db: Session = Depends(get_db)):
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=schemas.UserResponse)
-def create_user(payload: schemas.UserCreateByAdmin, db: Session = Depends(get_db)):
+def create_user(
+    payload: schemas.UserCreateByAdmin,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
     if db.query(models.User).filter(models.User.email == payload.email).first():
         raise HTTPException(status_code=400, detail="Email này đã được đăng ký.")
 
@@ -43,6 +48,11 @@ def create_user(payload: schemas.UserCreateByAdmin, db: Session = Depends(get_db
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
+
+    write_system_log(
+        db, module="users",
+        message=f"Admin {current_user.email} tạo tài khoản {new_user.email} (role={new_user.role})",
+    )
     return new_user
 
 
@@ -75,6 +85,11 @@ def update_user(
 
     db.commit()
     db.refresh(user)
+
+    write_system_log(
+        db, module="users",
+        message=f"Admin {current_user.email} cập nhật tài khoản {user.email} (role={user.role}, active={user.is_active})",
+    )
     return user
 
 
@@ -94,4 +109,9 @@ def deactivate_user(
     user.is_active = False
     db.commit()
     db.refresh(user)
+
+    write_system_log(
+        db, module="users", level="WARNING",
+        message=f"Admin {current_user.email} khóa tài khoản {user.email}",
+    )
     return user

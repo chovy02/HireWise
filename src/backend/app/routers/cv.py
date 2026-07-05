@@ -15,15 +15,21 @@ from app.services.ai_agent.tasks import evaluate_candidate_task
 
 # ────────────────────────────────────────────────────────────
 # Router 1: Job Description
+# Toàn bộ pipeline tuyển dụng (JD/CV/đánh giá) chỉ dành cho HR (RBAC theo SRS 2.4:
+# Admin chỉ quản trị tài khoản/cấu hình/logs, KHÔNG thao tác nghiệp vụ tuyển dụng).
 # ────────────────────────────────────────────────────────────
-jd_router = APIRouter(prefix="/jds", tags=["Job Description"])
+jd_router = APIRouter(
+    prefix="/jds",
+    tags=["Job Description"],
+    dependencies=[Depends(require_role("hr_staff"))],
+)
 
 
 @jd_router.post("", status_code=status.HTTP_201_CREATED, response_model=schemas.JDResponse)
 def create_jd(
     payload: schemas.JDCreate,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(require_role("hr_staff", "admin")),
+    current_user: models.User = Depends(get_current_user),
 ):
     """HR nhập yêu cầu tuyển dụng bằng ngôn ngữ tự nhiên, AI chuẩn hóa thành JD có cấu trúc."""
     try:
@@ -86,7 +92,7 @@ async def upload_cvs(
     jd_id: UUID,
     file: UploadFile = File(..., description="File ZIP chứa nhiều CV dạng PDF"),
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(require_role("hr_staff", "admin")),
+    current_user: models.User = Depends(get_current_user),
 ):
     """
     UC U002 + U003. Nhận ZIP CV -> giải nén + tạo Candidate PENDING (nhanh) rồi
@@ -157,7 +163,11 @@ def get_leaderboard(
 # ────────────────────────────────────────────────────────────
 # Router 2: Candidate detail
 # ────────────────────────────────────────────────────────────
-candidate_router = APIRouter(prefix="/candidates", tags=["Candidates"])
+candidate_router = APIRouter(
+    prefix="/candidates",
+    tags=["Candidates"],
+    dependencies=[Depends(require_role("hr_staff"))],
+)
 
 
 @candidate_router.get("/{candidate_id}", response_model=schemas.CandidateDetailResponse)
@@ -197,7 +207,11 @@ def get_candidate_cv(
 # ────────────────────────────────────────────────────────────
 # Router 3: Evaluation override
 # ────────────────────────────────────────────────────────────
-evaluation_router = APIRouter(prefix="/evaluations", tags=["Evaluations"])
+evaluation_router = APIRouter(
+    prefix="/evaluations",
+    tags=["Evaluations"],
+    dependencies=[Depends(require_role("hr_staff"))],
+)
 
 
 @evaluation_router.patch("/{evaluation_id}/override", response_model=schemas.EvaluationResponse)
@@ -205,7 +219,7 @@ def override_evaluation(
     evaluation_id: UUID,
     payload: schemas.EvaluationOverrideRequest,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(require_role("hr_staff", "admin")),
+    current_user: models.User = Depends(get_current_user),
 ):
     """HR điều chỉnh điểm AI chấm sai, lưu lịch sử thay đổi vào evaluation_overrides."""
     evaluation = db.query(models.Evaluation).filter(models.Evaluation.id == evaluation_id).first()

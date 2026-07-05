@@ -1,33 +1,47 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   ShieldCheck,
-  Activity,
-  Server,
-  SlidersHorizontal,
-  AlertTriangle,
   Users,
-  Plus,
+  UserCog,
+  UserPlus,
+  Pencil,
+  Lock,
+  Unlock,
+  ScrollText,
+  RefreshCw,
+  Search,
+  X,
+  Loader2,
 } from 'lucide-react'
 import Topbar from '../components/Topbar.jsx'
 import {
   Card,
+  StatCard,
+  Badge,
   Segmented,
-  Toggle,
   PrimaryButton,
-  DarkButton,
+  SecondaryButton,
 } from '../components/ui.jsx'
 import { useToast } from '../context/ToastContext.jsx'
-import {
-  adminStats,
-  llmInvocations,
-  llmLimit,
-  errorLogs,
-  rbacRoles,
-  rbacPermissions,
-} from '../data/mockData.js'
+import { useAuth } from '../context/AuthContext.jsx'
+import { listUsers, createUser, updateUser } from '../api/users.js'
+import { getSystemLogs } from '../api/admin.js'
+
+const ROLE_META = {
+  admin: { label: 'Admin', variant: 'ai' },
+  hr_staff: { label: 'HR Staff', variant: 'processing' },
+}
+const LEVEL_VARIANT = {
+  INFO: 'neutral',
+  WARNING: 'processing',
+  ERROR: 'error',
+  CRITICAL: 'error',
+}
+const inputCls =
+  'w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100'
 
 export default function AdminGateway() {
-  const [tab, setTab] = useState('Agent Monitor')
+  const [tab, setTab] = useState('users')
 
   return (
     <>
@@ -40,363 +54,418 @@ export default function AdminGateway() {
               Admin Gateway
             </h1>
             <p className="mt-1 text-sm text-slate-500">
-              Manage AI agents, system resources, and access control.
+              Quản lý tài khoản người dùng và giám sát hoạt động hệ thống.
             </p>
           </div>
-          {/* SWITCH: Agent Monitor | Access Control */}
           <Segmented
-            options={['Agent Monitor', 'Access Control (RBAC)']}
+            options={[
+              { value: 'users', label: 'Tài khoản' },
+              { value: 'logs', label: 'Nhật ký hệ thống' },
+            ]}
             value={tab}
             onChange={setTab}
           />
         </div>
 
-        {tab === 'Agent Monitor' ? <AgentMonitor /> : <AccessControl />}
+        {tab === 'users' ? <UserManagement /> : <SystemLogs />}
       </main>
     </>
   )
 }
 
 /* ------------------------------------------------------------------ */
-/* Agent Monitor tab                                                   */
+/* Tab 1: User Management (RBAC - FR-1)                                 */
 /* ------------------------------------------------------------------ */
-function AgentMonitor() {
+function UserManagement() {
   const toast = useToast()
+  const { user: me } = useAuth()
+  const [users, setUsers] = useState(null) // null = đang tải
+  const [err, setErr] = useState('')
+  const [query, setQuery] = useState('')
+  const [editing, setEditing] = useState(null) // user obj (sửa) | 'new' (tạo) | null
+
+  function load() {
+    setErr('')
+    listUsers()
+      .then(setUsers)
+      .catch((e) => setErr(e.message))
+  }
+  useEffect(load, [])
+
+  const list = users || []
+  const visible = list.filter((u) =>
+    query.trim()
+      ? `${u.name || ''} ${u.email}`.toLowerCase().includes(query.trim().toLowerCase())
+      : true
+  )
+  const total = list.length
+  const active = list.filter((u) => u.is_active).length
+  const admins = list.filter((u) => u.role === 'admin').length
+  const hrStaff = list.filter((u) => u.role === 'hr_staff').length
+
+  async function toggleActive(u) {
+    try {
+      await updateUser(u.id, { is_active: !u.is_active })
+      toast(u.is_active ? `Đã khóa ${u.email}` : `Đã mở khóa ${u.email}`)
+      load()
+    } catch (e) {
+      toast(e.message)
+    }
+  }
 
   return (
     <>
-      {/* Stat cards (data: GET /api/admin/metrics) */}
+      {/* Stats (dữ liệu THẬT từ /users) */}
       <div className="mt-6 grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-4">
-        <AdminStat
-          icon={Activity}
+        <StatCard icon={Users} label="Tổng tài khoản" value={users == null ? '…' : total} />
+        <StatCard
+          icon={Unlock}
+          iconClass="bg-emerald-50 text-emerald-600"
+          label="Đang hoạt động"
+          value={users == null ? '…' : active}
+        />
+        <StatCard
+          icon={ShieldCheck}
           iconClass="bg-indigo-50 text-indigo-600"
-          label="System Status"
-          value={adminStats.systemStatus}
-          valueClass="text-emerald-600"
+          label="Admin"
+          value={users == null ? '…' : admins}
         />
-        <AdminStat
-          icon={Server}
-          iconClass="bg-blue-50 text-blue-600"
-          label="API Calls (24h)"
-          value={adminStats.apiCalls}
-          suffix={` / ${adminStats.apiLimit}`}
-        />
-        <AdminStat
-          icon={SlidersHorizontal}
+        <StatCard
+          icon={UserCog}
           iconClass="bg-violet-50 text-violet-600"
-          label="Active Agents"
-          value={adminStats.activeAgents}
-          suffix=" Running"
-          suffixClass="text-emerald-600"
-        />
-        <AdminStat
-          icon={AlertTriangle}
-          iconClass="bg-red-50 text-red-600"
-          label="Error Rate"
-          value={adminStats.errorRate}
-          suffix=" Normal"
+          label="HR Staff"
+          value={users == null ? '…' : hrStaff}
         />
       </div>
 
-      {/* Charts */}
-      <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-3">
-        {/* LLM Tool Invocations */}
-        <Card className="p-6 lg:col-span-2">
-          <div className="flex items-start justify-between">
-            <div>
-              <h2 className="text-base font-semibold text-slate-900">
-                LLM Tool Invocations
-              </h2>
-              <p className="mt-0.5 text-sm text-slate-500">
-                API usage vs. Rate Limits over 24 hours
-              </p>
-            </div>
-            {/* CONTROL: time range -> GET /api/admin/metrics?range=… */}
-            <select
-              onChange={(e) =>
-                toast(`Range: ${e.target.value} → GET /api/admin/metrics`)
-              }
-              className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-600 outline-none focus:border-indigo-500"
-            >
-              <option>Last 24 Hours</option>
-              <option>Last 7 Days</option>
-              <option>Last 30 Days</option>
-            </select>
-          </div>
-          <AreaChart data={llmInvocations} limit={llmLimit} />
-        </Card>
+      {/* Toolbar */}
+      <Card className="mt-6 flex flex-wrap items-center gap-3 p-3">
+        <div className="flex flex-1 items-center gap-2">
+          <Search size={18} className="ml-2 flex-shrink-0 text-slate-400" />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Tìm theo tên hoặc email…"
+            className="w-full flex-1 bg-transparent text-sm text-slate-700 placeholder-slate-400 outline-none"
+          />
+        </div>
+        <PrimaryButton onClick={() => setEditing('new')}>
+          <UserPlus size={16} /> Thêm tài khoản
+        </PrimaryButton>
+      </Card>
 
-        {/* Security & Error Logs */}
-        <Card className="flex flex-col p-6">
-          <h2 className="text-base font-semibold text-slate-900">
-            Security &amp; Error Logs
-          </h2>
-          <p className="mt-0.5 text-sm text-slate-500">
-            Distribution of failed operations
-          </p>
-          <div className="mt-6 flex-1 space-y-5">
-            {errorLogs.map((e) => (
-              <div key={e.label} className="flex items-center gap-3">
-                <span className="w-20 flex-shrink-0 text-right text-xs text-slate-500">
-                  {e.label}
-                </span>
-                <div className="h-5 flex-1">
-                  <div
-                    className="h-full rounded bg-rose-500"
-                    style={{ width: `${e.value}%` }}
-                  />
-                </div>
-              </div>
-            ))}
+      {/* Table */}
+      <Card className="mt-5 overflow-hidden">
+        {users === null && !err && (
+          <p className="px-6 py-10 text-sm text-slate-400">Đang tải tài khoản…</p>
+        )}
+        {err && <p className="px-6 py-10 text-sm text-red-500">Lỗi tải: {err}</p>}
+        {users && visible.length === 0 && (
+          <p className="px-6 py-10 text-sm text-slate-400">Không có tài khoản phù hợp.</p>
+        )}
+        {users && visible.length > 0 && (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[720px] text-left">
+              <thead>
+                <tr className="border-b border-slate-200 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                  <th className="px-6 py-3">Tài khoản</th>
+                  <th className="px-6 py-3">Vai trò</th>
+                  <th className="px-6 py-3">Trạng thái</th>
+                  <th className="px-6 py-3 text-right">Thao tác</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {visible.map((u) => {
+                  const role = ROLE_META[u.role] || { label: u.role, variant: 'neutral' }
+                  const isSelf = me?.id === u.id
+                  return (
+                    <tr key={u.id} className="hover:bg-slate-50/60">
+                      <td className="px-6 py-4">
+                        <div className="flex items-center gap-3">
+                          <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-indigo-50 text-sm font-semibold text-indigo-600">
+                            {(u.name || u.email || '?')[0].toUpperCase()}
+                          </div>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="truncate text-sm font-semibold text-slate-900">
+                                {u.name || '—'}
+                              </span>
+                              {isSelf && (
+                                <Badge variant="neutral" upper={false}>
+                                  Bạn
+                                </Badge>
+                              )}
+                            </div>
+                            <p className="truncate text-xs text-slate-400">{u.email}</p>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <Badge variant={role.variant} upper={false}>
+                          {role.label}
+                        </Badge>
+                      </td>
+                      <td className="px-6 py-4">
+                        {u.is_active ? (
+                          <Badge variant="completed" upper={false}>
+                            Hoạt động
+                          </Badge>
+                        ) : (
+                          <Badge variant="error" upper={false}>
+                            Đã khóa
+                          </Badge>
+                        )}
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="flex justify-end gap-2">
+                          <button
+                            onClick={() => setEditing(u)}
+                            className="rounded-lg border border-slate-200 bg-white p-2 text-slate-600 transition hover:bg-slate-50"
+                            title="Sửa tài khoản"
+                          >
+                            <Pencil size={16} />
+                          </button>
+                          <button
+                            onClick={() => toggleActive(u)}
+                            disabled={isSelf}
+                            className={`rounded-lg border p-2 transition disabled:cursor-not-allowed disabled:opacity-40 ${
+                              u.is_active
+                                ? 'border-red-200 bg-white text-red-500 hover:bg-red-50'
+                                : 'border-emerald-200 bg-white text-emerald-600 hover:bg-emerald-50'
+                            }`}
+                            title={
+                              isSelf
+                                ? 'Không thể tự khóa tài khoản của mình'
+                                : u.is_active
+                                  ? 'Khóa tài khoản'
+                                  : 'Mở khóa tài khoản'
+                            }
+                          >
+                            {u.is_active ? <Lock size={16} /> : <Unlock size={16} />}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
           </div>
-          {/* BUTTON: View Full Logs -> GET /api/admin/logs */}
-          <button
-            onClick={() => toast('View Full Logs → GET /api/admin/logs')}
-            className="mt-6 text-center text-sm font-medium text-indigo-600 hover:text-indigo-700"
-          >
-            View Full Logs →
-          </button>
-        </Card>
-      </div>
+        )}
+      </Card>
+
+      {editing && (
+        <UserFormModal
+          user={editing === 'new' ? null : editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null)
+            load()
+          }}
+        />
+      )}
     </>
   )
 }
 
-function AdminStat({
-  icon: Icon,
-  iconClass,
-  label,
-  value,
-  valueClass = 'text-slate-900',
-  suffix,
-  suffixClass = 'text-slate-400',
-}) {
-  return (
-    <Card className="flex items-center gap-4 p-5">
-      <div
-        className={`flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-lg ${iconClass}`}
-      >
-        <Icon size={20} />
-      </div>
-      <div>
-        <p className="text-sm font-medium text-slate-500">{label}</p>
-        <p className="mt-0.5 text-xl font-bold">
-          <span className={valueClass}>{value}</span>
-          {suffix && (
-            <span className={`text-sm font-medium ${suffixClass}`}>{suffix}</span>
-          )}
-        </p>
-      </div>
-    </Card>
-  )
-}
-
-// Smooth area chart built with inline SVG (no chart library needed).
-function AreaChart({ data, limit }) {
-  const W = 700
-  const H = 300
-  const padL = 40
-  const padR = 20
-  const padT = 20
-  const padB = 30
-  const plotW = W - padL - padR
-  const plotH = H - padT - padB
-  const max = limit
-
-  const points = data.map((d, i) => ({
-    x: padL + (i / (data.length - 1)) * plotW,
-    y: padT + (1 - d.v / max) * plotH,
-    label: d.t,
-  }))
-
-  const line = smoothPath(points)
-  const area = `${line} L ${points[points.length - 1].x} ${padT + plotH} L ${
-    points[0].x
-  } ${padT + plotH} Z`
-
-  const yTicks = [0, 250, 500, 750, 1000]
-  const limitY = padT + (1 - limit / max) * plotH
-
-  return (
-    <svg
-      viewBox={`0 0 ${W} ${H}`}
-      className="mt-4 w-full"
-      preserveAspectRatio="xMidYMid meet"
-    >
-      <defs>
-        <linearGradient id="areaFill" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#6366f1" stopOpacity="0.28" />
-          <stop offset="100%" stopColor="#6366f1" stopOpacity="0.02" />
-        </linearGradient>
-      </defs>
-
-      {/* gridlines + y labels */}
-      {yTicks.map((t) => {
-        const y = padT + (1 - t / max) * plotH
-        return (
-          <g key={t}>
-            <line
-              x1={padL}
-              y1={y}
-              x2={W - padR}
-              y2={y}
-              stroke="#eef1f6"
-              strokeWidth="1"
-            />
-            <text x={padL - 8} y={y + 4} textAnchor="end" className="fill-slate-400" fontSize="11">
-              {t}
-            </text>
-          </g>
-        )
-      })}
-
-      {/* rate-limit dashed line */}
-      <line
-        x1={padL}
-        y1={limitY}
-        x2={W - padR}
-        y2={limitY}
-        stroke="#ef4444"
-        strokeWidth="1.5"
-        strokeDasharray="6 5"
-      />
-
-      {/* area + line */}
-      <path d={area} fill="url(#areaFill)" />
-      <path d={line} fill="none" stroke="#6366f1" strokeWidth="2.5" />
-
-      {/* x labels (every other point to avoid crowding) */}
-      {points.map((p, i) =>
-        i % 2 === 0 ? (
-          <text
-            key={i}
-            x={p.x}
-            y={H - 8}
-            textAnchor="middle"
-            className="fill-slate-400"
-            fontSize="11"
-          >
-            {p.label}
-          </text>
-        ) : null
-      )}
-    </svg>
-  )
-}
-
-// Catmull-Rom spline -> cubic bezier path for a smooth curve.
-function smoothPath(pts) {
-  if (pts.length < 2) return ''
-  let d = `M ${pts[0].x} ${pts[0].y}`
-  for (let i = 0; i < pts.length - 1; i++) {
-    const p0 = pts[i - 1] || pts[i]
-    const p1 = pts[i]
-    const p2 = pts[i + 1]
-    const p3 = pts[i + 2] || p2
-    const cp1x = p1.x + (p2.x - p0.x) / 6
-    const cp1y = p1.y + (p2.y - p0.y) / 6
-    const cp2x = p2.x - (p3.x - p1.x) / 6
-    const cp2y = p2.y - (p3.y - p1.y) / 6
-    d += ` C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${p2.x} ${p2.y}`
-  }
-  return d
-}
-
-/* ------------------------------------------------------------------ */
-/* Access Control (RBAC) tab                                           */
-/* ------------------------------------------------------------------ */
-const ROLE_ICONS = { shield: ShieldCheck, users: Users }
-
-function AccessControl() {
+function UserFormModal({ user, onClose, onSaved }) {
   const toast = useToast()
+  const isNew = !user
+  const [username, setUsername] = useState(user?.name || '')
+  const [email, setEmail] = useState(user?.email || '')
+  const [password, setPassword] = useState('')
+  const [role, setRole] = useState(user?.role || 'hr_staff')
+  const [isActive, setIsActive] = useState(user?.is_active ?? true)
+  const [saving, setSaving] = useState(false)
 
-  // Seed editable toggle state from mock data.
-  const [perms, setPerms] = useState(() =>
-    Object.fromEntries(rbacPermissions.map((p) => [p.key, { ...p.values }]))
-  )
-
-  function toggle(permKey, roleKey, next) {
-    setPerms((prev) => ({
-      ...prev,
-      [permKey]: { ...prev[permKey], [roleKey]: next },
-    }))
+  async function save() {
+    if (!username.trim() || !email.trim()) {
+      toast('Nhập đủ tên và email.')
+      return
+    }
+    if (isNew && password.length < 8) {
+      toast('Mật khẩu tối thiểu 8 ký tự.')
+      return
+    }
+    if (!isNew && password && password.length < 8) {
+      toast('Mật khẩu mới tối thiểu 8 ký tự.')
+      return
+    }
+    setSaving(true)
+    try {
+      if (isNew) {
+        await createUser({ username: username.trim(), email: email.trim(), password, role })
+        toast('Đã tạo tài khoản.')
+      } else {
+        const patch = { username: username.trim(), email: email.trim(), role, is_active: isActive }
+        if (password) patch.password = password
+        await updateUser(user.id, patch)
+        toast('Đã cập nhật tài khoản.')
+      }
+      onSaved()
+    } catch (e) {
+      toast(e.message || 'Lưu thất bại.')
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
-    <Card className="mt-6 p-6">
-      <div className="flex items-start justify-between">
-        <div>
-          <h2 className="text-base font-semibold text-slate-900">
-            Role-Based Access Control
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-2xl">
+        <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
+          <h2 className="text-base font-bold text-slate-900">
+            {isNew ? 'Thêm tài khoản' : 'Sửa tài khoản'}
           </h2>
-          <p className="mt-0.5 text-sm text-slate-500">
-            Configure permissions for different user groups.
-          </p>
+          <button
+            onClick={onClose}
+            className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+          >
+            <X size={18} />
+          </button>
         </div>
-        {/* BUTTON: Add New Role -> POST /api/admin/roles */}
-        <PrimaryButton onClick={() => toast('Add New Role → POST /api/admin/roles')}>
-          <Plus size={16} /> Add New Role
-        </PrimaryButton>
-      </div>
 
-      <div className="mt-6 overflow-x-auto">
-        <table className="w-full min-w-[640px]">
-          <thead>
-            <tr className="border-b border-slate-200">
-              <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                Permission Level
-              </th>
-              {rbacRoles.map((r) => {
-                const Icon = ROLE_ICONS[r.icon]
-                return (
-                  <th key={r.key} className="px-4 py-3 text-center">
-                    <div className="flex flex-col items-center gap-0.5">
-                      <Icon size={16} className="text-indigo-500" />
-                      <span className="text-xs font-bold uppercase tracking-wide text-slate-700">
-                        {r.name}
-                      </span>
-                      <span className="text-[11px] font-normal normal-case text-slate-400">
-                        {r.subtitle}
-                      </span>
-                    </div>
-                  </th>
-                )
-              })}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {rbacPermissions.map((p) => (
-              <tr key={p.key}>
-                <td className="px-4 py-4">
-                  <p className="text-sm font-semibold text-slate-800">{p.label}</p>
-                  <p className="text-xs text-slate-400">{p.sub}</p>
-                </td>
-                {rbacRoles.map((r) => (
-                  <td key={r.key} className="px-4 py-4">
-                    <div className="flex justify-center">
-                      <Toggle
-                        checked={perms[p.key][r.key]}
-                        // System Admin always has full access -> locked on.
-                        disabled={r.key === 'admin'}
-                        onChange={(next) => toggle(p.key, r.key, next)}
-                      />
-                    </div>
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+        <div className="space-y-4 px-6 py-5">
+          <div>
+            <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Họ tên
+            </label>
+            <input value={username} onChange={(e) => setUsername(e.target.value)} className={`mt-1.5 ${inputCls}`} />
+          </div>
+          <div>
+            <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Email
+            </label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className={`mt-1.5 ${inputCls}`}
+            />
+          </div>
+          <div>
+            <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+              {isNew ? 'Mật khẩu (≥ 8 ký tự)' : 'Mật khẩu mới (để trống nếu giữ nguyên)'}
+            </label>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder={isNew ? '' : '••••••••'}
+              className={`mt-1.5 ${inputCls}`}
+            />
+          </div>
+          <div>
+            <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Vai trò
+            </label>
+            <select value={role} onChange={(e) => setRole(e.target.value)} className={`mt-1.5 ${inputCls}`}>
+              <option value="hr_staff">HR Staff</option>
+              <option value="admin">Admin</option>
+            </select>
+          </div>
+          {!isNew && (
+            <label className="flex items-center gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                checked={isActive}
+                onChange={(e) => setIsActive(e.target.checked)}
+                className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+              />
+              Tài khoản đang hoạt động
+            </label>
+          )}
+        </div>
 
-      <div className="mt-6 flex justify-end">
-        {/* BUTTON: Save Changes -> PUT /api/admin/permissions (sends matrix) */}
-        <DarkButton
-          onClick={() => toast('Save Changes → PUT /api/admin/permissions')}
+        <div className="flex justify-end gap-2 border-t border-slate-200 px-6 py-4">
+          <SecondaryButton className="px-3 py-2" onClick={onClose} disabled={saving}>
+            Hủy
+          </SecondaryButton>
+          <PrimaryButton className="px-3 py-2" onClick={save} disabled={saving}>
+            {saving ? (
+              <>
+                <Loader2 size={15} className="animate-spin" /> Đang lưu…
+              </>
+            ) : isNew ? (
+              'Tạo tài khoản'
+            ) : (
+              'Lưu thay đổi'
+            )}
+          </PrimaryButton>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/* ------------------------------------------------------------------ */
+/* Tab 2: System Logs (NFR-8)                                          */
+/* ------------------------------------------------------------------ */
+function SystemLogs() {
+  const [logs, setLogs] = useState(null)
+  const [err, setErr] = useState('')
+
+  function load() {
+    setErr('')
+    setLogs(null)
+    getSystemLogs()
+      .then(setLogs)
+      .catch((e) => setErr(e.message))
+  }
+  useEffect(load, [])
+
+  return (
+    <Card className="mt-6 overflow-hidden">
+      <div className="flex items-center justify-between border-b border-slate-200 px-6 py-3">
+        <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+          <ScrollText size={16} className="text-indigo-600" /> Nhật ký hệ thống
+        </h2>
+        <button
+          onClick={load}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-600 transition hover:bg-slate-50"
         >
-          Save Changes
-        </DarkButton>
+          <RefreshCw size={14} /> Tải lại
+        </button>
       </div>
+
+      {logs === null && !err && (
+        <p className="px-6 py-10 text-sm text-slate-400">Đang tải nhật ký…</p>
+      )}
+      {err && <p className="px-6 py-10 text-sm text-red-500">Lỗi tải: {err}</p>}
+      {logs && logs.length === 0 && (
+        <p className="px-6 py-10 text-sm text-slate-400">Chưa có nhật ký nào.</p>
+      )}
+      {logs && logs.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[720px] text-left">
+            <thead>
+              <tr className="border-b border-slate-200 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                <th className="px-6 py-3">Thời gian</th>
+                <th className="px-6 py-3">Mức</th>
+                <th className="px-6 py-3">Module</th>
+                <th className="px-6 py-3">Nội dung</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {logs.map((l) => (
+                <tr key={l.id} className="hover:bg-slate-50/60">
+                  <td className="whitespace-nowrap px-6 py-3 text-xs text-slate-500">
+                    {new Date(l.created_at).toLocaleString('vi-VN')}
+                  </td>
+                  <td className="px-6 py-3">
+                    <Badge variant={LEVEL_VARIANT[l.level] || 'neutral'} upper={false}>
+                      {l.level}
+                    </Badge>
+                  </td>
+                  <td className="px-6 py-3 text-sm text-slate-600">{l.module}</td>
+                  <td className="px-6 py-3 text-sm text-slate-700">{l.message}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </Card>
   )
 }

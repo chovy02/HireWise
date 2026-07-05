@@ -11,15 +11,22 @@ import {
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext.jsx'
 
+// RBAC: mỗi mục nav chỉ hiện cho đúng role (khớp phân quyền backend).
+// HR làm pipeline tuyển dụng (Dashboard/Shortlisting); Admin quản trị (Admin Gateway).
 const NAV_ITEMS = [
-  { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
-  { to: '/shortlisting', label: 'Shortlisting', icon: Users },
-  { to: '/admin', label: 'Admin Gateway', icon: ShieldCheck },
+  { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true, roles: ['hr_staff'] },
+  { to: '/shortlisting', label: 'Shortlisting', icon: Users, roles: ['hr_staff'] },
+  { to: '/admin', label: 'Admin Gateway', icon: ShieldCheck, roles: ['admin'] },
 ]
 
 export default function Sidebar() {
   const { user, signOut } = useAuth()
   const [menuOpen, setMenuOpen] = useState(false)
+
+  // Đã đăng nhập -> chỉ hiện mục hợp role; chưa đăng nhập -> hiện tất cả (landing).
+  const navItems = user
+    ? NAV_ITEMS.filter((item) => item.roles.includes(user.role))
+    : NAV_ITEMS
 
   const displayName = user?.name || 'User'
   const initials = displayName
@@ -41,7 +48,7 @@ export default function Sidebar() {
 
       {/* Nav */}
       <nav className="mt-2 flex-1 space-y-1 px-3">
-        {NAV_ITEMS.map(({ to, label, icon: Icon, end }) => (
+        {navItems.map(({ to, label, icon: Icon, end }) => (
           <NavLink
             key={to}
             to={to}

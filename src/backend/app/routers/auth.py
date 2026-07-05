@@ -9,6 +9,7 @@ from app.core.dependencies import get_current_user
 from app.database import get_db
 from app.utils import security
 from app.services.email import send_verification_email
+from app.services.logging import write_system_log
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -112,9 +113,15 @@ def login(user_credentials: schemas.UserLogin, db: Session = Depends(get_db)):
     if not security.verify_password(user_credentials.password, user.password_hash):
         raise HTTPException(status_code=403, detail="Tài khoản hoặc mật khẩu không chính xác.")
 
+    # NFR-8: ghi log hoạt động đăng nhập.
+    write_system_log(
+        db, module="auth", message=f"Đăng nhập: {user.email} (role={user.role})",
+        payload={"user_id": str(user.id), "role": user.role},
+    )
+
     # 4. Cấp vé thông hành Access Token
     access_token = security.create_access_token(data={"sub": user.email})
-    
+
     return {
         "access_token": access_token,
         "token_type": "bearer",
