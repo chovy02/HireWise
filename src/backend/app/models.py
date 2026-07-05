@@ -14,6 +14,12 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=False)
     role: Mapped[str] = mapped_column(String(50), default="hr_staff")
+    # Tăng mỗi lần user đăng ký lại (chưa kích hoạt). Token xác minh mang version
+    # tại thời điểm phát hành; chỉ token có version KHỚP mới hợp lệ -> token cũ từ
+    # lần đăng ký trước tự động bị vô hiệu hóa.
+    verify_token_version: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False, server_default="0"
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 

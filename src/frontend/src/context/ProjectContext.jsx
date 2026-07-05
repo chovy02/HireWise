@@ -15,10 +15,14 @@ function reRank(candidates) {
 // logic. Frontend-only: state lives here, no backend calls. Replace the bodies
 // with fetch() when the API exists.
 export function ProjectProvider({ children }) {
-  const { isAuthenticated } = useAuth()
+  const { isAuthenticated, loading: authLoading } = useAuth()
   const [projects, setProjects] = useState([])
-  // true trong lúc nạp danh sách JD từ backend (để trang chi tiết không vội redirect).
-  const [loading, setLoading] = useState(false)
+  // true trong lúc xác thực token / nạp danh sách JD từ backend (để trang chi tiết
+  // không vội redirect). Bắt đầu = true: khi F5 một deep-link, `isAuthenticated`
+  // chỉ bật true SAU khi /auth/me trả về, nên nếu khởi tạo false thì ProjectDetail
+  // sẽ thấy "không có project + loading=false" và redirect về dashboard trước khi
+  // kịp hydrate. Giữ true tới khi auth ổn định + danh sách JD tải xong.
+  const [loading, setLoading] = useState(true)
 
   // Hydrate danh sách project từ backend mỗi khi đăng nhập. TRƯỚC ĐÂY state chỉ nằm
   // trong RAM nên F5 / mở lại là mất sạch dù JD vẫn còn trong DB. Chạy lại khi
@@ -26,8 +30,14 @@ export function ProjectProvider({ children }) {
   // trạng thái xử lý CV THẬT được poll riêng ở ProjectDetail.
   useEffect(() => {
     let cancelled = false
+    // Chờ AuthContext xác thực xong token đã lưu trước khi quyết định.
+    if (authLoading) {
+      setLoading(true)
+      return
+    }
     if (!isAuthenticated) {
       setProjects([])
+      setLoading(false)
       return
     }
     setLoading(true)
@@ -57,7 +67,7 @@ export function ProjectProvider({ children }) {
     return () => {
       cancelled = true
     }
-  }, [isAuthenticated])
+  }, [isAuthenticated, authLoading])
 
   // Create a project from the natural-language brief + chosen ingestion source.
   // REAL backend calls: (1) POST /jds -> Gemini structures the JD, (2) if a ZIP
