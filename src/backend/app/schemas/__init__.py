@@ -37,4 +37,9 @@ from .shortlist import (
     ShortlistResponse,
 )
 
+from .compare import (
+    CompareRequest,
+    CompareResponse,
+)
+
 from .log import SystemLogResponse
