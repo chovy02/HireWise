@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from app.database import engine, SessionLocal
 from app import models
 from app.core.bootstrap import ensure_default_admin
-from app.routers import auth, users, cv, shortlist, admin, compare
+from app.routers import auth, users, cv, shortlist, admin, compare, interview
 
 models.Base.metadata.create_all(bind=engine)
 
@@ -21,6 +21,7 @@ app.include_router(shortlist.jd_shortlist_router)
 app.include_router(shortlist.shortlist_router)
 app.include_router(admin.router)
 app.include_router(compare.router)
+app.include_router(interview.router)
 
 @app.on_event("startup")
 def seed_default_admin():

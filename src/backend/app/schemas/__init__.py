@@ -42,4 +42,12 @@ from .compare import (
     CompareResponse,
 )
 
+from .interview import (
+    InterviewQuestionResponse,
+    InterviewResponse,
+    EvaluateAnswerRequest,
+    EvaluationResultResponse,
+    GenerateInterviewRequest
+)
+
 from .log import SystemLogResponse

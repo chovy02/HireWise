@@ -3,7 +3,6 @@ from sqlalchemy.orm import Session
 from uuid import UUID
 
 from app import models, schemas
-from app.schemas.compare import CompareRequest, CompareResponse
 from app.database import get_db
 from app.core.dependencies import get_current_user, require_role
 from app.services.ai_agent.comparator import compare_candidates_ai
@@ -14,9 +13,9 @@ router = APIRouter(
     dependencies=[Depends(require_role("hr_staff"))],
 )
 
-@router.post("", response_model=CompareResponse)
+@router.post("", response_model=schemas.CompareResponse)
 def compare_candidates(
-    payload: CompareRequest,
+    payload: schemas.CompareRequest,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
@@ -59,7 +58,7 @@ def compare_candidates(
     if "error" in ai_result:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=ai_result["error"])
         
-    return CompareResponse(
+    return schemas.CompareResponse(
         recommendation=ai_result.get("recommendation", "Không thể đưa ra đề xuất."),
         detailed_comparison=ai_result.get("detailed_comparison", "Không có dữ liệu so sánh chi tiết.")
     )

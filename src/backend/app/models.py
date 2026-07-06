@@ -223,9 +223,10 @@ class Interview(Base):
     feedback: Mapped[str] = mapped_column(Text, nullable=True)
     feedback_summary: Mapped[str] = mapped_column(Text, nullable=True)
     scheduled_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    status: Mapped[str] = mapped_column(String(50), default="pending")    #(pending, in_progress, completed) 
 
     cv = relationship("Candidate", back_populates="interview")
-    questions = relationship("InterviewQuestion", back_populates="interview", cascade="all, delete-orphan")
+    questions = relationship("InterviewQuestion", back_populates="interview", cascade="all, delete-orphan", order_by="InterviewQuestion.order_index")
 
 class InterviewQuestion(Base):
     __tablename__ = "interview_questions"
@@ -234,6 +235,13 @@ class InterviewQuestion(Base):
     interview_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("interviews.id"), nullable=False)
     question: Mapped[str] = mapped_column(Text, nullable=False)
     category: Mapped[str] = mapped_column(String(100), nullable=True)
+    
+    expected_answer: Mapped[str] = mapped_column(Text, nullable=True)
+    answer_text: Mapped[str] = mapped_column(Text, nullable=True)
+    ai_evaluation: Mapped[str] = mapped_column(Text, nullable=True)
+    score: Mapped[float] = mapped_column(Float, nullable=True)
+    is_ai_generated: Mapped[bool] = mapped_column(default=True)
+    order_index: Mapped[int] = mapped_column(default=0)
 
     interview = relationship("Interview", back_populates="questions")
 
