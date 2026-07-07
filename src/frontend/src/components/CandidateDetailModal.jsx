@@ -12,9 +12,12 @@ import {
   Sparkles,
   FileText,
   Loader2,
+  MessageSquareText,
 } from 'lucide-react'
 import { Tag, Badge, ProgressBar, Segmented, PrimaryButton, SecondaryButton } from './ui.jsx'
 import { useToast } from '../context/ToastContext.jsx'
+import { formatName } from '../utils/formatName.js'
+import InterviewModal from './InterviewModal.jsx'
 import { getCandidate, overrideEvaluation, getCandidateCv } from '../api/jds.js'
 
 const STATUS_BADGE = {
@@ -154,6 +157,7 @@ export default function CandidateDetailModal({ candidateId, onClose, onOverridde
   // Đoạn trích đang hover (để tô sáng trong CV) + chế độ xem CV bên phải.
   const [highlight, setHighlight] = useState(null)
   const [cvView, setCvView] = useState('text') // 'text' (highlight được) | 'pdf'
+  const [showInterview, setShowInterview] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -198,7 +202,7 @@ export default function CandidateDetailModal({ candidateId, onClose, onOverridde
     }
   }
 
-  const name = detail?.name || 'Ứng viên chưa rõ tên'
+  const name = formatName(detail?.name) || 'Ứng viên chưa rõ tên'
   const statusMeta = STATUS_BADGE[detail?.status] || STATUS_BADGE.PENDING
   const evaluation = detail?.evaluation
   const evidence = evaluation?.evidence || {}
@@ -272,6 +276,15 @@ export default function CandidateDetailModal({ candidateId, onClose, onOverridde
             </div>
           </div>
           <div className="flex items-center gap-2">
+            {evaluation && (
+              <SecondaryButton
+                className="px-3 py-2"
+                onClick={() => setShowInterview(true)}
+                title="Phỏng vấn ứng viên (AI)"
+              >
+                <MessageSquareText size={16} /> Phỏng vấn
+              </SecondaryButton>
+            )}
             {evaluation && !editing && (
               <button
                 onClick={() => {
@@ -541,6 +554,15 @@ export default function CandidateDetailModal({ candidateId, onClose, onOverridde
           )}
         </div>
       </div>
+
+      {/* Phỏng vấn AI cho ứng viên này */}
+      {showInterview && (
+        <InterviewModal
+          candidateId={candidateId}
+          candidateName={detail?.name}
+          onClose={() => setShowInterview(false)}
+        />
+      )}
     </div>
   )
 }

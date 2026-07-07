@@ -49,8 +49,8 @@ export function ProjectProvider({ children }) {
             id: jd.id,
             backendJdId: jd.id,
             title: jd.title,
-            jdInput: '', // mô tả gốc + markdown được fetch lazy ở ProjectDetail
-            jdMarkdown: '',
+            jdInput: jd.raw_text || '', // mô tả gốc HR nhập (list đã trả kèm)
+            jdMarkdown: '', // markdown đầy đủ vẫn fetch lazy ở ProjectDetail
             sources: [], // nguồn ingest cũ chưa lưu server-side
             createdAt: jd.created_at,
             candidates: [], // dữ liệu ứng viên THẬT được fetch riêng ở ProjectDetail

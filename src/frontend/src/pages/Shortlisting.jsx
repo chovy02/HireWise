@@ -21,6 +21,7 @@ import {
   CheckCircle2,
   XCircle,
   Circle,
+  MessageSquareText,
 } from 'lucide-react'
 import Topbar from '../components/Topbar.jsx'
 import {
@@ -33,6 +34,8 @@ import {
   PrimaryButton,
 } from '../components/ui.jsx'
 import CandidateDetailModal from '../components/CandidateDetailModal.jsx'
+import InterviewModal from '../components/InterviewModal.jsx'
+import { formatName } from '../utils/formatName.js'
 import { useToast } from '../context/ToastContext.jsx'
 import { useProjects } from '../context/ProjectContext.jsx'
 import { getCandidates } from '../api/jds.js'
@@ -76,6 +79,7 @@ export default function Shortlisting() {
 
   const [query, setQuery] = useState('')
   const [openId, setOpenId] = useState(null)
+  const [interviewFor, setInterviewFor] = useState(null) // { id, name } ứng viên đang phỏng vấn
   const [compareMode, setCompareMode] = useState(false)
   const [selected, setSelected] = useState([])
   const [showCompare, setShowCompare] = useState(false)
@@ -558,12 +562,12 @@ export default function Shortlisting() {
                           <td className="px-6 py-4">
                             <div className="flex items-center gap-3">
                               <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-indigo-50 text-sm font-semibold text-indigo-600">
-                                {(c.name || '?')[0]}
+                                {(formatName(c.name) || '?')[0]}
                               </div>
                               <div className="min-w-0">
                                 <div className="flex items-center gap-2">
                                   <span className="truncate text-sm font-semibold text-slate-900">
-                                    {c.name || 'Đang trích xuất…'}
+                                    {formatName(c.name) || 'Đang trích xuất…'}
                                   </span>
                                   {c.is_overridden && (
                                     <Badge variant="ai" upper={false}>
@@ -626,6 +630,20 @@ export default function Shortlisting() {
                                 ) : (
                                   <ListPlus size={16} />
                                 )}
+                              </button>
+                              <button
+                                onClick={() =>
+                                  setInterviewFor({ id: c.id, name: c.name })
+                                }
+                                disabled={c.status !== 'COMPLETED'}
+                                className="rounded-lg border border-slate-200 bg-white p-2 text-slate-600 transition hover:bg-slate-50 disabled:opacity-50 disabled:hover:bg-white"
+                                title={
+                                  c.status === 'COMPLETED'
+                                    ? 'Phỏng vấn ứng viên (AI)'
+                                    : 'Ứng viên cần được chấm điểm trước khi phỏng vấn'
+                                }
+                              >
+                                <MessageSquareText size={16} />
                               </button>
                               <button
                                 onClick={() => setOpenId(c.id)}
@@ -704,11 +722,11 @@ export default function Shortlisting() {
                             <td className="px-6 py-4">
                               <div className="flex items-center gap-3">
                                 <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-indigo-50 text-sm font-semibold text-indigo-600">
-                                  {(c.name || '?')[0]}
+                                  {(formatName(c.name) || '?')[0]}
                                 </div>
                                 <div className="min-w-0">
                                   <span className="block truncate text-sm font-semibold text-slate-900">
-                                    {c.name || 'Đang trích xuất…'}
+                                    {formatName(c.name) || 'Đang trích xuất…'}
                                   </span>
                                   <p className="truncate text-xs text-slate-400">
                                     {c.email || '—'}
@@ -765,6 +783,20 @@ export default function Shortlisting() {
                             <td className="px-6 py-4">
                               <div className="flex justify-end gap-2">
                                 <button
+                                  onClick={() =>
+                                    setInterviewFor({ id: c.id, name: c.name })
+                                  }
+                                  disabled={c.status !== 'COMPLETED'}
+                                  className="rounded-lg border border-slate-200 bg-white p-2 text-slate-600 transition hover:bg-slate-50 disabled:opacity-50 disabled:hover:bg-white"
+                                  title={
+                                    c.status === 'COMPLETED'
+                                      ? 'Phỏng vấn ứng viên (AI)'
+                                      : 'Ứng viên cần được chấm điểm trước khi phỏng vấn'
+                                  }
+                                >
+                                  <MessageSquareText size={16} />
+                                </button>
+                                <button
                                   onClick={() => setOpenId(c.id)}
                                   className="rounded-lg border border-indigo-200 bg-indigo-50 p-2 text-indigo-600 transition hover:bg-indigo-100"
                                   title="Xem chi tiết ứng viên"
@@ -815,6 +847,15 @@ export default function Shortlisting() {
       {showCompare && compareList.length >= 2 && (
         <CompareModal candidates={compareList} onClose={() => setShowCompare(false)} />
       )}
+
+      {/* Interview popup (AI phỏng vấn) */}
+      {interviewFor && (
+        <InterviewModal
+          candidateId={interviewFor.id}
+          candidateName={interviewFor.name}
+          onClose={() => setInterviewFor(null)}
+        />
+      )}
     </>
   )
 }
@@ -852,10 +893,10 @@ function CompareModal({ candidates, onClose }) {
                 className="rounded-xl border border-slate-200 p-4 text-center"
               >
                 <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-indigo-50 text-base font-semibold text-indigo-600">
-                  {(c.name || '?')[0]}
+                  {(formatName(c.name) || '?')[0]}
                 </div>
                 <p className="mt-2 truncate text-sm font-semibold text-slate-900">
-                  {c.name || 'Đang trích xuất…'}
+                  {formatName(c.name) || 'Đang trích xuất…'}
                 </p>
                 <p className="truncate text-xs text-slate-400">{c.email || '—'}</p>
                 <div className="mt-3 flex justify-center">

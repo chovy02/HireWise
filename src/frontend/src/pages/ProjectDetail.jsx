@@ -29,6 +29,7 @@ import { useProjects } from '../context/ProjectContext.jsx'
 import { getCandidates, getJd, uploadCvs } from '../api/jds.js'
 import { listShortlists } from '../api/shortlists.js'
 import CandidateDetailModal from '../components/CandidateDetailModal.jsx'
+import { formatName } from '../utils/formatName.js'
 
 const METHOD_ICON = { upload: UploadCloud, link: Link2, email: Mail }
 
@@ -237,7 +238,7 @@ function LiveProcessing({ jdId, refreshKey, onOpenCandidate }) {
                       className={`${meta.cls} ${c.status === 'PENDING' ? 'animate-spin' : ''}`}
                     />
                     <span className="truncate text-sm text-slate-700">
-                      {c.name || 'Đang trích xuất…'}
+                      {formatName(c.name) || 'Đang trích xuất…'}
                     </span>
                   </div>
                   <div className="flex flex-shrink-0 items-center gap-2">

@@ -56,6 +56,8 @@ export default defineConfig({
       '/shortlists': backendProxy(),
       '/users': backendProxy(),
       '/admin': backendProxy(),
+      '/interviews': backendProxy(),
+      '/compare': backendProxy(),
     },
   },
 })
