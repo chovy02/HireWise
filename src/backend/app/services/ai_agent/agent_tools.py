@@ -33,6 +33,45 @@ def _uuid(value) -> uuid.UUID:
         raise ValueError(f"ID không hợp lệ: {value!r}")
 
 
+def _resolve_jd(db: Session, ref) -> models.JobDescription | None:
+    """
+    Tìm JD từ `ref` là UUID HOẶC tên vị trí. Model đôi khi truyền tên thay vì id;
+    resolve theo tên giúp khỏi crash và đỡ 1 lượt gọi list_jds (tiết kiệm token).
+    Nếu trùng tên, ưu tiên JD có NHIỀU ứng viên nhất (thường là cái HR đang test).
+    """
+    try:
+        jd = db.get(models.JobDescription, uuid.UUID(str(ref)))
+        if jd is not None:
+            return jd
+    except (ValueError, AttributeError, TypeError):
+        pass
+
+    matches = (
+        db.query(models.JobDescription)
+        .filter(models.JobDescription.title.ilike(f"%{str(ref).strip()}%"))
+        .all()
+    )
+    if not matches:
+        return None
+    return max(matches, key=lambda j: len(j.cvs))
+
+
+def _resolve_candidate(db: Session, ref) -> models.Candidate | None:
+    """Tìm ứng viên từ UUID HOẶC tên (model đôi khi truyền tên thay vì id)."""
+    try:
+        c = db.get(models.Candidate, uuid.UUID(str(ref)))
+        if c is not None:
+            return c
+    except (ValueError, AttributeError, TypeError):
+        pass
+    return (
+        db.query(models.Candidate)
+        .filter(models.Candidate.name.ilike(f"%{str(ref).strip()}%"))
+        .order_by(models.Candidate.created_at.desc())
+        .first()
+    )
+
+
 def _candidate_brief(c: models.Candidate) -> dict:
     ev = c.evaluation
     return {
@@ -57,7 +96,7 @@ def list_jds(db: Session, status: str = "active") -> list[dict]:
 
 
 def get_jd(db: Session, jd_id: str) -> dict:
-    jd = db.get(models.JobDescription, _uuid(jd_id))
+    jd = _resolve_jd(db, jd_id)
     if jd is None:
         return {"error": "Không tìm thấy JD."}
     return {
@@ -75,11 +114,14 @@ def search_candidates(
     min_score: float = 0.0,
     skill: str | None = None,
     limit: int = 20,
-) -> list[dict]:
+) -> dict:
+    jd = _resolve_jd(db, jd_id)
+    if jd is None:
+        return {"error": f"Không tìm thấy vị trí: {jd_id}"}
     q = (
         db.query(models.Candidate)
         .join(models.Evaluation, models.Evaluation.cv_id == models.Candidate.id)
-        .filter(models.Candidate.jd_id == _uuid(jd_id))
+        .filter(models.Candidate.jd_id == jd.id)
         .filter(models.Evaluation.score >= min_score)
     )
     if skill:
@@ -87,11 +129,21 @@ def search_candidates(
             models.CandidateSkill, models.CandidateSkill.cv_id == models.Candidate.id
         ).filter(models.CandidateSkill.normalized_name == skill.strip().lower())
     rows = q.order_by(models.Evaluation.score.desc()).limit(min(limit, 50)).all()
-    return [_candidate_brief(c) for c in rows]
+
+    briefs = [_candidate_brief(c) for c in rows]
+    result = {"jd_title": jd.title, "count": len(briefs), "candidates": briefs}
+    # LC2: mở đúng project và tô sáng những ứng viên khớp (query ?highlight=).
+    if briefs:
+        ids = ",".join(b["candidate_id"] for b in briefs)
+        result["ui_action"] = {
+            "type": "navigate",
+            "path": f"/projects/{jd.id}?highlight={ids}",
+        }
+    return result
 
 
 def get_candidate(db: Session, candidate_id: str) -> dict:
-    c = db.get(models.Candidate, _uuid(candidate_id))
+    c = _resolve_candidate(db, candidate_id)
     if c is None:
         return {"error": "Không tìm thấy ứng viên."}
     ev = c.evaluation
@@ -108,6 +160,8 @@ def get_candidate(db: Session, candidate_id: str) -> dict:
             {"name": p.name, "tech_stack": p.tech_stack, "github_url": p.github_url}
             for p in c.projects
         ],
+        # LC1: mở popup chi tiết đánh giá ứng viên này trên app (query ?open=).
+        "ui_action": {"type": "navigate", "path": f"/projects/{c.jd_id}?open={c.id}"},
     }
 
 
@@ -182,27 +236,35 @@ def send_interview_invite(
             "email_preview": preview,
         }
 
-    # Gửi thật (fastapi_mail là async -> chạy trong event loop tạm)
-    from fastapi_mail import FastMail, MessageSchema, MessageType
-    from app.services.email import conf
+    # Gửi thật qua hàm chuẩn trong services/email.py (fastapi_mail là async).
+    from app.services.email import send_interview_email
 
-    html = (
-        f"<div style='font-family:Arial,sans-serif;padding:20px'>"
-        f"<h2 style='color:#2c3e50'>Thư mời phỏng vấn</h2>"
-        f"<p>Kính gửi {preview['name']},</p>"
-        f"<p>Chúng tôi trân trọng mời bạn tham gia buổi phỏng vấn:</p>"
-        f"<ul><li><b>Thời gian:</b> {when}</li>"
-        f"<li><b>Hình thức:</b> {location}</li></ul>"
-        f"<p>Vui lòng phản hồi email này để xác nhận. Trân trọng.</p></div>"
-    )
-    message = MessageSchema(
-        subject="[HireWise] Thư mời phỏng vấn",
-        recipients=[c.email],
-        body=html,
-        subtype=MessageType.html,
-    )
-    asyncio.run(FastMail(conf).send_message(message))
+    asyncio.run(send_interview_email(c.email, preview["name"], when, location))
     return {"status": "sent", **preview}
+
+
+# --------------------------------------------------------------------------- #
+# TOOLS điều hướng GIAO DIỆN (không đổi dữ liệu; trả 'ui_action' để FE nhảy trang)
+# --------------------------------------------------------------------------- #
+def open_jd(db: Session, jd_id: str) -> dict:
+    """Mở trang chi tiết 1 vị trí (project) ở phần giao diện bên phải."""
+    jd = _resolve_jd(db, jd_id)
+    if jd is None:
+        return {"error": "Không tìm thấy JD."}
+    return {
+        "opened": jd.title,
+        "ui_action": {"type": "navigate", "path": f"/projects/{jd.id}"},
+    }
+
+
+def open_dashboard(db: Session) -> dict:
+    """Mở màn hình Dashboard (danh sách vị trí tuyển dụng)."""
+    return {"ui_action": {"type": "navigate", "path": "/"}}
+
+
+def open_shortlisting(db: Session) -> dict:
+    """Mở màn hình Shortlisting (danh sách rút gọn ứng viên)."""
+    return {"ui_action": {"type": "navigate", "path": "/shortlisting"}}
 
 
 # --------------------------------------------------------------------------- #
@@ -217,6 +279,9 @@ TOOL_FUNCS = {
     "compare_candidates": compare_candidates,
     "generate_interview_questions": generate_interview_questions,
     "send_interview_invite": send_interview_invite,
+    "open_jd": open_jd,
+    "open_dashboard": open_dashboard,
+    "open_shortlisting": open_shortlisting,
 }
 
 # Tool cần user_id của HR đăng nhập -> agent loop tiêm, không đưa vào schema.
@@ -247,7 +312,7 @@ TOOLS = [
             "description": "Xem chi tiết 1 JD (yêu cầu đã cấu trúc + markdown).",
             "parameters": {
                 "type": "object",
-                "properties": {"jd_id": {"type": "string"}},
+                "properties": {"jd_id": {"type": "string", "description": "UUID của JD HOẶC tên vị trí, vd 'Backend Developer'."}},
                 "required": ["jd_id"],
             },
         },
@@ -260,8 +325,8 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "jd_id": {"type": "string"},
-                    "min_score": {"type": "number", "description": "Điểm tối thiểu 0-10."},
+                    "jd_id": {"type": "string", "description": "UUID của JD HOẶC tên vị trí, vd 'Backend Developer'."},
+                    "min_score": {"type": "number", "description": "Điểm tối thiểu (thang 0-100)."},
                     "skill": {"type": "string", "description": "Tên 1 kỹ năng cần có, vd 'python'."},
                     "limit": {"type": "integer"},
                 },
@@ -276,7 +341,7 @@ TOOLS = [
             "description": "Chi tiết 1 ứng viên: thông tin, điểm, giải thích, bằng chứng, kỹ năng, dự án.",
             "parameters": {
                 "type": "object",
-                "properties": {"candidate_id": {"type": "string"}},
+                "properties": {"candidate_id": {"type": "string", "description": "UUID HOẶC tên ứng viên, vd 'Nguyễn Minh Khoa'."}},
                 "required": ["candidate_id"],
             },
         },
@@ -344,6 +409,34 @@ TOOLS = [
                 },
                 "required": ["candidate_id", "when"],
             },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "open_jd",
+            "description": "Điều hướng GIAO DIỆN bên phải sang trang chi tiết của 1 vị trí (project). Dùng khi HR muốn 'mở/xem/vào' một vị trí cụ thể.",
+            "parameters": {
+                "type": "object",
+                "properties": {"jd_id": {"type": "string", "description": "UUID của JD HOẶC tên vị trí, vd 'Backend Developer'."}},
+                "required": ["jd_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "open_dashboard",
+            "description": "Điều hướng giao diện về màn hình Dashboard (danh sách các vị trí tuyển dụng).",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "open_shortlisting",
+            "description": "Điều hướng giao diện sang màn hình Shortlisting.",
+            "parameters": {"type": "object", "properties": {}},
         },
     },
 ]

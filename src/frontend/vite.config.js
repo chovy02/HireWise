@@ -58,6 +58,7 @@ export default defineConfig({
       '/admin': backendProxy(),
       '/interviews': backendProxy(),
       '/compare': backendProxy(),
+      '/agent': backendProxy(),
     },
   },
 })

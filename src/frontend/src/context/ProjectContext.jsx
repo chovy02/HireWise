@@ -11,6 +11,21 @@ function reRank(candidates) {
     .map((c, i) => ({ ...c, rank: i + 1 }))
 }
 
+// Map 1 JD (bản rút gọn từ listJds) sang shape "project" mà UI dùng.
+function mapJdToProject(jd) {
+  return {
+    id: jd.id,
+    backendJdId: jd.id,
+    title: jd.title,
+    jdInput: jd.raw_text || '',
+    jdMarkdown: '',
+    sources: [],
+    createdAt: jd.created_at,
+    candidates: [],
+    candidateCount: jd.candidate_count ?? 0,
+  }
+}
+
 // Holds every project (== JD campaign) plus its candidates, and the override
 // logic. Frontend-only: state lives here, no backend calls. Replace the bodies
 // with fetch() when the API exists.
@@ -23,6 +38,17 @@ export function ProjectProvider({ children }) {
   // sẽ thấy "không có project + loading=false" và redirect về dashboard trước khi
   // kịp hydrate. Giữ true tới khi auth ổn định + danh sách JD tải xong.
   const [loading, setLoading] = useState(true)
+
+  // Tải lại danh sách project từ backend. Dùng cho AI Copilot: sau khi agent tạo
+  // JD mới ở server, gọi hàm này để bảng bên phải phản ánh ngay.
+  const refreshProjects = useCallback(async () => {
+    try {
+      const jds = await listJds()
+      setProjects(jds.map(mapJdToProject))
+    } catch {
+      /* giữ nguyên state cũ nếu refresh lỗi */
+    }
+  }, [])
 
   // Hydrate danh sách project từ backend mỗi khi đăng nhập. TRƯỚC ĐÂY state chỉ nằm
   // trong RAM nên F5 / mở lại là mất sạch dù JD vẫn còn trong DB. Chạy lại khi
@@ -44,19 +70,7 @@ export function ProjectProvider({ children }) {
     listJds()
       .then((jds) => {
         if (cancelled) return
-        setProjects(
-          jds.map((jd) => ({
-            id: jd.id,
-            backendJdId: jd.id,
-            title: jd.title,
-            jdInput: jd.raw_text || '', // mô tả gốc HR nhập (list đã trả kèm)
-            jdMarkdown: '', // markdown đầy đủ vẫn fetch lazy ở ProjectDetail
-            sources: [], // nguồn ingest cũ chưa lưu server-side
-            createdAt: jd.created_at,
-            candidates: [], // dữ liệu ứng viên THẬT được fetch riêng ở ProjectDetail
-            candidateCount: jd.candidate_count ?? 0, // số thật từ backend (cho dashboard)
-          }))
-        )
+        setProjects(jds.map(mapJdToProject))
       })
       .catch(() => {
         if (!cancelled) setProjects([])
@@ -206,6 +220,7 @@ export function ProjectProvider({ children }) {
       value={{
         projects,
         loading,
+        refreshProjects,
         addProject,
         addSource,
         getProject,

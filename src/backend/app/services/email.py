@@ -37,3 +37,30 @@ async def send_verification_email(email_to: EmailStr, token: str):
 
     fm = FastMail(conf)
     await fm.send_message(message)
+
+
+async def send_interview_email(email_to: EmailStr, name: str, when: str, location: str):
+    """Soạn và gửi email MỜI PHỎNG VẤN cho ứng viên (dùng bởi AI Agent tool)."""
+
+    html_content = f"""
+    <div style="font-family: Arial, sans-serif; padding: 20px;">
+        <h2 style="color: #2c3e50;">Thư mời phỏng vấn</h2>
+        <p>Kính gửi {name},</p>
+        <p>Chúng tôi trân trọng mời bạn tham gia buổi phỏng vấn:</p>
+        <ul>
+            <li><strong>Thời gian:</strong> {when}</li>
+            <li><strong>Hình thức / Địa điểm:</strong> {location}</li>
+        </ul>
+        <p>Vui lòng phản hồi email này để xác nhận sự tham gia của bạn. Trân trọng.</p>
+    </div>
+    """
+
+    message = MessageSchema(
+        subject="[HireWise] Thư mời phỏng vấn",
+        recipients=[email_to],
+        body=html_content,
+        subtype=MessageType.html,
+    )
+
+    fm = FastMail(conf)
+    await fm.send_message(message)

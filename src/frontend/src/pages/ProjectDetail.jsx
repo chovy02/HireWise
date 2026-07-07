@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
-import { useParams, useNavigate, Navigate } from 'react-router-dom'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useParams, useNavigate, Navigate, useSearchParams } from 'react-router-dom'
 import {
   Bot,
   CheckCircle2,
@@ -151,7 +151,7 @@ function GeneratedJD({ markdown }) {
 
 // Poll GET /jds/{id}/candidates để hiển thị tiến độ chấm điểm CV thật (do Celery
 // worker xử lý nền). Tự dừng poll khi không còn CV nào ở trạng thái PENDING.
-function LiveProcessing({ jdId, refreshKey, onOpenCandidate }) {
+function LiveProcessing({ jdId, refreshKey, onOpenCandidate, highlightIds }) {
   const [rows, setRows] = useState(null) // null = đang tải lần đầu
   const [error, setError] = useState('')
 
@@ -224,6 +224,8 @@ function LiveProcessing({ jdId, refreshKey, onOpenCandidate }) {
               // Ứng viên đã chấm xong -> click để mở popup chi tiết đánh giá ngay
               // tại trang này (không cần sang trang Shortlisting).
               const clickable = c.status === 'COMPLETED'
+              // LC2: AI Copilot search -> tô sáng đúng những ứng viên khớp.
+              const highlighted = highlightIds?.has(c.id)
               return (
                 <div
                   key={c.id}
@@ -241,7 +243,11 @@ function LiveProcessing({ jdId, refreshKey, onOpenCandidate }) {
                       : undefined
                   }
                   title={clickable ? 'Xem chi tiết đánh giá' : undefined}
-                  className={`flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2 ${
+                  className={`flex items-center justify-between rounded-lg border px-3 py-2 ${
+                    highlighted
+                      ? 'border-indigo-400 bg-indigo-50 ring-2 ring-indigo-300'
+                      : 'border-slate-200'
+                  } ${
                     clickable
                       ? 'cursor-pointer transition hover:border-indigo-300 hover:bg-indigo-50/40'
                       : ''
@@ -257,6 +263,11 @@ function LiveProcessing({ jdId, refreshKey, onOpenCandidate }) {
                     </span>
                   </div>
                   <div className="flex flex-shrink-0 items-center gap-2">
+                    {highlighted && (
+                      <Badge variant="ai" upper={false}>
+                        AI đề xuất
+                      </Badge>
+                    )}
                     <Badge variant={meta.variant} upper={false}>
                       {meta.label}
                     </Badge>
@@ -289,6 +300,20 @@ export default function ProjectDetail() {
   // Ứng viên đang mở popup chi tiết đánh giá (ngay trên trang này).
   const [openCandidateId, setOpenCandidateId] = useState(null)
   const project = getProject(id)
+
+  // AI Copilot điều khiển trang này qua query param:
+  //   ?open=<candidateId>       -> LC1: bật popup chi tiết ứng viên
+  //   ?highlight=<id1,id2,...>  -> LC2: tô sáng các ứng viên khớp search
+  const [searchParams] = useSearchParams()
+  const openParam = searchParams.get('open')
+  const highlightParam = searchParams.get('highlight')
+  const highlightIds = useMemo(
+    () => new Set((highlightParam || '').split(',').filter(Boolean)),
+    [highlightParam]
+  )
+  useEffect(() => {
+    if (openParam) setOpenCandidateId(openParam)
+  }, [openParam])
 
   // Project được hydrate từ listJds() không kèm jd_markdown -> fetch đầy đủ 1 lần.
   useEffect(() => {
@@ -488,6 +513,7 @@ export default function ProjectDetail() {
                 jdId={project.id}
                 refreshKey={liveKey}
                 onOpenCandidate={setOpenCandidateId}
+                highlightIds={highlightIds}
               />
             </Card>
           </div>
