@@ -47,6 +47,21 @@ const INGEST_TABS = [
 ]
 
 // Minimal markdown renderer for the generated JD (headings, bullets, tables).
+// Render inline Markdown **bold** thành <strong>, giữ nguyên phần còn lại.
+function renderInline(text) {
+  const parts = text.split(/(\*\*[^*]+\*\*)/g)
+  return parts.map((part, k) => {
+    if (part.startsWith('**') && part.endsWith('**')) {
+      return (
+        <strong key={k} className="font-semibold text-slate-900">
+          {part.slice(2, -2)}
+        </strong>
+      )
+    }
+    return part
+  })
+}
+
 function GeneratedJD({ markdown }) {
   const lines = markdown.split('\n')
   const blocks = []
@@ -79,7 +94,7 @@ function GeneratedJD({ markdown }) {
       blocks.push(
         <ul key={i} className="mt-2 list-disc space-y-1 pl-5 text-sm text-slate-700">
           {items.map((it, k) => (
-            <li key={k}>{it}</li>
+            <li key={k}>{renderInline(it)}</li>
           ))}
         </ul>
       )
@@ -112,7 +127,7 @@ function GeneratedJD({ markdown }) {
               <tr key={r} className="border-b border-slate-100">
                 {row.map((c, k) => (
                   <td key={k} className="py-2 pr-4 text-slate-700">
-                    {c}
+                    {renderInline(c)}
                   </td>
                 ))}
               </tr>
@@ -125,7 +140,7 @@ function GeneratedJD({ markdown }) {
     } else {
       blocks.push(
         <p key={i} className="mt-2 text-sm leading-relaxed text-slate-600">
-          {line}
+          {renderInline(line)}
         </p>
       )
       i++
