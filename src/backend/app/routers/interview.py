@@ -13,6 +13,18 @@ router = APIRouter(
     dependencies=[Depends(require_role("hr_staff"))],
 )
 
+@router.get("/candidate/{candidate_id}", response_model=schemas.InterviewResponse)
+def get_candidate_interview(
+    candidate_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Lấy buổi phỏng vấn hiện có của ứng viên (nếu đã tạo)."""
+    interview = db.query(models.Interview).filter(models.Interview.cv_id == candidate_id).first()
+    if not interview:
+        raise HTTPException(status_code=404, detail="Ứng viên chưa có buổi phỏng vấn.")
+    return interview
+
 @router.post("/candidate/{candidate_id}/generate", response_model=schemas.InterviewResponse)
 def generate_interview(
     candidate_id: UUID,

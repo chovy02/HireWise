@@ -63,6 +63,7 @@ def list_jds(
         schemas.JDListItem(
             id=jd.id,
             title=jd.title,
+            raw_text=jd.raw_text,
             status=jd.status,
             created_at=jd.created_at,
             candidate_count=counts.get(jd.id, 0),

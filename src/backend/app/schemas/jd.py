@@ -27,6 +27,7 @@ class JDListItem(BaseModel):
     """Bản rút gọn cho danh sách JD."""
     id: UUID
     title: str
+    raw_text: str              # mô tả gốc HR nhập (để dashboard hiện ngay sau khi F5)
     status: str
     created_at: datetime
     candidate_count: int = 0   # số ứng viên thật của JD (để hiển thị trên dashboard)

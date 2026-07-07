@@ -27,6 +27,7 @@ class InterviewResponse(BaseModel):
     id: UUID
     cv_id: UUID
     status: str
+    feedback_summary: Optional[str] = None
     scheduled_at: Optional[datetime]
     questions: List[InterviewQuestionResponse] = []
 
