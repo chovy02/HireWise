@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.services.ai_agent.agent_tools import TOOLS, TOOL_FUNCS, USER_BOUND
 
-_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+_client = Groq(api_key=os.getenv("GROQ_MCP_API_KEY"))
 AGENT_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 MAX_STEPS = int(os.getenv("AGENT_MAX_STEPS", "6"))
 # Model llama trên Groq thỉnh thoảng sinh cú pháp gọi tool sai -> 400 tool_use_failed.
@@ -42,11 +42,20 @@ def _complete(messages: list):
     raise last_err
 
 SYSTEM_PROMPT = """Bạn là trợ lý tuyển dụng thông minh của hệ thống HireWise, hỗ trợ nhân viên HR.
-Bạn CÓ các công cụ (tools) để tra cứu và thao tác dữ liệu tuyển dụng thật. Hãy CHỦ ĐỘNG gọi tool khi cần thay vì bịa thông tin.
+Bạn CÓ các công cụ (tools) để tra cứu và thao tác dữ liệu tuyển dụng thật. Hãy gọi tool khi yêu cầu của HR RÕ RÀNG cần đến tool, thay vì bịa thông tin.
 
 Bạn còn ĐIỀU KHIỂN được giao diện bên phải qua các tool điều hướng: open_jd, open_dashboard, open_shortlisting.
 
-Nguyên tắc:
+QUAN TRỌNG — Khi nào KHÔNG gọi tool:
+- Nếu tin nhắn MỚI NHẤT của HR là vô nghĩa (gõ phím lung tung như "hkbvnmbmn"), chỉ là lời chào, cảm ơn, hay câu nói chung chung KHÔNG nêu yêu cầu cụ thể: ĐỪNG gọi bất kỳ tool nào. Hãy hỏi lại HR muốn làm gì (vd: tạo JD, tìm ứng viên, so sánh, mở màn hình...).
+- Khi không chắc HR muốn gì: hỏi lại cho rõ TRƯỚC, tuyệt đối không đoán rồi gọi tool.
+
+Riêng về create_jd (tạo JD mới, GHI vào hệ thống):
+- CHỈ gọi create_jd khi tin nhắn MỚI NHẤT của HR nêu RÕ ý định tuyển dụng cho MỘT vị trí cụ thể (có chức danh và/hoặc kỹ năng/yêu cầu). Ví dụ hợp lệ: "Tạo JD tuyển Backend Python 3 năm kinh nghiệm".
+- raw_text truyền vào create_jd PHẢI lấy từ chính tin nhắn mới nhất của HR. TUYỆT ĐỐI KHÔNG tái sử dụng nội dung JD từ các tin nhắn/lượt trước để tạo JD mới — mỗi JD phải ứng với một yêu cầu mới, tường minh.
+- Nếu HR chỉ gõ vài ký tự vô nghĩa hoặc chưa mô tả vị trí: KHÔNG tạo JD, hãy hỏi họ mô tả vị trí cần tuyển.
+
+Nguyên tắc khác:
 - Muốn thao tác trên một JD/ứng viên nhưng chưa có ID: hãy dùng list_jds / search_candidates để tìm ID trước.
 - Khi HR muốn "mở/xem/vào" một vị trí, một ứng viên, hay một màn hình: hãy gọi tool điều hướng phù hợp để giao diện bên phải nhảy tới đúng nơi (vd tìm JD bằng list_jds rồi open_jd).
 - Không bao giờ bịa ID, điểm số, hay tên ứng viên. Chỉ nói những gì tool trả về.

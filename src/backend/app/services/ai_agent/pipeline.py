@@ -1,3 +1,4 @@
+import re
 import uuid
 
 from sqlalchemy.orm import Session
@@ -134,14 +135,45 @@ def _build_jd_markdown(jd_data: dict) -> str:
     return "\n".join(lines)
 
 
+# Nguyên âm (kể cả tiếng Việt có dấu) để phân biệt chữ thật với chuỗi gõ phím
+# lung tung ("hkbvnmbmn"). Chuỗi phụ âm liền không dấu gần như chắc chắn là rác.
+_VOWELS = set("aeiouy" "àáảãạăằắẳẵặâấầẩẫậ" "èéẻẽẹêềếểễệ" "ìíỉĩị"
+              "òóỏõọôồốổỗộơờớởỡợ" "ùúủũụưừứửữự" "ỳýỷỹỵ")
+
+
+def _looks_like_junk(raw_text: str) -> bool:
+    """
+    Chặn rác do người dùng spam ("hkbvnmbmn", "hgjhbhnm jhjhbnm") trước khi tốn
+    một lượt gọi AI và tạo JD vô nghĩa. Heuristic bảo thủ (chỉ chặn khi gần như
+    chắc chắn là rác), phần "thông minh" thật sự do agent/LLM đảm nhiệm.
+
+    Coi là rác nếu KHÔNG có đủ token "giống chữ" — token dài >=2 và chứa nguyên âm.
+    """
+    text = (raw_text or "").strip()
+    if len(text) < 3:
+        return True
+    tokens = re.findall(r"[^\W\d_]+", text, flags=re.UNICODE)
+    wordlike = [t for t in tokens if len(t) >= 2 and any(c.lower() in _VOWELS for c in t)]
+    if not wordlike:
+        return True
+    # Chỉ đúng 1 token giống chữ và tổng nội dung quá ngắn -> vẫn coi là chưa đủ.
+    return len(wordlike) < 2 and len(text) < 6
+
+
 def create_jd_from_text(db: Session, raw_text: str, created_by) -> models.JobDescription:
     """
     UC U001 - Process & Structure JD.
     Nhận JD ngôn ngữ tự nhiên từ HR, dùng Gemini chuẩn hóa, lưu vào bảng job_descriptions.
 
     Raises:
-        ValueError: nếu JD quá thiếu thông tin để xử lý (jd_processor trả jd_error).
+        ValueError: nếu nội dung là rác/spam hoặc JD quá thiếu thông tin để xử lý.
     """
+    if _looks_like_junk(raw_text):
+        raise ValueError(
+            "Nội dung chưa giống một yêu cầu tuyển dụng. "
+            "Hãy mô tả vị trí cần tuyển (chức danh, kỹ năng, kinh nghiệm...)."
+        )
+
     jd_data = process_jd(raw_text)
     if jd_data.get("jd_error"):
         raise ValueError(jd_data["jd_error"])
