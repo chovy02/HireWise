@@ -25,10 +25,21 @@ export default function CopilotChat() {
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const scrollRef = useRef(null)
+  const textareaRef = useRef(null)
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
   }, [messages, loading])
+
+  // Tự giãn chiều cao textarea theo số dòng, tối đa ~6 dòng rồi cho cuộn nội bộ.
+  const MAX_INPUT_HEIGHT = 140
+  useEffect(() => {
+    const el = textareaRef.current
+    if (!el) return
+    el.style.height = 'auto' // reset để scrollHeight phản ánh đúng nội dung hiện tại
+    el.style.height = `${Math.min(el.scrollHeight, MAX_INPUT_HEIGHT)}px`
+    el.style.overflowY = el.scrollHeight > MAX_INPUT_HEIGHT ? 'auto' : 'hidden'
+  }, [input])
 
   // Thực thi các directive điều hướng giao diện mà agent trả về.
   function runUiActions(actions = []) {
@@ -135,6 +146,7 @@ export default function CopilotChat() {
       <div className="border-t border-slate-100 p-3">
         <div className="flex items-end gap-2 rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-2 focus-within:border-indigo-400">
           <textarea
+            ref={textareaRef}
             rows={1}
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -145,7 +157,7 @@ export default function CopilotChat() {
               }
             }}
             placeholder="Nhập yêu cầu…"
-            className="max-h-28 flex-1 resize-none bg-transparent text-sm text-slate-800 outline-none placeholder:text-slate-400"
+            className="flex-1 resize-none bg-transparent text-sm leading-5 text-slate-800 outline-none placeholder:text-slate-400"
           />
           <button
             onClick={() => send()}
