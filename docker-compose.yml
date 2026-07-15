@@ -55,9 +55,9 @@ services:
       - .env
 
   mcp:
-    # Image RIÊNG (pydantic mới cho mcp), nhưng mount code backend vào /app và đặt
-    # PYTHONPATH=/app để server.py import được app.* (models/services/agent_tools).
-    build: ./src/mcp_server
+    # DÙNG CHUNG image backend (đã có sẵn mcp + mọi deps). Mount code backend vào
+    # /app và mount server.py vào /mcpsrv; PYTHONPATH=/app để import được app.*.
+    build: ./src/backend
     container_name: hirewise_mcp
     restart: always
     command: python /mcpsrv/server.py
