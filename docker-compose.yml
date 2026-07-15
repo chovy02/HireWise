@@ -20,6 +20,7 @@ services:
     depends_on:
       - db
       - redis
+      - mcp
     ports:
       - "8000:8000"
     volumes:
@@ -29,6 +30,8 @@ services:
       - .env
     environment:
       - CV_STORAGE_DIR=/data/cv_storage
+      # Agent loop của web gọi tool QUA MCP server (service `mcp` cùng network).
+      - MCP_SERVER_URL=http://mcp:8001/sse
 
   redis:
     image: redis:7-alpine
@@ -52,14 +55,24 @@ services:
       - .env
 
   mcp:
+    # Image RIÊNG (pydantic mới cho mcp), nhưng mount code backend vào /app và đặt
+    # PYTHONPATH=/app để server.py import được app.* (models/services/agent_tools).
     build: ./src/mcp_server
     container_name: hirewise_mcp
     restart: always
+    command: python /mcpsrv/server.py
+    environment:
+      - PYTHONPATH=/app
+    env_file:
+      - .env
+    depends_on:
+      - db
+      - redis
     ports:
       - "8001:8001"
     volumes:
-      - ./src/mcp_server:/app
-    command: python server.py
+      - ./src/backend:/app
+      - ./src/mcp_server:/mcpsrv
   frontend:
     build: ./src/frontend
     container_name: hirewise_frontend

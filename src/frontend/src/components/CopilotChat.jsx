@@ -1,7 +1,21 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Sparkles, Send, Loader2, Wrench } from 'lucide-react'
-import { chatWithAgent } from '../api/agent.js'
+import {
+  Sparkles,
+  Send,
+  Loader2,
+  Wrench,
+  SquarePen,
+  History,
+  Trash2,
+  X,
+} from 'lucide-react'
+import {
+  chatWithAgent,
+  listChatSessions,
+  getChatSession,
+  deleteChatSession,
+} from '../api/agent.js'
 import { useProjects } from '../context/ProjectContext.jsx'
 
 const SUGGESTIONS = [
@@ -10,20 +24,40 @@ const SUGGESTIONS = [
   'Mở vị trí Backend ra xem',
 ]
 
-// AI Copilot: cột trái. HR chat -> agent tự gọi tool -> điều hướng/ làm mới phần
-// giao diện bên phải qua `ui_actions` do backend trả về.
+const WELCOME = {
+  role: 'ai',
+  text: 'Xin chào! Mình là trợ lý tuyển dụng. Bạn cứ ra lệnh, mình sẽ thao tác và mở đúng màn hình bên trái cho bạn.',
+}
+
+// Ngày dạng "14/07 18:42" cho danh sách lịch sử.
+function shortDate(iso) {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  return d.toLocaleString('vi-VN', {
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+// AI Copilot: cột phải. HR chat -> agent gọi tool qua MCP -> điều hướng/làm mới phần
+// giao diện bên trái qua `ui_actions`. Lịch sử hội thoại lưu ở backend (chat_sessions).
 export default function CopilotChat() {
   const navigate = useNavigate()
   const { refreshProjects } = useProjects()
 
-  const [messages, setMessages] = useState([
-    {
-      role: 'ai',
-      text: 'Xin chào! Mình là trợ lý tuyển dụng. Bạn cứ ra lệnh, mình sẽ thao tác và mở đúng màn hình bên phải cho bạn.',
-    },
-  ])
+  const [messages, setMessages] = useState([WELCOME])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
+  // Phiên chat do backend tạo; lưu lại để các lượt sau nối đúng lịch sử trong DB.
+  const [sessionId, setSessionId] = useState(null)
+
+  // Panel lịch sử
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [sessions, setSessions] = useState([])
+  const [loadingSessions, setLoadingSessions] = useState(false)
+
   const scrollRef = useRef(null)
   const textareaRef = useRef(null)
 
@@ -41,6 +75,54 @@ export default function CopilotChat() {
     el.style.overflowY = el.scrollHeight > MAX_INPUT_HEIGHT ? 'auto' : 'hidden'
   }, [input])
 
+  const loadSessions = useCallback(async () => {
+    setLoadingSessions(true)
+    try {
+      setSessions(await listChatSessions())
+    } catch {
+      setSessions([])
+    } finally {
+      setLoadingSessions(false)
+    }
+  }, [])
+
+  // Mở panel lịch sử -> nạp danh sách phiên.
+  useEffect(() => {
+    if (historyOpen) loadSessions()
+  }, [historyOpen, loadSessions])
+
+  function newChat() {
+    setSessionId(null)
+    setMessages([WELCOME])
+    setInput('')
+    setHistoryOpen(false)
+  }
+
+  async function openSession(id) {
+    setHistoryOpen(false)
+    setLoading(true)
+    try {
+      const data = await getChatSession(id)
+      setSessionId(id)
+      setMessages(data.messages?.length ? data.messages : [WELCOME])
+    } catch (err) {
+      setMessages([WELCOME, { role: 'ai', text: `⚠️ ${err.message}`, error: true }])
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function removeSession(e, id) {
+    e.stopPropagation() // đừng mở phiên khi bấm nút xoá
+    try {
+      await deleteChatSession(id)
+      setSessions((list) => list.filter((s) => s.session_id !== id))
+      if (id === sessionId) newChat() // đang mở đúng phiên vừa xoá
+    } catch {
+      /* im lặng — không đáng làm phiền HR */
+    }
+  }
+
   // Thực thi các directive điều hướng giao diện mà agent trả về.
   function runUiActions(actions = []) {
     for (const a of actions) {
@@ -53,16 +135,13 @@ export default function CopilotChat() {
     const content = (text ?? input).trim()
     if (!content || loading) return
 
-    // Lịch sử gửi lên backend (chỉ role + text, đổi 'ai' -> 'assistant').
-    const history = messages
-      .filter((m) => m.role === 'user' || m.role === 'ai')
-      .map((m) => ({ role: m.role === 'ai' ? 'assistant' : 'user', content: m.text }))
-
     setMessages((m) => [...m, { role: 'user', text: content }])
     setInput('')
     setLoading(true)
     try {
-      const res = await chatWithAgent(content, history)
+      // Backend tự dựng lịch sử từ DB theo session_id -> không gửi lại history.
+      const res = await chatWithAgent(content, sessionId)
+      if (res.session_id) setSessionId(res.session_id)
       setMessages((m) => [
         ...m,
         { role: 'ai', text: res.reply || '(không có phản hồi)', tools: res.tool_calls },
@@ -76,17 +155,85 @@ export default function CopilotChat() {
   }
 
   return (
-    <aside className="flex h-screen w-1/5 min-w-[280px] max-w-sm flex-shrink-0 flex-col border-l border-slate-200 bg-white">
+    <aside className="relative flex h-screen w-1/5 min-w-[280px] max-w-sm flex-shrink-0 flex-col border-l border-slate-200 bg-white">
       {/* Header */}
       <div className="flex items-center gap-2.5 border-b border-slate-100 px-4 py-4">
         <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-violet-500 to-indigo-600 text-white">
           <Sparkles size={16} />
         </div>
-        <div>
+        <div className="min-w-0 flex-1">
           <p className="text-sm font-semibold text-slate-900">AI Copilot</p>
-          <p className="text-xs text-slate-400">Trợ lý tuyển dụng</p>
+          <p className="truncate text-xs text-slate-400">Trợ lý tuyển dụng</p>
         </div>
+        <button
+          onClick={newChat}
+          title="Cuộc trò chuyện mới"
+          className="rounded-md p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+        >
+          <SquarePen size={17} />
+        </button>
+        <button
+          onClick={() => setHistoryOpen((v) => !v)}
+          title="Lịch sử trò chuyện"
+          className={`rounded-md p-1.5 transition hover:bg-slate-100 ${
+            historyOpen ? 'bg-slate-100 text-indigo-600' : 'text-slate-400 hover:text-slate-700'
+          }`}
+        >
+          <History size={17} />
+        </button>
       </div>
+
+      {/* Panel lịch sử (phủ lên khung chat) */}
+      {historyOpen && (
+        <div className="absolute inset-x-0 bottom-0 top-[65px] z-10 flex flex-col bg-white">
+          <div className="flex items-center justify-between border-b border-slate-100 px-4 py-2.5">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Lịch sử trò chuyện
+            </p>
+            <button
+              onClick={() => setHistoryOpen(false)}
+              className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+            >
+              <X size={15} />
+            </button>
+          </div>
+
+          <div className="flex-1 overflow-y-auto p-2">
+            {loadingSessions ? (
+              <p className="flex items-center gap-2 px-2 py-3 text-sm text-slate-400">
+                <Loader2 size={14} className="animate-spin" /> Đang tải…
+              </p>
+            ) : sessions.length === 0 ? (
+              <p className="px-2 py-3 text-sm text-slate-400">Chưa có cuộc trò chuyện nào.</p>
+            ) : (
+              sessions.map((s) => (
+                <div
+                  key={s.session_id}
+                  onClick={() => openSession(s.session_id)}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => e.key === 'Enter' && openSession(s.session_id)}
+                  className={`group flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 transition hover:bg-slate-100 ${
+                    s.session_id === sessionId ? 'bg-indigo-50' : ''
+                  }`}
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm text-slate-700">{s.title}</p>
+                    <p className="text-[11px] text-slate-400">{shortDate(s.created_at)}</p>
+                  </div>
+                  <button
+                    onClick={(e) => removeSession(e, s.session_id)}
+                    title="Xoá"
+                    className="rounded p-1 text-slate-300 opacity-0 transition group-hover:opacity-100 hover:bg-red-50 hover:text-red-500"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Messages */}
       <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto px-3 py-4">

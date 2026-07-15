@@ -15,11 +15,13 @@ python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 bcrypt==3.2.2
 
-fastapi-mail==1.4.1
+# Bỏ ghim cứng: package `mcp` (backend làm MCP client) cần pydantic/pydantic-settings
+# mới hơn, xung đột với các bản ghim cũ. Để pip tự giải bộ tương thích.
+fastapi-mail
 
 # Xác thực dữ liệu và Biến môi trường
-pydantic[email]==2.6.4
-pydantic-settings==2.2.1
+pydantic[email]>=2.7.2
+pydantic-settings>=2.5.2
 
 pymupdf==1.24.0
 google-generativeai==0.8.3
@@ -31,3 +33,7 @@ python-dotenv==1.0.1
 # Task queue nền: xử lý/chấm điểm CV bất đồng bộ, không chặn request upload
 celery[redis]==5.3.6
 redis==5.0.3
+
+# Backend làm MCP CLIENT: agent loop gọi tool qua MCP server (SSE) thay vì gọi
+# thẳng hàm Python -> MCP thực sự nằm trong luồng chạy của web.
+mcp

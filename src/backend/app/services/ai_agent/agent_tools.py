@@ -81,6 +81,8 @@ def _candidate_brief(c: models.Candidate) -> dict:
         "status": c.status,
         "score": ev.score if ev else None,
         "skills": [s.skill_name for s in c.skills],
+        # Ứng viên thuộc vị trí nào (cần khi tìm xuyên nhiều JD).
+        "jd_title": c.jd.title if c.jd else None,
     }
 
 
@@ -110,35 +112,54 @@ def get_jd(db: Session, jd_id: str) -> dict:
 
 def search_candidates(
     db: Session,
-    jd_id: str,
+    jd_id: str | None = None,
     min_score: float = 0.0,
     skill: str | None = None,
     limit: int = 20,
 ) -> dict:
-    jd = _resolve_jd(db, jd_id)
-    if jd is None:
-        return {"error": f"Không tìm thấy vị trí: {jd_id}"}
+    """
+    Tìm ứng viên đã được chấm điểm.
+
+    `jd_id` là TUỲ CHỌN: bỏ trống -> tìm XUYÊN MỌI vị trí (dùng khi HR chỉ hỏi kiểu
+    "tìm người biết Python" mà không nhắc vị trí nào). Có jd_id -> chỉ trong vị trí đó.
+    """
+    jd = None
+    if jd_id:
+        jd = _resolve_jd(db, jd_id)
+        if jd is None:
+            return {"error": f"Không tìm thấy vị trí: {jd_id}"}
+
     q = (
         db.query(models.Candidate)
         .join(models.Evaluation, models.Evaluation.cv_id == models.Candidate.id)
-        .filter(models.Candidate.jd_id == jd.id)
         .filter(models.Evaluation.score >= min_score)
     )
+    if jd is not None:
+        q = q.filter(models.Candidate.jd_id == jd.id)
     if skill:
         q = q.join(
             models.CandidateSkill, models.CandidateSkill.cv_id == models.Candidate.id
-        ).filter(models.CandidateSkill.normalized_name == skill.strip().lower())
-    rows = q.order_by(models.Evaluation.score.desc()).limit(min(limit, 50)).all()
+        ).filter(models.CandidateSkill.normalized_name.ilike(f"%{skill.strip().lower()}%"))
 
+    rows = q.order_by(models.Evaluation.score.desc()).limit(min(limit, 50)).all()
     briefs = [_candidate_brief(c) for c in rows]
-    result = {"jd_title": jd.title, "count": len(briefs), "candidates": briefs}
-    # LC2: mở đúng project và tô sáng những ứng viên khớp (query ?highlight=).
+
+    result = {
+        "scope": jd.title if jd else "tất cả vị trí",
+        "count": len(briefs),
+        "candidates": briefs,
+    }
+
+    # Tô sáng trên UI chỉ có nghĩa khi mọi kết quả thuộc CÙNG 1 vị trí (1 trang project).
     if briefs:
-        ids = ",".join(b["candidate_id"] for b in briefs)
-        result["ui_action"] = {
-            "type": "navigate",
-            "path": f"/projects/{jd.id}?highlight={ids}",
-        }
+        jd_ids = {c.jd_id for c in rows}
+        if len(jd_ids) == 1:
+            target = jd.id if jd else next(iter(jd_ids))
+            ids = ",".join(b["candidate_id"] for b in briefs)
+            result["ui_action"] = {
+                "type": "navigate",
+                "path": f"/projects/{target}?highlight={ids}",
+            }
     return result
 
 
@@ -174,37 +195,213 @@ def create_jd(db: Session, raw_text: str, created_by: str) -> dict:
     return {"jd_id": str(jd.id), "title": jd.title, "status": jd.status}
 
 
-def compare_candidates(db: Session, candidate_ids: list[str], aspect: str = "") -> dict:
-    cands = [db.get(models.Candidate, _uuid(cid)) for cid in candidate_ids]
-    cands = [c for c in cands if c is not None]
-    if len(cands) < 2:
-        return {"error": "Cần ít nhất 2 ứng viên hợp lệ để so sánh."}
+def compare_candidates(
+    db: Session,
+    candidate_ids: list[str] | None = None,
+    jd_id: str | None = None,
+    top_n: int | None = None,
+    aspect: str = "",
+) -> dict:
+    """
+    So sánh ứng viên. Hai cách dùng:
+      1) HR chỉ đích danh  -> truyền candidate_ids (UUID HOẶC tên).
+      2) HR nói "top N"    -> truyền jd_id + top_n, TOOL tự lấy N người điểm cao nhất
+         từ DB (không bắt LLM phải nhớ/đọc ra từng UUID -> hết cảnh "bảo 3 mà so 2").
+    Thiếu người thì BÁO RÕ, không âm thầm bỏ qua.
+    """
+    cands: list[models.Candidate] = []
+    missing: list[str] = []
 
-    jd_id = cands[0].jd_id
-    if any(c.jd_id != jd_id for c in cands):
+    if candidate_ids:
+        for cid in candidate_ids:
+            c = _resolve_candidate(db, cid)
+            if c is None:
+                missing.append(str(cid))
+            else:
+                cands.append(c)
+        # Khử trùng (LLM có thể truyền cùng 1 người 2 lần dưới 2 dạng tên/id).
+        seen, uniq = set(), []
+        for c in cands:
+            if c.id not in seen:
+                seen.add(c.id)
+                uniq.append(c)
+        cands = uniq
+    elif jd_id and top_n:
+        jd = _resolve_jd(db, jd_id)
+        if jd is None:
+            return {"error": f"Không tìm thấy vị trí: {jd_id}"}
+        cands = (
+            db.query(models.Candidate)
+            .join(models.Evaluation, models.Evaluation.cv_id == models.Candidate.id)
+            .filter(models.Candidate.jd_id == jd.id)
+            .order_by(models.Evaluation.score.desc())
+            .limit(max(2, int(top_n)))
+            .all()
+        )
+    else:
+        return {"error": "Cần truyền candidate_ids, hoặc jd_id + top_n."}
+
+    if len(cands) < 2:
+        return {
+            "error": "Không đủ ứng viên hợp lệ để so sánh (cần ít nhất 2).",
+            "found": [c.name for c in cands],
+            "not_found": missing,
+        }
+
+    jd_ref = cands[0].jd_id
+    if any(c.jd_id != jd_ref for c in cands):
         return {"error": "Các ứng viên phải cùng một vị trí (JD) mới so sánh được."}
 
-    jd = db.get(models.JobDescription, jd_id)
+    jd = db.get(models.JobDescription, jd_ref)
     candidates_info = [
         {"name": c.name or str(c.id), "full_cv_text": c.raw_text} for c in cands
     ]
-    return compare_candidates_ai(jd.requirements, candidates_info, aspect or None)
+    result = compare_candidates_ai(jd.requirements, candidates_info, aspect or None)
+
+    # Cho LLM biết chính xác đã so ai, và ai không tìm thấy -> nó phải nói ra cho HR.
+    result["compared"] = [c.name for c in cands]
+    result["compared_count"] = len(cands)
+    if missing:
+        result["not_found"] = missing
+        result["warning"] = (
+            f"Chỉ so sánh được {len(cands)} người; không tìm thấy: {', '.join(missing)}. "
+            "PHẢI báo điều này cho HR."
+        )
+    return result
 
 
 def generate_interview_questions(db: Session, candidate_id: str, aspect: str = "") -> dict:
-    c = db.get(models.Candidate, _uuid(candidate_id))
+    """
+    Sinh bộ câu hỏi phỏng vấn bám CV + JD và LƯU vào DB (tạo Interview +
+    InterviewQuestion) đúng như luồng /interviews/.../generate, để HR thấy được
+    trong màn hình phỏng vấn. Nếu ứng viên đã có buổi phỏng vấn thì tạo lại.
+    """
+    c = _resolve_candidate(db, candidate_id)
     if c is None:
         return {"error": "Không tìm thấy ứng viên."}
+    if c.evaluation is None:
+        return {"error": f"Ứng viên {c.name or c.id} chưa được chấm điểm nên chưa thể tạo phỏng vấn."}
+
     jd = db.get(models.JobDescription, c.jd_id)
-    candidate_info = {
-        "name": c.name,
-        "cv_content": c.raw_text,
-        "weaknesses": (c.evaluation.evidence if c.evaluation else None),
+
+    # Tạo lại: xoá buổi phỏng vấn cũ (nếu có) để tránh trùng.
+    old = db.query(models.Interview).filter(models.Interview.cv_id == c.id).first()
+    if old is not None:
+        db.delete(old)
+        db.commit()
+
+    candidate_context = {
+        "full_cv": c.raw_text,
+        "ai_identified_weaknesses": c.evaluation.explanation,
     }
-    questions = generate_interview_questions_ai(
-        jd.requirements if jd else {}, candidate_info, aspect
+    ai_questions = generate_interview_questions_ai(
+        jd.requirements if jd else {}, candidate_context, aspect
     )
-    return {"candidate_id": candidate_id, "questions": questions}
+    if not ai_questions:
+        return {"error": "AI không sinh được câu hỏi phỏng vấn."}
+
+    interview = models.Interview(cv_id=c.id, status="pending")
+    db.add(interview)
+    db.commit()
+    db.refresh(interview)
+
+    saved = []
+    for idx, q in enumerate(ai_questions):
+        if not isinstance(q, dict):
+            continue
+        db.add(models.InterviewQuestion(
+            interview_id=interview.id,
+            question=q.get("question", "Câu hỏi chưa xác định"),
+            expected_answer=q.get("expected_answer", ""),
+            category=q.get("category", "Chung"),
+            order_index=idx * 10,
+        ))
+        saved.append({"question": q.get("question"), "category": q.get("category")})
+    db.commit()
+
+    return {
+        "status": "created",
+        "interview_id": str(interview.id),
+        "candidate": c.name,
+        "count": len(saved),
+        "questions": saved,
+    }
+
+
+# --------------------------------------------------------------------------- #
+# TOOLS Shortlist
+# --------------------------------------------------------------------------- #
+def create_shortlist(db: Session, jd_id: str, name: str, created_by: str) -> dict:
+    """Tạo 1 shortlist mới cho 1 vị trí."""
+    jd = _resolve_jd(db, jd_id)
+    if jd is None:
+        return {"error": "Không tìm thấy vị trí."}
+    sl = models.Shortlist(jd_id=jd.id, name=name.strip(), created_by=_uuid(created_by))
+    db.add(sl)
+    db.commit()
+    db.refresh(sl)
+    return {"status": "created", "shortlist_id": str(sl.id), "name": sl.name, "jd": jd.title}
+
+
+def list_shortlists(db: Session, jd_id: str) -> dict:
+    """Liệt kê các shortlist của 1 vị trí (kèm số ứng viên)."""
+    jd = _resolve_jd(db, jd_id)
+    if jd is None:
+        return {"error": "Không tìm thấy vị trí."}
+    return {
+        "jd": jd.title,
+        "shortlists": [
+            {"shortlist_id": str(s.id), "name": s.name, "count": len(s.items)}
+            for s in jd.shortlists
+        ],
+    }
+
+
+def add_to_shortlist(
+    db: Session, candidate_id: str, created_by: str, shortlist_name: str = "AI Shortlist"
+) -> dict:
+    """
+    Đưa 1 ứng viên vào shortlist. Tự tìm shortlist tên `shortlist_name` trong JD của
+    ứng viên; nếu chưa có thì tạo. Chống thêm trùng. Đây là tool 'một phát ăn ngay'
+    cho yêu cầu "đưa ứng viên X vào shortlisting".
+    """
+    c = _resolve_candidate(db, candidate_id)
+    if c is None:
+        return {"error": "Không tìm thấy ứng viên."}
+
+    sl = (
+        db.query(models.Shortlist)
+        .filter(
+            models.Shortlist.jd_id == c.jd_id,
+            models.Shortlist.name == shortlist_name,
+        )
+        .first()
+    )
+    if sl is None:
+        sl = models.Shortlist(jd_id=c.jd_id, name=shortlist_name, created_by=_uuid(created_by))
+        db.add(sl)
+        db.commit()
+        db.refresh(sl)
+
+    existing = (
+        db.query(models.ShortlistItem)
+        .filter(
+            models.ShortlistItem.shortlist_id == sl.id,
+            models.ShortlistItem.cv_id == c.id,
+        )
+        .first()
+    )
+    if existing:
+        return {"status": "already_in", "shortlist": sl.name, "candidate": c.name}
+
+    db.add(models.ShortlistItem(shortlist_id=sl.id, cv_id=c.id))
+    db.commit()
+    return {
+        "status": "added",
+        "shortlist": sl.name,
+        "shortlist_id": str(sl.id),
+        "candidate": c.name,
+    }
 
 
 def send_interview_invite(
@@ -278,6 +475,9 @@ TOOL_FUNCS = {
     "create_jd": create_jd,
     "compare_candidates": compare_candidates,
     "generate_interview_questions": generate_interview_questions,
+    "create_shortlist": create_shortlist,
+    "list_shortlists": list_shortlists,
+    "add_to_shortlist": add_to_shortlist,
     "send_interview_invite": send_interview_invite,
     "open_jd": open_jd,
     "open_dashboard": open_dashboard,
@@ -285,7 +485,11 @@ TOOL_FUNCS = {
 }
 
 # Tool cần user_id của HR đăng nhập -> agent loop tiêm, không đưa vào schema.
-USER_BOUND = {"create_jd": "created_by"}
+USER_BOUND = {
+    "create_jd": "created_by",
+    "create_shortlist": "created_by",
+    "add_to_shortlist": "created_by",
+}
 
 TOOLS = [
     {
@@ -321,16 +525,19 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "search_candidates",
-            "description": "Tìm ứng viên của 1 JD, lọc theo điểm tối thiểu và (tùy chọn) 1 kỹ năng. Kết quả xếp theo điểm giảm dần.",
+            "description": (
+                "Tìm ứng viên đã chấm điểm, lọc theo kỹ năng và/hoặc điểm tối thiểu. "
+                "jd_id là TUỲ CHỌN: nếu HR chỉ nói 'tìm người biết Python' mà KHÔNG nhắc vị trí nào "
+                "thì BỎ TRỐNG jd_id để tìm xuyên mọi vị trí — TUYỆT ĐỐI không hỏi HR jd_id."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "jd_id": {"type": "string", "description": "UUID của JD HOẶC tên vị trí, vd 'Backend Developer'."},
+                    "jd_id": {"type": "string", "description": "TUỲ CHỌN. UUID hoặc TÊN vị trí, chỉ điền khi HR có nêu vị trí."},
                     "min_score": {"type": "number", "description": "Điểm tối thiểu (thang 0-100)."},
-                    "skill": {"type": "string", "description": "Tên 1 kỹ năng cần có, vd 'python'."},
+                    "skill": {"type": "string", "description": "Kỹ năng cần có, vd 'python'."},
                     "limit": {"type": "integer"},
                 },
-                "required": ["jd_id"],
             },
         },
     },
@@ -364,18 +571,23 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "compare_candidates",
-            "description": "So sánh trực diện 2+ ứng viên (phải cùng 1 JD) theo một khía cạnh.",
+            "description": (
+                "So sánh 2+ ứng viên cùng 1 vị trí. QUAN TRỌNG: nếu HR nói kiểu 'so sánh top 3' "
+                "thì ĐỪNG tự liệt kê id — hãy truyền jd_id + top_n=3, tool sẽ tự lấy đúng N người "
+                "điểm cao nhất. Chỉ dùng candidate_ids khi HR gọi đích danh từng người."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "jd_id": {"type": "string", "description": "UUID hoặc tên vị trí (dùng kèm top_n)."},
+                    "top_n": {"type": "integer", "description": "So sánh N ứng viên điểm cao nhất của vị trí đó."},
                     "candidate_ids": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Danh sách candidate_id cần so sánh.",
+                        "description": "UUID HOẶC tên từng ứng viên (chỉ khi HR gọi đích danh).",
                     },
                     "aspect": {"type": "string", "description": "Khía cạnh trọng tâm, vd 'Python và hạ tầng'."},
                 },
-                "required": ["candidate_ids"],
             },
         },
     },
@@ -383,14 +595,56 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "generate_interview_questions",
-            "description": "Sinh bộ câu hỏi phỏng vấn bám sát CV + JD cho 1 ứng viên.",
+            "description": "Sinh bộ câu hỏi phỏng vấn bám CV + JD cho 1 ứng viên VÀ LƯU vào buổi phỏng vấn của họ (HR xem được trong màn hình phỏng vấn).",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "candidate_id": {"type": "string"},
+                    "candidate_id": {"type": "string", "description": "UUID HOẶC tên ứng viên."},
                     "aspect": {"type": "string", "description": "Trọng tâm phỏng vấn (tùy chọn)."},
                 },
                 "required": ["candidate_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_to_shortlist",
+            "description": "Đưa 1 ứng viên vào shortlist của vị trí họ ứng tuyển (tự tạo shortlist nếu chưa có). Dùng khi HR muốn 'đưa/thêm ứng viên vào shortlisting'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "candidate_id": {"type": "string", "description": "UUID HOẶC tên ứng viên."},
+                    "shortlist_name": {"type": "string", "description": "Tên shortlist, mặc định 'AI Shortlist'."},
+                },
+                "required": ["candidate_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_shortlist",
+            "description": "Tạo 1 shortlist mới (rỗng) cho 1 vị trí.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "jd_id": {"type": "string", "description": "UUID hoặc tên vị trí."},
+                    "name": {"type": "string"},
+                },
+                "required": ["jd_id", "name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_shortlists",
+            "description": "Liệt kê các shortlist của 1 vị trí kèm số ứng viên.",
+            "parameters": {
+                "type": "object",
+                "properties": {"jd_id": {"type": "string", "description": "UUID hoặc tên vị trí."}},
+                "required": ["jd_id"],
             },
         },
     },
