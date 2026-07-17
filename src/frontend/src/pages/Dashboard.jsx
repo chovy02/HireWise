@@ -75,10 +75,6 @@ export default function Dashboard() {
                       <h3 className="truncate text-base font-semibold text-slate-900">
                         {p.title}
                       </h3>
-                      <p className="mt-0.5 text-xs text-slate-400">
-                        {p.sources.length} source
-                        {p.sources.length === 1 ? '' : 's'}
-                      </p>
                     </div>
                   </div>
                   <p className="mt-3 line-clamp-3 flex-1 text-sm leading-relaxed text-slate-500">
