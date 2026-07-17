@@ -22,6 +22,9 @@ import {
   XCircle,
   Circle,
   MessageSquareText,
+  Loader2,
+  Sparkles,
+  Award,
 } from 'lucide-react'
 import Topbar from '../components/Topbar.jsx'
 import {
@@ -34,11 +37,13 @@ import {
   PrimaryButton,
 } from '../components/ui.jsx'
 import CandidateDetailModal from '../components/CandidateDetailModal.jsx'
-import InterviewModal from '../components/InterviewModal.jsx'
+import { InterviewPanel } from '../components/InterviewModal.jsx'
+import Markdown from '../components/Markdown.jsx'
 import { formatName } from '../utils/formatName.js'
 import { useToast } from '../context/ToastContext.jsx'
 import { useProjects } from '../context/ProjectContext.jsx'
 import { getCandidates } from '../api/jds.js'
+import { compareCandidates } from '../api/compare.js'
 import {
   listShortlists,
   createShortlist,
@@ -326,6 +331,12 @@ export default function Shortlisting() {
     setSelected((l) => (l.includes(id) ? l.filter((x) => x !== id) : [...l, id]))
   }
 
+  // Mở phỏng vấn: chọn ứng viên rồi chuyển sang tab "Phỏng vấn" (thay cho popup cũ).
+  function openInterview(c) {
+    setInterviewFor({ id: c.id, name: c.name })
+    setView('interview')
+  }
+
   // Sau khi override: cập nhật điểm + cờ trong row rồi xếp lại hạng, và làm mới
   // shortlist để điểm hiển thị trong tab Shortlist cũng cập nhật theo.
   function handleOverridden(candidateId, { score, is_overridden }) {
@@ -451,6 +462,7 @@ export default function Shortlisting() {
                   value: 'shortlist',
                   label: `Shortlist${slDetail?.items ? ` (${slDetail.items.length})` : ''}`,
                 },
+                { value: 'interview', label: 'Phỏng vấn' },
               ]}
               value={view}
               onChange={setView}
@@ -632,9 +644,7 @@ export default function Shortlisting() {
                                 )}
                               </button>
                               <button
-                                onClick={() =>
-                                  setInterviewFor({ id: c.id, name: c.name })
-                                }
+                                onClick={() => openInterview(c)}
                                 disabled={c.status !== 'COMPLETED'}
                                 className="rounded-lg border border-slate-200 bg-white p-2 text-slate-600 transition hover:bg-slate-50 disabled:opacity-50 disabled:hover:bg-white"
                                 title={
@@ -783,9 +793,7 @@ export default function Shortlisting() {
                             <td className="px-6 py-4">
                               <div className="flex justify-end gap-2">
                                 <button
-                                  onClick={() =>
-                                    setInterviewFor({ id: c.id, name: c.name })
-                                  }
+                                  onClick={() => openInterview(c)}
                                   disabled={c.status !== 'COMPLETED'}
                                   className="rounded-lg border border-slate-200 bg-white p-2 text-slate-600 transition hover:bg-slate-50 disabled:opacity-50 disabled:hover:bg-white"
                                   title={
@@ -832,6 +840,32 @@ export default function Shortlisting() {
             )}
           </Card>
         )}
+
+        {view === 'interview' && (
+          interviewFor ? (
+            <Card className="mt-4 flex h-[calc(100vh-260px)] min-h-[520px] flex-col overflow-hidden">
+              <InterviewPanel
+                key={interviewFor.id}
+                candidateId={interviewFor.id}
+                candidateName={interviewFor.name}
+              />
+            </Card>
+          ) : (
+            <Card className="mt-4 flex flex-col items-center justify-center px-6 py-20 text-center">
+              <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600">
+                <MessageSquareText size={26} />
+              </div>
+              <h2 className="mt-4 text-lg font-semibold text-slate-900">
+                Chưa chọn ứng viên
+              </h2>
+              <p className="mt-1.5 max-w-md text-sm text-slate-500">
+                Sang tab Leaderboard hoặc Shortlist và bấm nút phỏng vấn{' '}
+                <MessageSquareText size={14} className="inline align-text-bottom" /> ở
+                một ứng viên đã được chấm điểm để bắt đầu buổi phỏng vấn.
+              </p>
+            </Card>
+          )
+        )}
       </main>
 
       {/* Candidate detail popup (real data) */}
@@ -847,21 +881,47 @@ export default function Shortlisting() {
       {showCompare && compareList.length >= 2 && (
         <CompareModal candidates={compareList} onClose={() => setShowCompare(false)} />
       )}
-
-      {/* Interview popup (AI phỏng vấn) */}
-      {interviewFor && (
-        <InterviewModal
-          candidateId={interviewFor.id}
-          candidateName={interviewFor.name}
-          onClose={() => setInterviewFor(null)}
-        />
-      )}
     </>
   )
 }
 
-// So sánh cạnh nhau các ứng viên đã chọn (dữ liệu thật: điểm + kỹ năng).
+// Các khía cạnh gợi ý sẵn cho việc so sánh. Giá trị rỗng = so sánh toàn diện.
+const COMPARE_ASPECTS = [
+  { label: 'Toàn diện', value: '' },
+  { label: 'Chuyên môn kỹ thuật', value: 'Chuyên môn kỹ thuật và độ sâu công nghệ' },
+  { label: 'Kinh nghiệm', value: 'Bề dày và mức độ liên quan của kinh nghiệm làm việc' },
+  { label: 'Kỹ năng lãnh đạo', value: 'Kỹ năng lãnh đạo và quản lý' },
+  { label: 'Độ phù hợp với JD', value: 'Mức độ phù hợp tổng thể với yêu cầu công việc (JD)' },
+]
+
+// So sánh ứng viên bằng AI: HR chọn khía cạnh -> gọi POST /compare -> hiển thị
+// đề xuất + bài phân tích chi tiết (Markdown).
 function CompareModal({ candidates, onClose }) {
+  const toast = useToast()
+  const [preset, setPreset] = useState('') // value của khía cạnh đang chọn
+  const [customAspect, setCustomAspect] = useState('') // ô nhập tự do
+  const [loading, setLoading] = useState(false)
+  const [result, setResult] = useState(null) // { recommendation, detailed_comparison }
+  const [error, setError] = useState('')
+
+  async function handleCompare() {
+    const aspect = customAspect.trim() || preset
+    setLoading(true)
+    setError('')
+    try {
+      const res = await compareCandidates(
+        candidates.map((c) => c.id),
+        aspect
+      )
+      setResult(res)
+    } catch (e) {
+      setError(e.message || 'Không so sánh được ứng viên.')
+      toast(e.message || 'Không so sánh được ứng viên.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div
@@ -871,7 +931,7 @@ function CompareModal({ candidates, onClose }) {
       <div className="relative flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
         <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
           <h2 className="flex items-center gap-2 text-base font-bold text-slate-900">
-            <GitCompare size={18} className="text-indigo-600" /> Compare Candidates
+            <GitCompare size={18} className="text-indigo-600" /> So sánh ứng viên
           </h2>
           <button
             onClick={onClose}
@@ -880,11 +940,13 @@ function CompareModal({ candidates, onClose }) {
             <X size={18} />
           </button>
         </div>
+
         <div className="overflow-auto p-6">
+          {/* Thẻ tóm tắt ứng viên được so sánh */}
           <div
             className="grid gap-4"
             style={{
-              gridTemplateColumns: `repeat(${candidates.length}, minmax(180px, 1fr))`,
+              gridTemplateColumns: `repeat(${candidates.length}, minmax(160px, 1fr))`,
             }}
           >
             {candidates.map((c) => (
@@ -914,6 +976,79 @@ function CompareModal({ candidates, onClose }) {
               </div>
             ))}
           </div>
+
+          {/* Chọn khía cạnh so sánh */}
+          <div className="mt-6 rounded-xl border border-slate-200 bg-slate-50/60 p-4">
+            <p className="text-sm font-semibold text-slate-700">
+              Bạn muốn so sánh về khía cạnh nào?
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {COMPARE_ASPECTS.map((a) => (
+                <button
+                  key={a.label}
+                  onClick={() => {
+                    setPreset(a.value)
+                    setCustomAspect('')
+                  }}
+                  disabled={loading}
+                  className={`rounded-full border px-3 py-1.5 text-sm transition disabled:opacity-50 ${
+                    !customAspect.trim() && preset === a.value
+                      ? 'border-indigo-400 bg-indigo-50 font-medium text-indigo-700'
+                      : 'border-slate-200 bg-white text-slate-600 hover:border-indigo-300'
+                  }`}
+                >
+                  {a.label}
+                </button>
+              ))}
+            </div>
+            <textarea
+              value={customAspect}
+              onChange={(e) => setCustomAspect(e.target.value)}
+              rows={2}
+              disabled={loading}
+              placeholder="…hoặc nhập tiêu chí riêng (vd: Ai làm backend tốt hơn?)"
+              className="mt-3 w-full resize-none rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 disabled:bg-slate-50"
+            />
+            <div className="mt-3 flex justify-end">
+              <PrimaryButton onClick={handleCompare} disabled={loading}>
+                {loading ? (
+                  <>
+                    <Loader2 size={16} className="animate-spin" /> AI đang phân tích…
+                  </>
+                ) : (
+                  <>
+                    <Sparkles size={16} /> {result ? 'So sánh lại' : 'So sánh'}
+                  </>
+                )}
+              </PrimaryButton>
+            </div>
+          </div>
+
+          {error && (
+            <p className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              {error}
+            </p>
+          )}
+
+          {/* Kết quả so sánh */}
+          {result && (
+            <div className="mt-6 space-y-4">
+              <div className="rounded-xl border border-indigo-200 bg-indigo-50/70 p-4">
+                <h3 className="flex items-center gap-1.5 text-sm font-bold text-indigo-800">
+                  <Award size={16} /> Đề xuất của AI
+                </h3>
+                <div className="mt-1.5 text-indigo-900">
+                  <Markdown text={result.recommendation} />
+                </div>
+              </div>
+              <div className="rounded-xl border border-slate-200 p-4">
+                <h3 className="text-sm font-bold text-slate-800">
+                  Phân tích chi tiết
+                </h3>
+                <Markdown text={result.detailed_comparison} className="mt-1" />
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

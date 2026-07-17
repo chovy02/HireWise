@@ -5,9 +5,6 @@ import {
   Sparkles,
   Loader2,
   Send,
-  Lightbulb,
-  ChevronDown,
-  ChevronRight,
   RefreshCw,
   CheckCircle2,
   FileCheck2,
@@ -41,10 +38,11 @@ function sortQuestions(list) {
   return [...(list || [])].sort((a, b) => a.order_index - b.order_index)
 }
 
-// Panel phỏng vấn tương tác cho 1 ứng viên đã được AI chấm điểm.
+// Nội dung phỏng vấn (dùng chung cho cả popup lẫn tab trong Shortlisting).
 // Luồng: AI sinh câu hỏi -> HR gõ tóm tắt câu trả lời -> AI chấm + đào sâu ->
 // HR bấm kết thúc -> AI tổng kết năng lực.
-export default function InterviewModal({ candidateId, candidateName, onClose }) {
+// - onClose: nếu có -> hiện nút đóng (chế độ popup). Bỏ trống -> chế độ tab.
+export function InterviewPanel({ candidateId, candidateName, onClose }) {
   const toast = useToast()
   const [interview, setInterview] = useState(null) // buổi phỏng vấn hiện tại
   const [loading, setLoading] = useState(true) // đang fetch lần đầu
@@ -60,6 +58,7 @@ export default function InterviewModal({ candidateId, candidateName, onClose }) 
     let cancelled = false
     setLoading(true)
     setNotFound(false)
+    setInterview(null)
     getCandidateInterview(candidateId)
       .then((data) => {
         if (cancelled) return
@@ -131,45 +130,44 @@ export default function InterviewModal({ candidateId, candidateName, onClose }) 
   const answeredCount = (interview?.questions || []).filter((q) => q.answer_text).length
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
-        {/* Header */}
-        <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600">
-              <MessageSquareText size={20} />
-            </div>
-            <div>
-              <h2 className="flex items-center gap-2 text-base font-bold text-slate-900">
-                Phỏng vấn — {displayName}
-                {interview && (
-                  <Badge variant={statusMeta.variant} upper={false}>
-                    {statusMeta.label}
-                  </Badge>
-                )}
-              </h2>
-              <p className="text-xs text-slate-400">
-                Câu hỏi do AI sinh dựa trên CV &amp; JD — HR gõ lại câu trả lời để AI chấm.
-              </p>
-            </div>
+    <>
+      {/* Header */}
+      <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
+        <div className="flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600">
+            <MessageSquareText size={20} />
           </div>
-          <div className="flex items-center gap-2">
-            {interview && !completed && (
-              <SecondaryButton
-                className="px-3 py-2"
-                onClick={handleGenerate}
-                disabled={generating}
-                title="Sinh lại bộ câu hỏi (xóa buổi phỏng vấn hiện tại)"
-              >
-                {generating ? (
-                  <Loader2 size={15} className="animate-spin" />
-                ) : (
-                  <RefreshCw size={15} />
-                )}
-                Tạo lại
-              </SecondaryButton>
-            )}
+          <div>
+            <h2 className="flex items-center gap-2 text-base font-bold text-slate-900">
+              Phỏng vấn — {displayName}
+              {interview && (
+                <Badge variant={statusMeta.variant} upper={false}>
+                  {statusMeta.label}
+                </Badge>
+              )}
+            </h2>
+            <p className="text-xs text-slate-400">
+              Câu hỏi do AI sinh dựa trên CV &amp; JD — HR gõ lại câu trả lời để AI chấm.
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          {interview && !completed && (
+            <SecondaryButton
+              className="px-3 py-2"
+              onClick={handleGenerate}
+              disabled={generating}
+              title="Sinh lại bộ câu hỏi (xóa buổi phỏng vấn hiện tại)"
+            >
+              {generating ? (
+                <Loader2 size={15} className="animate-spin" />
+              ) : (
+                <RefreshCw size={15} />
+              )}
+              Tạo lại
+            </SecondaryButton>
+          )}
+          {onClose && (
             <button
               onClick={onClose}
               className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
@@ -177,124 +175,138 @@ export default function InterviewModal({ candidateId, candidateName, onClose }) 
             >
               <X size={18} />
             </button>
+          )}
+        </div>
+      </div>
+
+      {/* Body */}
+      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+        {loading && (
+          <div className="flex items-center justify-center py-16 text-slate-400">
+            <Loader2 size={20} className="mr-2 animate-spin" /> Đang tải buổi phỏng vấn…
           </div>
-        </div>
+        )}
 
-        {/* Body */}
-        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
-          {loading && (
-            <div className="flex items-center justify-center py-16 text-slate-400">
-              <Loader2 size={20} className="mr-2 animate-spin" /> Đang tải buổi phỏng vấn…
+        {/* Chưa có buổi phỏng vấn -> màn hình sinh câu hỏi */}
+        {!loading && notFound && !interview && (
+          <div className="mx-auto max-w-lg py-8 text-center">
+            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600">
+              <Sparkles size={26} />
             </div>
-          )}
-
-          {/* Chưa có buổi phỏng vấn -> màn hình sinh câu hỏi */}
-          {!loading && notFound && !interview && (
-            <div className="mx-auto max-w-lg py-8 text-center">
-              <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600">
-                <Sparkles size={26} />
-              </div>
-              <h3 className="mt-4 text-lg font-semibold text-slate-900">
-                Tạo bộ câu hỏi phỏng vấn
-              </h3>
-              <p className="mx-auto mt-1.5 max-w-md text-sm text-slate-500">
-                AI sẽ đọc CV và yêu cầu công việc để soạn các câu hỏi sắc bén, xoáy vào
-                dự án thực tế và điểm yếu của ứng viên.
-              </p>
-              <div className="mt-5 text-left">
-                <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  Trọng tâm muốn xoáy sâu (tùy chọn)
-                </label>
-                <textarea
-                  value={aspect}
-                  onChange={(e) => setAspect(e.target.value)}
-                  rows={2}
-                  placeholder="Vd: Kinh nghiệm tối ưu hiệu năng, khả năng thiết kế hệ thống…"
-                  className="mt-2 w-full resize-none rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
-                />
-              </div>
-              <PrimaryButton className="mt-5" onClick={handleGenerate} disabled={generating}>
-                {generating ? (
-                  <>
-                    <Loader2 size={16} className="animate-spin" /> AI đang soạn câu hỏi…
-                  </>
-                ) : (
-                  <>
-                    <Sparkles size={16} /> Sinh câu hỏi
-                  </>
-                )}
-              </PrimaryButton>
+            <h3 className="mt-4 text-lg font-semibold text-slate-900">
+              Tạo bộ câu hỏi phỏng vấn
+            </h3>
+            <p className="mx-auto mt-1.5 max-w-md text-sm text-slate-500">
+              AI sẽ đọc CV và yêu cầu công việc để soạn các câu hỏi sắc bén, xoáy vào
+              dự án thực tế và điểm yếu của ứng viên.
+            </p>
+            <div className="mt-5 text-left">
+              <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Trọng tâm muốn xoáy sâu (tùy chọn)
+              </label>
+              <textarea
+                value={aspect}
+                onChange={(e) => setAspect(e.target.value)}
+                rows={2}
+                placeholder="Vd: Kinh nghiệm tối ưu hiệu năng, khả năng thiết kế hệ thống…"
+                className="mt-2 w-full resize-none rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+              />
             </div>
-          )}
-
-          {/* Có buổi phỏng vấn -> danh sách câu hỏi */}
-          {!loading && interview && (
-            <div className="space-y-4">
-              {/* Tổng kết AI (sau khi kết thúc) */}
-              {completed && interview.feedback_summary && (
-                <div className="rounded-xl border border-emerald-200 bg-emerald-50/70 p-4">
-                  <h3 className="flex items-center gap-1.5 text-sm font-bold text-emerald-800">
-                    <FileCheck2 size={16} /> Tổng kết của AI
-                  </h3>
-                  <p className="mt-2 text-sm leading-relaxed text-emerald-900">
-                    {interview.feedback_summary}
-                  </p>
-                </div>
-              )}
-
-              {interview.questions.length === 0 && (
-                <p className="py-10 text-center text-sm text-slate-400">
-                  Buổi phỏng vấn chưa có câu hỏi nào.
-                </p>
-              )}
-
-              {interview.questions.map((q, idx) => (
-                <QuestionCard
-                  key={q.id}
-                  index={idx + 1}
-                  question={q}
-                  locked={completed}
-                  onEvaluated={applyEvaluation}
-                />
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Footer */}
-        {!loading && interview && !completed && interview.questions.length > 0 && (
-          <div className="flex items-center justify-between border-t border-slate-200 px-6 py-3.5">
-            <span className="text-xs text-slate-500">
-              Đã chấm {answeredCount}/{interview.questions.length} câu
-            </span>
-            <PrimaryButton
-              className="px-3 py-2"
-              onClick={handleComplete}
-              disabled={completing}
-            >
-              {completing ? (
+            <PrimaryButton className="mt-5" onClick={handleGenerate} disabled={generating}>
+              {generating ? (
                 <>
-                  <Loader2 size={15} className="animate-spin" /> Đang tổng kết…
+                  <Loader2 size={16} className="animate-spin" /> AI đang soạn câu hỏi…
                 </>
               ) : (
                 <>
-                  <CheckCircle2 size={15} /> Kết thúc &amp; tổng kết
+                  <Sparkles size={16} /> Sinh câu hỏi
                 </>
               )}
             </PrimaryButton>
           </div>
         )}
+
+        {/* Có buổi phỏng vấn -> danh sách câu hỏi */}
+        {!loading && interview && (
+          <div className="space-y-4">
+            {/* Tổng kết AI (sau khi kết thúc) */}
+            {completed && interview.feedback_summary && (
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50/70 p-4">
+                <h3 className="flex items-center gap-1.5 text-sm font-bold text-emerald-800">
+                  <FileCheck2 size={16} /> Tổng kết của AI
+                </h3>
+                <p className="mt-2 text-sm leading-relaxed text-emerald-900">
+                  {interview.feedback_summary}
+                </p>
+              </div>
+            )}
+
+            {interview.questions.length === 0 && (
+              <p className="py-10 text-center text-sm text-slate-400">
+                Buổi phỏng vấn chưa có câu hỏi nào.
+              </p>
+            )}
+
+            {interview.questions.map((q, idx) => (
+              <QuestionCard
+                key={q.id}
+                index={idx + 1}
+                question={q}
+                locked={completed}
+                onEvaluated={applyEvaluation}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Footer */}
+      {!loading && interview && !completed && interview.questions.length > 0 && (
+        <div className="flex items-center justify-between border-t border-slate-200 px-6 py-3.5">
+          <span className="text-xs text-slate-500">
+            Đã chấm {answeredCount}/{interview.questions.length} câu
+          </span>
+          <PrimaryButton
+            className="px-3 py-2"
+            onClick={handleComplete}
+            disabled={completing}
+          >
+            {completing ? (
+              <>
+                <Loader2 size={15} className="animate-spin" /> Đang tổng kết…
+              </>
+            ) : (
+              <>
+                <CheckCircle2 size={15} /> Kết thúc &amp; tổng kết
+              </>
+            )}
+          </PrimaryButton>
+        </div>
+      )}
+    </>
+  )
+}
+
+// Popup phỏng vấn (dùng ở CandidateDetailModal). Bọc InterviewPanel trong overlay.
+export default function InterviewModal({ candidateId, candidateName, onClose }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+        <InterviewPanel
+          candidateId={candidateId}
+          candidateName={candidateName}
+          onClose={onClose}
+        />
       </div>
     </div>
   )
 }
 
-// 1 câu hỏi: hiện gợi ý đáp án (thu gọn), ô nhập câu trả lời, nút chấm điểm,
-// và kết quả AI đánh giá sau khi chấm.
+// 1 câu hỏi: ô nhập câu trả lời, nút chấm điểm, và nhận xét AI sau khi chấm.
 function QuestionCard({ index, question, locked, onEvaluated }) {
   const toast = useToast()
   const [draft, setDraft] = useState(question.answer_text || '')
-  const [showHint, setShowHint] = useState(false)
   const [evaluating, setEvaluating] = useState(false)
 
   const answered = !!question.answer_text
@@ -329,36 +341,19 @@ function QuestionCard({ index, question, locked, onEvaluated }) {
           {index}
         </div>
         <div className="min-w-0 flex-1">
-          <div className="mb-1 flex flex-wrap items-center gap-2">
-            {question.category && (
-              <Badge variant={isFollowUp ? 'ai' : 'neutral'} upper={false}>
-                {isFollowUp && <CornerDownRight size={11} />}
-                {question.category}
-              </Badge>
-            )}
-            {question.score != null && (
-              <span className={`text-sm font-bold ${scoreColor(question.score)}`}>
-                {question.score}/10
-              </span>
-            )}
-          </div>
+          {(isFollowUp || question.score != null) && (
+            <div className="mb-1 flex flex-wrap items-center gap-2">
+              {isFollowUp && (
+                <CornerDownRight size={14} className="text-indigo-500" />
+              )}
+              {question.score != null && (
+                <span className={`text-sm font-bold ${scoreColor(question.score)}`}>
+                  {question.score}/10
+                </span>
+              )}
+            </div>
+          )}
           <p className="text-sm font-semibold text-slate-800">{question.question}</p>
-
-          {/* Gợi ý đáp án cho HR (thu gọn) */}
-          {question.expected_answer && (
-            <button
-              onClick={() => setShowHint((v) => !v)}
-              className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700"
-            >
-              {showHint ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-              <Lightbulb size={12} /> Gợi ý đáp án
-            </button>
-          )}
-          {showHint && question.expected_answer && (
-            <p className="mt-1.5 rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-2 text-xs italic leading-relaxed text-slate-500">
-              {question.expected_answer}
-            </p>
-          )}
         </div>
       </div>
 
