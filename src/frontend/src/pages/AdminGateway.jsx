@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   ShieldCheck,
   Users,
@@ -12,20 +12,59 @@ import {
   Search,
   X,
   Loader2,
+  Cpu,
+  Activity,
+  Zap,
+  AlertTriangle,
+  Coins,
+  Gauge,
+  SlidersHorizontal,
+  Save,
+  Plus,
+  FileSearch,
+  Megaphone,
+  Send,
+  Download,
+  BarChart3,
+  Briefcase,
+  MessagesSquare,
+  Eye,
+  EyeOff,
+  ChevronRight,
+  FileSpreadsheet,
+  CheckCircle2,
 } from 'lucide-react'
 import Topbar from '../components/Topbar.jsx'
 import {
   Card,
+  CardHeader,
+  StateRow,
   StatCard,
   Badge,
-  Segmented,
+  Toggle,
+  ScoreRing,
+  ProgressBar,
+  Dropdown,
   PrimaryButton,
   SecondaryButton,
+  PageHeader,
 } from '../components/ui.jsx'
 import { useToast } from '../context/ToastContext.jsx'
 import { useAuth } from '../context/AuthContext.jsx'
 import { listUsers, createUser, updateUser } from '../api/users.js'
-import { getSystemLogs } from '../api/admin.js'
+import {
+  getSystemLogs,
+  getAiMetrics,
+  getAiLogs,
+  getSystemSettings,
+  updateSystemSetting,
+  getAuditLogs,
+  getBusinessMetrics,
+  getNotifications,
+  createNotification,
+  toggleNotification,
+  downloadExport,
+} from '../api/admin.js'
 
 const ROLE_META = {
   admin: { label: 'Admin', variant: 'ai' },
@@ -33,49 +72,82 @@ const ROLE_META = {
 }
 const LEVEL_VARIANT = {
   INFO: 'neutral',
-  WARNING: 'processing',
+  WARNING: 'warning',
   ERROR: 'error',
   CRITICAL: 'error',
+}
+const NOTI_VARIANT = {
+  info: 'info',
+  success: 'success',
+  warning: 'warning',
+  error: 'error',
 }
 const inputCls =
   'w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100'
 
+// Các mục quản trị — hiển thị dưới dạng dropdown ở sidebar (thay tab cũ).
+const SECTIONS = [
+  { value: 'users', label: 'Tài khoản', icon: Users, title: 'Quản lý tài khoản', desc: 'RBAC — tạo, sửa, khóa tài khoản người dùng.', hIcon: Users, hClass: 'bg-indigo-50 text-indigo-600' },
+  { value: 'analytics', label: 'Phân tích doanh nghiệp', icon: BarChart3, title: 'Phân tích doanh nghiệp', desc: 'Số liệu tổng quan hiệu quả tuyển dụng.', hIcon: BarChart3, hClass: 'bg-violet-50 text-violet-600' },
+  { value: 'ai', label: 'Giám sát AI', icon: Cpu, title: 'Giám sát AI', desc: 'Theo dõi request, độ trễ, token và lỗi của các AI agent.', hIcon: Cpu, hClass: 'bg-sky-50 text-sky-600' },
+  { value: 'config', label: 'Cấu hình hệ thống', icon: SlidersHorizontal, title: 'Cấu hình hệ thống động', desc: 'Bật/tắt tính năng và điều chỉnh ngưỡng hệ thống theo thời gian thực.', hIcon: SlidersHorizontal, hClass: 'bg-amber-50 text-amber-600' },
+  { value: 'audit', label: 'Kiểm toán & Bảo mật', icon: FileSearch, title: 'Kiểm toán & Bảo mật', desc: 'Ai đã thay đổi gì — nhật ký before/after mọi hành động nhạy cảm.', hIcon: FileSearch, hClass: 'bg-rose-50 text-rose-600' },
+  { value: 'notifications', label: 'Trung tâm thông báo', icon: Megaphone, title: 'Trung tâm thông báo', desc: 'Phát thông báo tới toàn bộ người dùng của hệ thống.', hIcon: Megaphone, hClass: 'bg-fuchsia-50 text-fuchsia-600' },
+  { value: 'export', label: 'Trung tâm trích xuất', icon: Download, title: 'Trung tâm trích xuất', desc: 'Xuất nhật ký & dữ liệu hệ thống ra file CSV.', hIcon: Download, hClass: 'bg-emerald-50 text-emerald-600' },
+  { value: 'logs', label: 'Nhật ký hệ thống', icon: ScrollText, title: 'Nhật ký hệ thống', desc: 'Log đăng nhập và hành động quản trị (NFR-8).', hIcon: ScrollText, hClass: 'bg-slate-100 text-slate-600' },
+]
+
 export default function AdminGateway() {
-  const [tab, setTab] = useState('users')
+  const [section, setSection] = useState('users')
+  const meta = SECTIONS.find((s) => s.value === section) || SECTIONS[0]
 
   return (
     <>
       <Topbar />
       <main className="flex-1 overflow-y-auto px-8 py-7">
-        <div className="flex items-start justify-between">
-          <div>
-            <h1 className="flex items-center gap-2 text-2xl font-bold text-slate-900">
-              <ShieldCheck size={24} className="text-indigo-600" />
-              Admin Gateway
-            </h1>
-            <p className="mt-1 text-sm text-slate-500">
-              Quản lý tài khoản người dùng và giám sát hoạt động hệ thống.
-            </p>
-          </div>
-          <Segmented
-            options={[
-              { value: 'users', label: 'Tài khoản' },
-              { value: 'logs', label: 'Nhật ký hệ thống' },
-            ]}
-            value={tab}
-            onChange={setTab}
-          />
-        </div>
+        <PageHeader
+          icon={meta.hIcon}
+          iconClass={meta.hClass}
+          title={meta.title}
+          subtitle={meta.desc}
+          action={
+            <div className="flex items-center gap-2.5">
+              <span className="hidden text-sm font-medium text-slate-500 lg:inline">
+                Khu vực
+              </span>
+              <Dropdown
+                align="right"
+                className="min-w-[230px]"
+                value={section}
+                onChange={setSection}
+                options={SECTIONS.map((s) => ({
+                  value: s.value,
+                  label: s.label,
+                  icon: s.icon,
+                }))}
+              />
+            </div>
+          }
+        />
 
-        {tab === 'users' ? <UserManagement /> : <SystemLogs />}
+        <div className="mt-6">
+          {section === 'users' && <UserManagement />}
+          {section === 'analytics' && <BusinessAnalytics />}
+          {section === 'ai' && <AiMonitoring />}
+          {section === 'config' && <SystemConfiguration />}
+          {section === 'audit' && <AuditSecurity />}
+          {section === 'notifications' && <BroadcastNotifications />}
+          {section === 'export' && <ExportCenter />}
+          {section === 'logs' && <SystemLogs />}
+        </div>
       </main>
     </>
   )
 }
 
-/* ------------------------------------------------------------------ */
-/* Tab 1: User Management (RBAC - FR-1)                                 */
-/* ------------------------------------------------------------------ */
+/* ================================================================== */
+/* Tài khoản (RBAC - FR-1)                                            */
+/* ================================================================== */
 function UserManagement() {
   const toast = useToast()
   const { user: me } = useAuth()
@@ -115,8 +187,7 @@ function UserManagement() {
 
   return (
     <>
-      {/* Stats (dữ liệu THẬT từ /users) */}
-      <div className="mt-6 grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard icon={Users} label="Tổng tài khoản" value={users == null ? '…' : total} />
         <StatCard
           icon={Unlock}
@@ -138,7 +209,6 @@ function UserManagement() {
         />
       </div>
 
-      {/* Toolbar */}
       <Card className="mt-6 flex flex-wrap items-center gap-3 p-3">
         <div className="flex flex-1 items-center gap-2">
           <Search size={18} className="ml-2 flex-shrink-0 text-slate-400" />
@@ -154,20 +224,15 @@ function UserManagement() {
         </PrimaryButton>
       </Card>
 
-      {/* Table */}
       <Card className="mt-5 overflow-hidden">
-        {users === null && !err && (
-          <p className="px-6 py-10 text-sm text-slate-400">Đang tải tài khoản…</p>
-        )}
-        {err && <p className="px-6 py-10 text-sm text-red-500">Lỗi tải: {err}</p>}
-        {users && visible.length === 0 && (
-          <p className="px-6 py-10 text-sm text-slate-400">Không có tài khoản phù hợp.</p>
-        )}
+        {users === null && !err && <StateRow>Đang tải tài khoản…</StateRow>}
+        {err && <StateRow tone="error">Lỗi tải: {err}</StateRow>}
+        {users && visible.length === 0 && <StateRow>Không có tài khoản phù hợp.</StateRow>}
         {users && visible.length > 0 && (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[720px] text-left">
               <thead>
-                <tr className="border-b border-slate-200 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                <tr className="border-b border-slate-200 bg-slate-50/60 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
                   <th className="px-6 py-3">Tài khoản</th>
                   <th className="px-6 py-3">Vai trò</th>
                   <th className="px-6 py-3">Trạng thái</th>
@@ -311,97 +376,815 @@ function UserFormModal({ user, onClose, onSaved }) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-2xl">
-        <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
-          <h2 className="text-base font-bold text-slate-900">
-            {isNew ? 'Thêm tài khoản' : 'Sửa tài khoản'}
-          </h2>
-          <button
-            onClick={onClose}
-            className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
-          >
-            <X size={18} />
-          </button>
-        </div>
+    <Modal title={isNew ? 'Thêm tài khoản' : 'Sửa tài khoản'} onClose={onClose}>
+      <div className="space-y-4 px-6 py-5">
+        <Field label="Họ tên">
+          <input value={username} onChange={(e) => setUsername(e.target.value)} className={inputCls} />
+        </Field>
+        <Field label="Email">
+          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className={inputCls} />
+        </Field>
+        <Field label={isNew ? 'Mật khẩu (≥ 8 ký tự)' : 'Mật khẩu mới (để trống nếu giữ nguyên)'}>
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder={isNew ? '' : '••••••••'}
+            className={inputCls}
+          />
+        </Field>
+        <Field label="Vai trò">
+          <select value={role} onChange={(e) => setRole(e.target.value)} className={inputCls}>
+            <option value="hr_staff">HR Staff</option>
+            <option value="admin">Admin</option>
+          </select>
+        </Field>
+        {!isNew && (
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              checked={isActive}
+              onChange={(e) => setIsActive(e.target.checked)}
+              className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+            />
+            Tài khoản đang hoạt động
+          </label>
+        )}
+      </div>
 
-        <div className="space-y-4 px-6 py-5">
-          <div>
-            <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-              Họ tên
-            </label>
-            <input value={username} onChange={(e) => setUsername(e.target.value)} className={`mt-1.5 ${inputCls}`} />
+      <div className="flex justify-end gap-2 border-t border-slate-200 px-6 py-4">
+        <SecondaryButton className="px-3 py-2" onClick={onClose} disabled={saving}>
+          Hủy
+        </SecondaryButton>
+        <PrimaryButton className="px-3 py-2" onClick={save} disabled={saving}>
+          {saving ? (
+            <>
+              <Loader2 size={15} className="animate-spin" /> Đang lưu…
+            </>
+          ) : isNew ? (
+            'Tạo tài khoản'
+          ) : (
+            'Lưu thay đổi'
+          )}
+        </PrimaryButton>
+      </div>
+    </Modal>
+  )
+}
+
+/* ================================================================== */
+/* Phân tích doanh nghiệp (Business Analytics)                        */
+/* ================================================================== */
+function BusinessAnalytics() {
+  const [data, setData] = useState(null)
+  const [err, setErr] = useState('')
+
+  function load() {
+    setErr('')
+    setData(null)
+    getBusinessMetrics()
+      .then(setData)
+      .catch((e) => setErr(e.message))
+  }
+  useEffect(load, [])
+
+  if (err) return <Card><StateRow tone="error">Lỗi tải số liệu: {err}</StateRow></Card>
+  if (!data) return <Card><StateRow>Đang tải số liệu doanh nghiệp…</StateRow></Card>
+
+  const jdFillPct = data.total_jds ? Math.round((data.active_jds / data.total_jds) * 100) : 0
+  const avgScore = Math.round(data.avg_candidate_score || 0)
+
+  const bars = [
+    { label: 'Tổng vị trí (JD)', value: data.total_jds, color: 'indigo', icon: Briefcase },
+    { label: 'Vị trí đang mở', value: data.active_jds, color: 'green', icon: Activity },
+    { label: 'Tổng ứng viên', value: data.total_candidates, color: 'indigo', icon: Users },
+    { label: 'Tổng phỏng vấn', value: data.total_interviews, color: 'green', icon: MessagesSquare },
+  ]
+  const maxBar = Math.max(1, ...bars.map((b) => b.value))
+
+  return (
+    <>
+      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard icon={Briefcase} iconClass="bg-indigo-50 text-indigo-600" label="Vị trí tuyển dụng" value={data.total_jds} footnote={`${data.active_jds} đang mở`} />
+        <StatCard icon={Users} iconClass="bg-violet-50 text-violet-600" label="Tổng ứng viên" value={data.total_candidates} footnote="Đã tiếp nhận & chấm điểm" />
+        <StatCard icon={MessagesSquare} iconClass="bg-sky-50 text-sky-600" label="Buổi phỏng vấn AI" value={data.total_interviews} footnote="Đã thực hiện" />
+        <StatCard icon={Gauge} iconClass="bg-emerald-50 text-emerald-600" label="Điểm phù hợp TB" value={avgScore} footnote="Trên thang 100" />
+      </div>
+
+      <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <Card className="p-6 lg:col-span-2">
+          <h3 className="text-base font-semibold text-slate-900">Tổng quan hoạt động</h3>
+          <p className="mt-1 text-sm text-slate-500">So sánh các chỉ số tuyển dụng chính.</p>
+          <div className="mt-5 space-y-4">
+            {bars.map((b) => (
+              <div key={b.label}>
+                <div className="mb-1.5 flex items-center justify-between text-sm">
+                  <span className="flex items-center gap-2 text-slate-600">
+                    <b.icon size={15} className="text-slate-400" /> {b.label}
+                  </span>
+                  <span className="font-semibold text-slate-800">{b.value}</span>
+                </div>
+                <ProgressBar value={(b.value / maxBar) * 100} color={b.color} />
+              </div>
+            ))}
           </div>
-          <div>
-            <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-              Email
-            </label>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className={`mt-1.5 ${inputCls}`}
-            />
+        </Card>
+
+        <Card className="flex flex-col items-center justify-center p-6 text-center">
+          <h3 className="text-base font-semibold text-slate-900">Điểm phù hợp trung bình</h3>
+          <div className="my-5">
+            <ScoreRing value={avgScore} size={120} />
           </div>
-          <div>
-            <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-              {isNew ? 'Mật khẩu (≥ 8 ký tự)' : 'Mật khẩu mới (để trống nếu giữ nguyên)'}
-            </label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder={isNew ? '' : '••••••••'}
-              className={`mt-1.5 ${inputCls}`}
-            />
+          <p className="text-sm text-slate-500">
+            Chất lượng ứng viên trung bình do AI đánh giá trên toàn hệ thống.
+          </p>
+          <div className="mt-4 w-full rounded-lg bg-slate-50 px-4 py-3 text-left">
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-slate-500">Tỷ lệ vị trí đang mở</span>
+              <span className="font-semibold text-slate-800">{jdFillPct}%</span>
+            </div>
+            <div className="mt-2">
+              <ProgressBar value={jdFillPct} color="green" />
+            </div>
           </div>
-          <div>
-            <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-              Vai trò
-            </label>
-            <select value={role} onChange={(e) => setRole(e.target.value)} className={`mt-1.5 ${inputCls}`}>
-              <option value="hr_staff">HR Staff</option>
-              <option value="admin">Admin</option>
-            </select>
+        </Card>
+      </div>
+    </>
+  )
+}
+
+/* ================================================================== */
+/* Giám sát AI (AI Monitoring)                                        */
+/* ================================================================== */
+function AiMonitoring() {
+  const [metrics, setMetrics] = useState(null)
+  const [logs, setLogs] = useState(null)
+  const [err, setErr] = useState('')
+  const [openLog, setOpenLog] = useState(null)
+
+  function load() {
+    setErr('')
+    setLogs(null)
+    setMetrics(null)
+    getAiMetrics().then(setMetrics).catch((e) => setErr(e.message))
+    getAiLogs().then(setLogs).catch((e) => setErr(e.message))
+  }
+  useEffect(load, [])
+
+  const errorTone = metrics && metrics.error_rate > 5
+
+  return (
+    <>
+      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard icon={Activity} iconClass="bg-sky-50 text-sky-600" label="Tổng request" value={metrics == null ? '…' : metrics.total_requests} />
+        <StatCard
+          icon={AlertTriangle}
+          iconClass={errorTone ? 'bg-red-50 text-red-600' : 'bg-emerald-50 text-emerald-600'}
+          label="Tỷ lệ lỗi"
+          value={metrics == null ? '…' : `${metrics.error_rate}%`}
+        />
+        <StatCard icon={Zap} iconClass="bg-amber-50 text-amber-600" label="Độ trễ TB" value={metrics == null ? '…' : `${metrics.avg_latency_ms} ms`} />
+        <StatCard icon={Coins} iconClass="bg-violet-50 text-violet-600" label="Tổng token" value={metrics == null ? '…' : (metrics.total_tokens || 0).toLocaleString('vi-VN')} />
+      </div>
+
+      <Card className="mt-6 overflow-hidden">
+        <CardHeader icon={Cpu} title="Lịch sử gọi AI">
+          <button
+            onClick={load}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-600 transition hover:bg-slate-50"
+          >
+            <RefreshCw size={14} /> Tải lại
+          </button>
+        </CardHeader>
+
+        {logs === null && !err && <StateRow>Đang tải lịch sử AI…</StateRow>}
+        {err && <StateRow tone="error">Lỗi tải: {err}</StateRow>}
+        {logs && logs.length === 0 && <StateRow>Chưa có lượt gọi AI nào được ghi nhận.</StateRow>}
+        {logs && logs.length > 0 && (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[820px] text-left">
+              <thead>
+                <tr className="border-b border-slate-200 bg-slate-50/60 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                  <th className="px-6 py-3">Thời gian</th>
+                  <th className="px-6 py-3">Agent</th>
+                  <th className="px-6 py-3 text-right">Token</th>
+                  <th className="px-6 py-3 text-right">Độ trễ</th>
+                  <th className="px-6 py-3">Trạng thái</th>
+                  <th className="px-6 py-3 text-right"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {logs.map((l) => (
+                  <tr key={l.id} className="cursor-pointer hover:bg-slate-50/60" onClick={() => setOpenLog(l)}>
+                    <td className="whitespace-nowrap px-6 py-3 text-xs text-slate-500">
+                      {new Date(l.created_at).toLocaleString('vi-VN')}
+                    </td>
+                    <td className="px-6 py-3">
+                      <span className="inline-flex items-center gap-1.5 text-sm font-medium text-slate-700">
+                        <Cpu size={14} className="text-indigo-500" /> {l.agent_name}
+                      </span>
+                    </td>
+                    <td className="px-6 py-3 text-right text-sm text-slate-600">
+                      {(l.total_tokens || 0).toLocaleString('vi-VN')}
+                    </td>
+                    <td className="px-6 py-3 text-right text-sm text-slate-600">{l.latency_ms} ms</td>
+                    <td className="px-6 py-3">
+                      {l.is_error ? (
+                        <Badge variant="error" upper={false}>Lỗi</Badge>
+                      ) : (
+                        <Badge variant="success" upper={false}>Thành công</Badge>
+                      )}
+                    </td>
+                    <td className="px-6 py-3 text-right">
+                      <ChevronRight size={16} className="ml-auto text-slate-300" />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
-          {!isNew && (
-            <label className="flex items-center gap-2 text-sm text-slate-700">
-              <input
-                type="checkbox"
-                checked={isActive}
-                onChange={(e) => setIsActive(e.target.checked)}
-                className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
-              />
-              Tài khoản đang hoạt động
-            </label>
+        )}
+      </Card>
+
+      {openLog && (
+        <Modal title="Chi tiết lượt gọi AI" onClose={() => setOpenLog(null)} wide>
+          <div className="space-y-4 px-6 py-5">
+            <div className="flex flex-wrap gap-2">
+              <Badge variant="ai" upper={false}>{openLog.agent_name}</Badge>
+              <Badge variant={openLog.is_error ? 'error' : 'success'} upper={false}>
+                {openLog.is_error ? 'Lỗi' : 'Thành công'}
+              </Badge>
+              <Badge variant="neutral" upper={false}>{openLog.total_tokens} token</Badge>
+              <Badge variant="neutral" upper={false}>{openLog.latency_ms} ms</Badge>
+            </div>
+            {openLog.error_message && (
+              <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                {openLog.error_message}
+              </div>
+            )}
+            <CodeBlock label="Prompt" text={openLog.prompt} />
+            <CodeBlock label="Completion" text={openLog.completion} />
+          </div>
+        </Modal>
+      )}
+    </>
+  )
+}
+
+/* ================================================================== */
+/* Cấu hình hệ thống động (System Configuration)                      */
+/* ================================================================== */
+function SystemConfiguration() {
+  const toast = useToast()
+  const [settings, setSettings] = useState(null)
+  const [err, setErr] = useState('')
+  const [adding, setAdding] = useState(false)
+
+  function load() {
+    setErr('')
+    getSystemSettings()
+      .then(setSettings)
+      .catch((e) => setErr(e.message))
+  }
+  useEffect(load, [])
+
+  async function handleSave(key, value) {
+    await updateSystemSetting(key, value)
+    toast(`Đã lưu cấu hình "${key}".`)
+    load()
+  }
+
+  return (
+    <>
+      <div className="flex items-center justify-end">
+        <PrimaryButton onClick={() => setAdding(true)}>
+          <Plus size={16} /> Thêm cấu hình
+        </PrimaryButton>
+      </div>
+
+      {settings === null && !err && (
+        <Card className="mt-4"><StateRow>Đang tải cấu hình…</StateRow></Card>
+      )}
+      {err && <Card className="mt-4"><StateRow tone="error">Lỗi tải: {err}</StateRow></Card>}
+      {settings && settings.length === 0 && (
+        <Card className="mt-4">
+          <StateRow>Chưa có cấu hình nào. Bấm “Thêm cấu hình” để tạo mới.</StateRow>
+        </Card>
+      )}
+
+      {settings && settings.length > 0 && (
+        <div className="mt-4 grid grid-cols-1 gap-5 lg:grid-cols-2">
+          {settings.map((s) => (
+            <SettingCard key={s.key} setting={s} onSave={handleSave} />
+          ))}
+        </div>
+      )}
+
+      {adding && (
+        <NewSettingModal
+          onClose={() => setAdding(false)}
+          onSaved={async (key, value) => {
+            await handleSave(key, value)
+            setAdding(false)
+          }}
+        />
+      )}
+    </>
+  )
+}
+
+// Rút cờ boolean đầu tiên (nếu có) để hiện toggle nhanh; phần còn lại chỉnh bằng JSON.
+function firstBoolKey(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return Object.keys(value).find((k) => typeof value[k] === 'boolean')
+  }
+  return null
+}
+
+function SettingCard({ setting, onSave }) {
+  const toast = useToast()
+  const [raw, setRaw] = useState(JSON.stringify(setting.value, null, 2))
+  const [saving, setSaving] = useState(false)
+  const [advanced, setAdvanced] = useState(false)
+
+  const boolKey = firstBoolKey(setting.value)
+
+  async function persist(value) {
+    setSaving(true)
+    try {
+      await onSave(setting.key, value)
+    } catch (e) {
+      toast(e.message || 'Lưu thất bại.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function saveRaw() {
+    let parsed
+    try {
+      parsed = JSON.parse(raw)
+    } catch {
+      toast('Giá trị JSON không hợp lệ.')
+      return
+    }
+    await persist(parsed)
+  }
+
+  async function quickToggle(next) {
+    const value = { ...setting.value, [boolKey]: next }
+    setRaw(JSON.stringify(value, null, 2))
+    await persist(value)
+  }
+
+  return (
+    <Card className="flex flex-col p-5">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <code className="rounded bg-slate-100 px-2 py-0.5 text-sm font-semibold text-slate-800">
+            {setting.key}
+          </code>
+          {setting.description && (
+            <p className="mt-2 text-sm text-slate-500">{setting.description}</p>
           )}
         </div>
+        <span className="whitespace-nowrap text-xs text-slate-400">
+          {setting.updated_at ? new Date(setting.updated_at).toLocaleDateString('vi-VN') : ''}
+        </span>
+      </div>
 
-        <div className="flex justify-end gap-2 border-t border-slate-200 px-6 py-4">
-          <SecondaryButton className="px-3 py-2" onClick={onClose} disabled={saving}>
-            Hủy
-          </SecondaryButton>
-          <PrimaryButton className="px-3 py-2" onClick={save} disabled={saving}>
-            {saving ? (
-              <>
-                <Loader2 size={15} className="animate-spin" /> Đang lưu…
-              </>
-            ) : isNew ? (
-              'Tạo tài khoản'
-            ) : (
-              'Lưu thay đổi'
-            )}
+      {boolKey && !advanced ? (
+        <div className="mt-4 flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50/60 px-4 py-3">
+          <span className="text-sm font-medium text-slate-700">{boolKey}</span>
+          <div className="flex items-center gap-3">
+            <Badge variant={setting.value[boolKey] ? 'success' : 'neutral'} upper={false}>
+              {setting.value[boolKey] ? 'Bật' : 'Tắt'}
+            </Badge>
+            <Toggle
+              checked={!!setting.value[boolKey]}
+              onChange={quickToggle}
+              disabled={saving}
+            />
+          </div>
+        </div>
+      ) : (
+        <div className="mt-4">
+          <textarea
+            value={raw}
+            onChange={(e) => setRaw(e.target.value)}
+            rows={5}
+            spellCheck={false}
+            className="w-full resize-y rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-2 font-mono text-xs text-slate-700 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+          />
+          <div className="mt-3 flex justify-end">
+            <PrimaryButton className="px-3 py-2" onClick={saveRaw} disabled={saving}>
+              {saving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
+              Lưu
+            </PrimaryButton>
+          </div>
+        </div>
+      )}
+
+      {boolKey && (
+        <button
+          onClick={() => setAdvanced((v) => !v)}
+          className="mt-3 self-start text-xs font-medium text-indigo-600 hover:text-indigo-700"
+        >
+          {advanced ? 'Ẩn chỉnh sửa JSON' : 'Chỉnh sửa JSON nâng cao'}
+        </button>
+      )}
+    </Card>
+  )
+}
+
+function NewSettingModal({ onClose, onSaved }) {
+  const toast = useToast()
+  const [key, setKey] = useState('')
+  const [raw, setRaw] = useState('{\n  "enabled": true\n}')
+  const [saving, setSaving] = useState(false)
+
+  async function save() {
+    if (!key.trim()) {
+      toast('Nhập key cấu hình.')
+      return
+    }
+    let parsed
+    try {
+      parsed = JSON.parse(raw)
+    } catch {
+      toast('Giá trị JSON không hợp lệ.')
+      return
+    }
+    setSaving(true)
+    try {
+      await onSaved(key.trim(), parsed)
+    } catch (e) {
+      toast(e.message || 'Lưu thất bại.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Modal title="Thêm cấu hình mới" onClose={onClose}>
+      <div className="space-y-4 px-6 py-5">
+        <Field label="Key">
+          <input
+            value={key}
+            onChange={(e) => setKey(e.target.value)}
+            placeholder="vd: maintenance_mode"
+            className={inputCls}
+          />
+        </Field>
+        <Field label="Giá trị (JSON)">
+          <textarea
+            value={raw}
+            onChange={(e) => setRaw(e.target.value)}
+            rows={5}
+            spellCheck={false}
+            className="w-full resize-y rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-2 font-mono text-xs text-slate-700 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+          />
+        </Field>
+      </div>
+      <div className="flex justify-end gap-2 border-t border-slate-200 px-6 py-4">
+        <SecondaryButton className="px-3 py-2" onClick={onClose} disabled={saving}>Hủy</SecondaryButton>
+        <PrimaryButton className="px-3 py-2" onClick={save} disabled={saving}>
+          {saving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />} Lưu
+        </PrimaryButton>
+      </div>
+    </Modal>
+  )
+}
+
+/* ================================================================== */
+/* Kiểm toán & Bảo mật (Audit & Security)                             */
+/* ================================================================== */
+function AuditSecurity() {
+  const [logs, setLogs] = useState(null)
+  const [err, setErr] = useState('')
+  const [entityType, setEntityType] = useState('')
+  const [openLog, setOpenLog] = useState(null)
+
+  function load() {
+    setErr('')
+    setLogs(null)
+    getAuditLogs(200, entityType || undefined)
+      .then(setLogs)
+      .catch((e) => setErr(e.message))
+  }
+  useEffect(load, [entityType])
+
+  const entityOptions = useMemo(() => {
+    const set = new Set((logs || []).map((l) => l.entity_type).filter(Boolean))
+    return Array.from(set)
+  }, [logs])
+
+  return (
+    <>
+      <Card className="flex flex-wrap items-center gap-3 p-3">
+        <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+          <FileSearch size={18} className="text-rose-500" /> Nhật ký kiểm toán
+        </div>
+        <div className="ml-auto flex items-center gap-2">
+          <select
+            value={entityType}
+            onChange={(e) => setEntityType(e.target.value)}
+            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-400"
+          >
+            <option value="">Tất cả đối tượng</option>
+            {entityOptions.map((t) => (
+              <option key={t} value={t}>{t}</option>
+            ))}
+          </select>
+          <button
+            onClick={load}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-600 transition hover:bg-slate-50"
+          >
+            <RefreshCw size={14} /> Tải lại
+          </button>
+        </div>
+      </Card>
+
+      <Card className="mt-4 overflow-hidden">
+        {logs === null && !err && <StateRow>Đang tải nhật ký kiểm toán…</StateRow>}
+        {err && <StateRow tone="error">Lỗi tải: {err}</StateRow>}
+        {logs && logs.length === 0 && <StateRow>Chưa có bản ghi kiểm toán nào.</StateRow>}
+        {logs && logs.length > 0 && (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[820px] text-left">
+              <thead>
+                <tr className="border-b border-slate-200 bg-slate-50/60 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                  <th className="px-6 py-3">Thời gian</th>
+                  <th className="px-6 py-3">Hành động</th>
+                  <th className="px-6 py-3">Đối tượng</th>
+                  <th className="px-6 py-3">Người thực hiện</th>
+                  <th className="px-6 py-3 text-right"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {logs.map((l) => {
+                  const hasDiff = l.old_data || l.new_data
+                  return (
+                    <tr
+                      key={l.id}
+                      className={`${hasDiff ? 'cursor-pointer' : ''} hover:bg-slate-50/60`}
+                      onClick={hasDiff ? () => setOpenLog(l) : undefined}
+                    >
+                      <td className="whitespace-nowrap px-6 py-3 text-xs text-slate-500">
+                        {new Date(l.created_at).toLocaleString('vi-VN')}
+                      </td>
+                      <td className="px-6 py-3">
+                        <Badge variant="ai" upper={false}>{l.action}</Badge>
+                      </td>
+                      <td className="px-6 py-3 text-sm text-slate-600">
+                        {l.entity_type}
+                        {l.entity_id && (
+                          <span className="ml-1 text-xs text-slate-400">#{String(l.entity_id).slice(0, 8)}</span>
+                        )}
+                      </td>
+                      <td className="px-6 py-3 text-xs text-slate-500">
+                        {l.user_id ? String(l.user_id).slice(0, 8) : 'Hệ thống'}
+                      </td>
+                      <td className="px-6 py-3 text-right">
+                        {hasDiff && <ChevronRight size={16} className="ml-auto text-slate-300" />}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+
+      {openLog && (
+        <Modal title="Chi tiết thay đổi (before / after)" onClose={() => setOpenLog(null)} wide>
+          <div className="space-y-4 px-6 py-5">
+            <div className="flex flex-wrap gap-2">
+              <Badge variant="ai" upper={false}>{openLog.action}</Badge>
+              <Badge variant="neutral" upper={false}>{openLog.entity_type}</Badge>
+            </div>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <CodeBlock
+                label="Trước"
+                text={openLog.old_data ? JSON.stringify(openLog.old_data, null, 2) : '—'}
+              />
+              <CodeBlock
+                label="Sau"
+                text={openLog.new_data ? JSON.stringify(openLog.new_data, null, 2) : '—'}
+              />
+            </div>
+          </div>
+        </Modal>
+      )}
+    </>
+  )
+}
+
+/* ================================================================== */
+/* Trung tâm thông báo (Broadcast Notifications)                      */
+/* ================================================================== */
+function BroadcastNotifications() {
+  const toast = useToast()
+  const [list, setList] = useState(null)
+  const [err, setErr] = useState('')
+
+  const [title, setTitle] = useState('')
+  const [message, setMessage] = useState('')
+  const [type, setType] = useState('info')
+  const [sending, setSending] = useState(false)
+
+  function load() {
+    setErr('')
+    getNotifications()
+      .then(setList)
+      .catch((e) => setErr(e.message))
+  }
+  useEffect(load, [])
+
+  async function send() {
+    if (!title.trim() || !message.trim()) {
+      toast('Nhập tiêu đề và nội dung thông báo.')
+      return
+    }
+    setSending(true)
+    try {
+      await createNotification({ title: title.trim(), message: message.trim(), type, is_active: true })
+      toast('Đã phát thông báo.')
+      setTitle('')
+      setMessage('')
+      setType('info')
+      load()
+    } catch (e) {
+      toast(e.message || 'Gửi thất bại.')
+    } finally {
+      setSending(false)
+    }
+  }
+
+  async function toggle(n) {
+    try {
+      await toggleNotification(n.id)
+      load()
+    } catch (e) {
+      toast(e.message)
+    }
+  }
+
+  return (
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-5">
+      {/* Composer */}
+      <Card className="p-6 lg:col-span-2">
+        <h3 className="flex items-center gap-2 text-base font-semibold text-slate-900">
+          <Megaphone size={18} className="text-fuchsia-500" /> Soạn thông báo
+        </h3>
+        <p className="mt-1 text-sm text-slate-500">Thông báo sẽ hiển thị cho toàn bộ người dùng.</p>
+
+        <div className="mt-5 space-y-4">
+          <Field label="Tiêu đề">
+            <input value={title} onChange={(e) => setTitle(e.target.value)} className={inputCls} placeholder="vd: Bảo trì hệ thống" />
+          </Field>
+          <Field label="Nội dung">
+            <textarea
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              rows={4}
+              className="w-full resize-y rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+              placeholder="Nội dung chi tiết…"
+            />
+          </Field>
+          <Field label="Loại">
+            <div className="flex flex-wrap gap-2">
+              {['info', 'success', 'warning', 'error'].map((t) => (
+                <button
+                  key={t}
+                  onClick={() => setType(t)}
+                  className={`rounded-full border px-3 py-1.5 text-sm capitalize transition ${
+                    type === t
+                      ? 'border-indigo-400 bg-indigo-50 font-medium text-indigo-700'
+                      : 'border-slate-200 bg-white text-slate-600 hover:border-indigo-300'
+                  }`}
+                >
+                  {t}
+                </button>
+              ))}
+            </div>
+          </Field>
+          <PrimaryButton onClick={send} disabled={sending} className="w-full">
+            {sending ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
+            Phát thông báo
           </PrimaryButton>
         </div>
-      </div>
+      </Card>
+
+      {/* List */}
+      <Card className="overflow-hidden lg:col-span-3">
+        <CardHeader icon={Megaphone} title="Thông báo đã phát" iconClass="text-fuchsia-500">
+          <button
+            onClick={load}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-600 transition hover:bg-slate-50"
+          >
+            <RefreshCw size={14} /> Tải lại
+          </button>
+        </CardHeader>
+
+        {list === null && !err && <StateRow>Đang tải thông báo…</StateRow>}
+        {err && <StateRow tone="error">Lỗi tải: {err}</StateRow>}
+        {list && list.length === 0 && <StateRow>Chưa có thông báo nào.</StateRow>}
+        {list && list.length > 0 && (
+          <div className="divide-y divide-slate-100">
+            {list.map((n) => (
+              <div key={n.id} className="flex items-start gap-3 px-6 py-4">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <Badge variant={NOTI_VARIANT[n.type] || 'neutral'} upper={false}>{n.type}</Badge>
+                    <span className="truncate text-sm font-semibold text-slate-900">{n.title}</span>
+                    {!n.is_active && (
+                      <Badge variant="neutral" upper={false}>Đã ẩn</Badge>
+                    )}
+                  </div>
+                  <p className="mt-1 text-sm text-slate-600">{n.message}</p>
+                  <p className="mt-1 text-xs text-slate-400">
+                    {new Date(n.created_at).toLocaleString('vi-VN')}
+                  </p>
+                </div>
+                <button
+                  onClick={() => toggle(n)}
+                  className={`flex-shrink-0 rounded-lg border p-2 transition ${
+                    n.is_active
+                      ? 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50'
+                      : 'border-emerald-200 bg-white text-emerald-600 hover:bg-emerald-50'
+                  }`}
+                  title={n.is_active ? 'Ẩn thông báo' : 'Hiện thông báo'}
+                >
+                  {n.is_active ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
     </div>
   )
 }
 
-/* ------------------------------------------------------------------ */
-/* Tab 2: System Logs (NFR-8)                                          */
-/* ------------------------------------------------------------------ */
+/* ================================================================== */
+/* Trung tâm trích xuất (Export Center)                               */
+/* ================================================================== */
+const EXPORTS = [
+  { kind: 'system-logs', file: 'system_logs.csv', title: 'Nhật ký hệ thống', desc: 'Log đăng nhập & hành động quản trị.', icon: ScrollText, cls: 'bg-slate-100 text-slate-600' },
+  { kind: 'ai-logs', file: 'ai_logs.csv', title: 'Nhật ký giám sát AI', desc: 'Prompt, completion, token & độ trễ.', icon: Cpu, cls: 'bg-sky-50 text-sky-600' },
+  { kind: 'audit-logs', file: 'audit_logs.csv', title: 'Nhật ký kiểm toán', desc: 'Ai đã thay đổi gì (before/after).', icon: FileSearch, cls: 'bg-rose-50 text-rose-600' },
+]
+
+function ExportCenter() {
+  const toast = useToast()
+  const [busy, setBusy] = useState(null)
+
+  async function handleExport(item) {
+    setBusy(item.kind)
+    try {
+      await downloadExport(item.kind, item.file)
+      toast(`Đã xuất ${item.title} (CSV).`)
+    } catch (e) {
+      toast(e.message || 'Xuất thất bại.')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  return (
+    <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
+      {EXPORTS.map((item) => (
+        <Card key={item.kind} className="flex flex-col p-6">
+          <div className={`flex h-12 w-12 items-center justify-center rounded-xl ${item.cls}`}>
+            <item.icon size={22} />
+          </div>
+          <h3 className="mt-4 text-base font-semibold text-slate-900">{item.title}</h3>
+          <p className="mt-1 flex-1 text-sm text-slate-500">{item.desc}</p>
+          <div className="mt-4 flex items-center gap-2 text-xs text-slate-400">
+            <FileSpreadsheet size={14} /> Định dạng CSV (UTF-8)
+          </div>
+          <PrimaryButton
+            className="mt-4 w-full"
+            onClick={() => handleExport(item)}
+            disabled={busy === item.kind}
+          >
+            {busy === item.kind ? (
+              <><Loader2 size={16} className="animate-spin" /> Đang xuất…</>
+            ) : (
+              <><Download size={16} /> Tải CSV</>
+            )}
+          </PrimaryButton>
+        </Card>
+      ))}
+    </div>
+  )
+}
+
+/* ================================================================== */
+/* Nhật ký hệ thống (NFR-8)                                           */
+/* ================================================================== */
 function SystemLogs() {
   const [logs, setLogs] = useState(null)
   const [err, setErr] = useState('')
@@ -416,31 +1199,24 @@ function SystemLogs() {
   useEffect(load, [])
 
   return (
-    <Card className="mt-6 overflow-hidden">
-      <div className="flex items-center justify-between border-b border-slate-200 px-6 py-3">
-        <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-800">
-          <ScrollText size={16} className="text-indigo-600" /> Nhật ký hệ thống
-        </h2>
+    <Card className="overflow-hidden">
+      <CardHeader icon={ScrollText} title="Nhật ký hệ thống">
         <button
           onClick={load}
           className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-600 transition hover:bg-slate-50"
         >
           <RefreshCw size={14} /> Tải lại
         </button>
-      </div>
+      </CardHeader>
 
-      {logs === null && !err && (
-        <p className="px-6 py-10 text-sm text-slate-400">Đang tải nhật ký…</p>
-      )}
-      {err && <p className="px-6 py-10 text-sm text-red-500">Lỗi tải: {err}</p>}
-      {logs && logs.length === 0 && (
-        <p className="px-6 py-10 text-sm text-slate-400">Chưa có nhật ký nào.</p>
-      )}
+      {logs === null && !err && <StateRow>Đang tải nhật ký…</StateRow>}
+      {err && <StateRow tone="error">Lỗi tải: {err}</StateRow>}
+      {logs && logs.length === 0 && <StateRow>Chưa có nhật ký nào.</StateRow>}
       {logs && logs.length > 0 && (
         <div className="overflow-x-auto">
           <table className="w-full min-w-[720px] text-left">
             <thead>
-              <tr className="border-b border-slate-200 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+              <tr className="border-b border-slate-200 bg-slate-50/60 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
                 <th className="px-6 py-3">Thời gian</th>
                 <th className="px-6 py-3">Mức</th>
                 <th className="px-6 py-3">Module</th>
@@ -467,5 +1243,54 @@ function SystemLogs() {
         </div>
       )}
     </Card>
+  )
+}
+
+/* ================================================================== */
+/* Shared bits                                                        */
+/* ================================================================== */
+function Modal({ title, onClose, children, wide = false }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm" onClick={onClose} />
+      <div
+        className={`relative flex max-h-[90vh] w-full flex-col overflow-hidden rounded-2xl bg-white shadow-2xl ${
+          wide ? 'max-w-3xl' : 'max-w-md'
+        }`}
+      >
+        <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
+          <h2 className="text-base font-bold text-slate-900">{title}</h2>
+          <button
+            onClick={onClose}
+            className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+          >
+            <X size={18} />
+          </button>
+        </div>
+        <div className="overflow-y-auto">{children}</div>
+      </div>
+    </div>
+  )
+}
+
+function Field({ label, children }) {
+  return (
+    <div>
+      <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+        {label}
+      </label>
+      {children}
+    </div>
+  )
+}
+
+function CodeBlock({ label, text }) {
+  return (
+    <div>
+      <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</p>
+      <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-2.5 font-mono text-xs leading-relaxed text-slate-700">
+        {text || '—'}
+      </pre>
+    </div>
   )
 }

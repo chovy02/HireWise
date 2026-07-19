@@ -3,6 +3,9 @@
 // Pure presentational components — no data fetching here.
 // ---------------------------------------------------------------------------
 
+import { useEffect, useRef, useState } from 'react'
+import { ChevronDown, Check } from 'lucide-react'
+
 export function Card({ className = '', children, ...rest }) {
   return (
     <div
@@ -43,6 +46,9 @@ const BADGE_VARIANTS = {
   new: 'bg-blue-50 text-blue-600',
   neutral: 'bg-slate-100 text-slate-600',
   ai: 'bg-indigo-100 text-indigo-700',
+  warning: 'bg-amber-50 text-amber-600',
+  success: 'bg-emerald-50 text-emerald-600',
+  info: 'bg-sky-50 text-sky-600',
 }
 
 export function Badge({ variant = 'neutral', upper = true, children, className = '' }) {
@@ -151,6 +157,107 @@ export function Segmented({ options, value, onChange }) {
   )
 }
 
+// In-content dropdown "view switcher" — thay cho thanh tab (Segmented) khi cần
+// chuyển giữa các chế độ xem của trang. Hiện lựa chọn đang chọn + menu xổ xuống.
+// options: [{ value, label, icon?, badge? }] (hoặc mảng string).
+export function Dropdown({
+  options,
+  value,
+  onChange,
+  placeholder = 'Chọn…',
+  align = 'left',
+  className = '',
+  buttonClassName = '',
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+
+  useEffect(() => {
+    if (!open) return
+    function onDoc(e) {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false)
+    }
+    function onKey(e) {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', onDoc)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDoc)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
+  const norm = options.map((o) => (typeof o === 'string' ? { value: o, label: o } : o))
+  const current = norm.find((o) => o.value === value)
+  const CurrentIcon = current?.icon
+
+  return (
+    <div ref={ref} className={`relative ${className}`}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className={`inline-flex w-full items-center gap-2 rounded-lg border border-slate-200 bg-white px-3.5 py-2.5 text-sm font-semibold text-slate-800 shadow-sm transition hover:bg-slate-50 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100 ${buttonClassName}`}
+      >
+        {CurrentIcon && <CurrentIcon size={16} className="flex-shrink-0 text-indigo-600" />}
+        <span className="flex-1 truncate text-left">{current?.label || placeholder}</span>
+        {current?.badge != null && current.badge !== '' && (
+          <span className="rounded-full bg-indigo-50 px-1.5 py-0.5 text-[11px] font-semibold text-indigo-600">
+            {current.badge}
+          </span>
+        )}
+        <ChevronDown
+          size={16}
+          className={`flex-shrink-0 text-slate-400 transition-transform duration-200 ${open ? 'rotate-180' : ''}`}
+        />
+      </button>
+
+      {open && (
+        <div
+          className={`absolute z-30 mt-2 min-w-full overflow-hidden rounded-xl border border-slate-200 bg-white py-1 shadow-lg shadow-slate-900/5 ${
+            align === 'right' ? 'right-0' : 'left-0'
+          }`}
+        >
+          {norm.map((o) => {
+            const Icon = o.icon
+            const active = o.value === value
+            return (
+              <button
+                key={o.value}
+                type="button"
+                onClick={() => {
+                  onChange(o.value)
+                  setOpen(false)
+                }}
+                className={`flex w-full items-center gap-2.5 px-3.5 py-2.5 text-sm transition-colors ${
+                  active
+                    ? 'bg-indigo-50/70 font-semibold text-indigo-700'
+                    : 'text-slate-700 hover:bg-slate-50'
+                }`}
+              >
+                {Icon && (
+                  <Icon size={16} className={active ? 'text-indigo-600' : 'text-slate-400'} />
+                )}
+                <span className="flex-1 whitespace-nowrap text-left">{o.label}</span>
+                {o.badge != null && o.badge !== '' && (
+                  <span
+                    className={`rounded-full px-1.5 py-0.5 text-[11px] font-semibold ${
+                      active ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-500'
+                    }`}
+                  >
+                    {o.badge}
+                  </span>
+                )}
+                {active && <Check size={15} className="text-indigo-600" />}
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // RBAC permission toggle switch.
 export function Toggle({ checked, onChange, disabled = false }) {
   return (
@@ -209,4 +316,53 @@ export function SecondaryButton({ className = '', children, ...rest }) {
       {children}
     </button>
   )
+}
+
+// Page header block used across admin sections: icon chip + title + subtitle,
+// with an optional action rendered on the right.
+export function PageHeader({ icon: Icon, title, subtitle, iconClass, action }) {
+  return (
+    <div className="flex flex-wrap items-start justify-between gap-4">
+      <div className="flex items-start gap-3.5">
+        {Icon && (
+          <div
+            className={`flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl ${
+              iconClass || 'bg-indigo-50 text-indigo-600'
+            }`}
+          >
+            <Icon size={22} />
+          </div>
+        )}
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900">{title}</h1>
+          {subtitle && <p className="mt-1 text-sm text-slate-500">{subtitle}</p>}
+        </div>
+      </div>
+      {action}
+    </div>
+  )
+}
+
+// Shared header strip for a Card acting as a panel.
+export function CardHeader({ icon: Icon, iconClass, title, children }) {
+  return (
+    <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-6 py-3.5">
+      <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+        {Icon && <Icon size={16} className={iconClass || 'text-indigo-600'} />}
+        {title}
+      </h2>
+      {children}
+    </div>
+  )
+}
+
+// Compact centered state row for loading / empty / error inside a Card.
+export function StateRow({ children, tone = 'muted' }) {
+  const cls =
+    tone === 'error'
+      ? 'text-red-500'
+      : tone === 'strong'
+        ? 'text-slate-600'
+        : 'text-slate-400'
+  return <p className={`px-6 py-12 text-center text-sm ${cls}`}>{children}</p>
 }

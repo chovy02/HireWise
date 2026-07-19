@@ -32,7 +32,7 @@ import {
   Badge,
   Tag,
   ScoreRing,
-  Segmented,
+  Dropdown,
   SecondaryButton,
   PrimaryButton,
 } from '../components/ui.jsx'
@@ -383,9 +383,33 @@ export default function Shortlisting() {
               </p>
             </div>
           </div>
+
+          {/* Chuyển chế độ xem bằng dropdown (thay cho thanh tab cũ) */}
+          <div className="flex items-center gap-2.5">
+            <span className="hidden text-sm font-medium text-slate-500 sm:inline">
+              Chế độ xem
+            </span>
+            <Dropdown
+              align="right"
+              className="min-w-[190px]"
+              value={view}
+              onChange={setView}
+              options={[
+                { value: 'leaderboard', label: 'Leaderboard', icon: Trophy },
+                {
+                  value: 'shortlist',
+                  label: 'Shortlist',
+                  icon: ListChecks,
+                  badge: slDetail?.items ? slDetail.items.length : undefined,
+                },
+                { value: 'interview', label: 'Phỏng vấn', icon: MessageSquareText },
+              ]}
+            />
+          </div>
         </div>
 
-        {/* Shortlist selector + view toggle */}
+        {/* Shortlist selector (chỉ hiện ở Leaderboard & Shortlist) */}
+        {view !== 'interview' && (
         <Card className="mt-6 flex flex-wrap items-center gap-3 p-3">
           <div className="flex items-center gap-2">
             <ListChecks size={18} className="text-indigo-600" />
@@ -453,22 +477,8 @@ export default function Shortlisting() {
               <Trash2 size={15} /> Delete
             </SecondaryButton>
           )}
-
-          <div className="ml-auto">
-            <Segmented
-              options={[
-                { value: 'leaderboard', label: 'Leaderboard' },
-                {
-                  value: 'shortlist',
-                  label: `Shortlist${slDetail?.items ? ` (${slDetail.items.length})` : ''}`,
-                },
-                { value: 'interview', label: 'Phỏng vấn' },
-              ]}
-              value={view}
-              onChange={setView}
-            />
-          </div>
         </Card>
+        )}
 
         {view === 'leaderboard' && (
         <>
