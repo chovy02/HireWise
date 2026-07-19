@@ -1,5 +1,7 @@
 import os
 import time
+from sqlalchemy.orm import Session
+from app.models import AILog
 
 from groq import Groq
 
@@ -53,3 +55,34 @@ def generate_text(model_name: str, prompt: str) -> str:
                 raise
             time.sleep(min(backoff, MAX_WAIT))
             backoff *= 2
+
+def execute_and_log_ai(db: Session, agent_name: str, prompt: str, ai_action_func):
+    """
+    Hàm Wrapper: Đo thời gian, bắt lỗi và lưu log tự động.
+    `ai_action_func` là một lambda hoặc function trả về (response_text, token_count).
+    """
+    start_time = time.time()
+    log_entry = AILog(agent_name=agent_name, prompt=prompt)
+    
+    try:
+        # Thực thi hàm gọi LLM (VD: model.generate_content)
+        response_text, token_count = ai_action_func()
+        
+        # Ghi nhận thành công
+        log_entry.completion = response_text
+        log_entry.total_tokens = token_count
+        log_entry.is_error = False
+        
+        return response_text
+        
+    except Exception as e:
+        # Ghi nhận lỗi
+        log_entry.is_error = True
+        log_entry.error_message = str(e)
+        raise e
+        
+    finally:
+        # Tính toán ms và lưu DB dù thành công hay thất bại
+        log_entry.latency_ms = (time.time() - start_time) * 1000
+        db.add(log_entry)
+        db.commit()
