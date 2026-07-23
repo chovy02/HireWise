@@ -67,7 +67,7 @@ def generate_interview_questions_ai(jd_reqs: dict, candidate_info: dict, aspect:
                                       .replace("{jd_requirements}", json.dumps(jd_reqs, ensure_ascii=False))\
                                       .replace("{candidate_info}", json.dumps(candidate_info, ensure_ascii=False))
     try:
-        parsed_data = json.loads(_clean_json(generate_text(INTERVIEW_MODEL, prompt)))
+        parsed_data = json.loads(_clean_json(generate_text(INTERVIEW_MODEL, prompt, agent_name="interview_questions")))
         return parsed_data.get("questions", [])
     except Exception as e:
         return []
@@ -77,14 +77,14 @@ def evaluate_interview_answer_ai(question: str, expected: str, answer: str) -> d
                                    .replace("{expected_answer}", expected or "")\
                                    .replace("{answer_text}", answer)
     try:
-        return json.loads(_clean_json(generate_text(INTERVIEW_MODEL, prompt)))
+        return json.loads(_clean_json(generate_text(INTERVIEW_MODEL, prompt, agent_name="interview_evaluate")))
     except Exception as e:
         return {"evaluation": "Lỗi phân tích AI", "score": 0, "follow_up_question": ""}
     
 def summarize_interview_ai(transcript: str) -> str:
     prompt = SUMMARIZE_INTERVIEW_PROMPT.replace("{interview_transcript}", transcript)
     try:
-        parsed_data = json.loads(_clean_json(generate_text(INTERVIEW_MODEL, prompt)))
+        parsed_data = json.loads(_clean_json(generate_text(INTERVIEW_MODEL, prompt, agent_name="interview_summary")))
         return parsed_data.get("summary", "Buổi phỏng vấn đã hoàn tất.")
     except Exception:
         return "Lỗi khi tạo tổng kết tự động."

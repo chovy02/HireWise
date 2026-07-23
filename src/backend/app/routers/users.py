@@ -79,16 +79,18 @@ def update_user(
     if payload.password is not None:
         user.password_hash = security.get_password_hash(payload.password)
     if payload.is_active is not None:
-        if user.id == current_user.id and not payload.is_active:
-            raise HTTPException(status_code=400, detail="Không thể tự khóa tài khoản của chính mình.")
         user.is_active = payload.is_active
+    if payload.is_banned is not None:
+        if user.id == current_user.id and payload.is_banned:
+            raise HTTPException(status_code=400, detail="Không thể tự khóa tài khoản của chính mình.")
+        user.is_banned = payload.is_banned
 
     db.commit()
     db.refresh(user)
 
     write_system_log(
         db, module="users",
-        message=f"Admin {current_user.email} cập nhật tài khoản {user.email} (role={user.role}, active={user.is_active})",
+        message=f"Admin {current_user.email} cập nhật tài khoản {user.email} (role={user.role}, active={user.is_active}, banned={user.is_banned})",
     )
     return user
 
@@ -99,6 +101,7 @@ def deactivate_user(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
+    """Khóa tài khoản (ban). Đặt is_banned=True, KHÔNG đụng tới is_active (xác minh email)."""
     if user_id == current_user.id:
         raise HTTPException(status_code=400, detail="Không thể tự khóa tài khoản của chính mình.")
 
@@ -106,7 +109,7 @@ def deactivate_user(
     if not user:
         raise HTTPException(status_code=404, detail="Không tìm thấy tài khoản.")
 
-    user.is_active = False
+    user.is_banned = True
     db.commit()
     db.refresh(user)
 

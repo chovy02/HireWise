@@ -57,7 +57,7 @@ def generate_evidence(cv_text: str, score_result: dict) -> dict:
         ).replace(
             "{weaknesses}", json.dumps(weaknesses, ensure_ascii=False)
         )
-        response_text = _clean_json_response(generate_text(EVIDENCE_MODEL, prompt))
+        response_text = _clean_json_response(generate_text(EVIDENCE_MODEL, prompt, agent_name="evidence"))
         return json.loads(response_text)
     except json.JSONDecodeError as e:
         return {"evidence_error": f"Không parse được JSON từ response: {e}"}

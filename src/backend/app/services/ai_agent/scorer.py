@@ -59,7 +59,7 @@ def score_cv(candidate_info: dict, jd_requirements: dict) -> dict:
             "{candidate_info}",
             json.dumps(candidate_info, ensure_ascii=False, indent=2),
         )
-        response_text = _clean_json_response(generate_text(SCORER_MODEL, prompt))
+        response_text = _clean_json_response(generate_text(SCORER_MODEL, prompt, agent_name="cv_scorer"))
         return json.loads(response_text)
     except json.JSONDecodeError as e:
         return {"score_error": f"Không parse được JSON từ response: {e}"}
