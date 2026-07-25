@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   X,
   ArrowLeft,
@@ -14,7 +14,7 @@ import {
   Loader2,
   MessageSquareText,
 } from 'lucide-react'
-import { Tag, Badge, ProgressBar, Segmented, PrimaryButton, SecondaryButton } from './ui.jsx'
+import { Tag, Badge, ProgressBar, PrimaryButton, SecondaryButton } from './ui.jsx'
 import { useToast } from '../context/ToastContext.jsx'
 import { formatName } from '../utils/formatName.js'
 import InterviewModal from './InterviewModal.jsx'
@@ -85,65 +85,6 @@ function CvPdf({ candidateId }) {
   )
 }
 
-// Chế độ xem CV dạng VĂN BẢN (từ raw_text đã trích) để có thể tô sáng bằng chứng.
-// Khi `highlight` (đoạn trích đang hover ở cột trái) đổi -> tìm trong text và bọc
-// <mark>, đồng thời tự cuộn tới. Không thể tô sáng trong iframe PDF nên dùng bản text.
-function CvText({ text, highlight }) {
-  const markRef = useRef(null)
-
-  useEffect(() => {
-    if (markRef.current) {
-      markRef.current.scrollIntoView({ block: 'center', behavior: 'smooth' })
-    }
-  }, [highlight])
-
-  if (!text || !text.trim()) {
-    return (
-      <div className="flex h-full min-h-[60vh] items-center justify-center rounded-lg border border-dashed border-slate-200 bg-slate-50/50 p-6 text-center text-xs text-slate-400">
-        Chưa có nội dung văn bản của CV để hiển thị.
-      </div>
-    )
-  }
-
-  let content = text
-  if (highlight && highlight.trim()) {
-    // Cho phép lệch khoảng trắng/xuống dòng giữa quote và text gốc: escape rồi
-    // đổi mọi chuỗi whitespace thành \s+, tìm không phân biệt hoa/thường.
-    const pattern = highlight
-      .trim()
-      .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-      .replace(/\s+/g, '\\s+')
-    let match = null
-    try {
-      match = new RegExp(pattern, 'i').exec(text)
-    } catch {
-      match = null
-    }
-    if (match) {
-      const start = match.index
-      const end = start + match[0].length
-      content = (
-        <>
-          {text.slice(0, start)}
-          <mark
-            ref={markRef}
-            className="rounded bg-amber-200 px-0.5 text-slate-900"
-          >
-            {text.slice(start, end)}
-          </mark>
-          {text.slice(end)}
-        </>
-      )
-    }
-  }
-
-  return (
-    <div className="h-full min-h-[60vh] overflow-y-auto whitespace-pre-wrap rounded-lg border border-slate-200 bg-white p-4 text-xs leading-relaxed text-slate-700">
-      {content}
-    </div>
-  )
-}
-
 // Modal chi tiết ứng viên — dữ liệu THẬT từ backend. Cột phải nhúng file PDF gốc;
 // bằng chứng điểm mạnh/yếu hiển thị nguyên văn (trích dẫn) ở cột trái.
 export default function CandidateDetailModal({ candidateId, onClose, onOverridden }) {
@@ -154,9 +95,6 @@ export default function CandidateDetailModal({ candidateId, onClose, onOverridde
   const [draftScore, setDraftScore] = useState('')
   const [reason, setReason] = useState('')
   const [saving, setSaving] = useState(false)
-  // Đoạn trích đang hover (để tô sáng trong CV) + chế độ xem CV bên phải.
-  const [highlight, setHighlight] = useState(null)
-  const [cvView, setCvView] = useState('text') // 'text' (highlight được) | 'pdf'
   const [showInterview, setShowInterview] = useState(false)
 
   useEffect(() => {
@@ -212,7 +150,7 @@ export default function CandidateDetailModal({ candidateId, onClose, onOverridde
   const inputCls =
     'w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100'
 
-  // 1 thẻ nhận định (điểm mạnh/yếu) có thể hover để soi bằng chứng trong CV.
+  // 1 thẻ nhận định (điểm mạnh/yếu) kèm trích dẫn nguyên văn từ CV.
   function EvidenceCard({ stmt, quote, tone }) {
     const styles =
       tone === 'strength'
@@ -220,13 +158,7 @@ export default function CandidateDetailModal({ candidateId, onClose, onOverridde
         : 'border-amber-200 bg-amber-50'
     const titleCls = tone === 'strength' ? 'text-slate-800' : 'text-amber-800'
     return (
-      <div
-        className={`rounded-lg border p-4 transition ${styles} ${
-          quote ? 'cursor-pointer hover:border-indigo-300 hover:shadow-sm' : ''
-        }`}
-        onMouseEnter={() => quote && setHighlight(quote)}
-        onMouseLeave={() => quote && setHighlight(null)}
-      >
+      <div className={`rounded-lg border p-4 transition ${styles}`}>
         <p className={`text-sm font-semibold ${titleCls}`}>{stmt}</p>
         {quote ? (
           <p className="mt-2 border-l-2 border-indigo-300 pl-2 text-xs italic leading-relaxed text-slate-500">
@@ -526,27 +458,15 @@ export default function CandidateDetailModal({ candidateId, onClose, onOverridde
                   )}
                 </div>
 
-                {/* Right: CV gốc — xem dạng Văn bản (tô sáng bằng chứng) hoặc PDF */}
+                {/* Right: CV gốc — nhúng file PDF gốc từ backend */}
                 <div className="flex flex-col px-6 py-5 lg:min-h-0 lg:overflow-hidden">
                   <div className="mb-3 flex items-center justify-between gap-2">
                     <h3 className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-slate-500">
                       <FileText size={14} /> CV gốc
                     </h3>
-                    <Segmented
-                      options={[
-                        { value: 'text', label: 'Văn bản' },
-                        { value: 'pdf', label: 'PDF' },
-                      ]}
-                      value={cvView}
-                      onChange={setCvView}
-                    />
                   </div>
                   <div className="min-h-0 flex-1">
-                    {cvView === 'text' ? (
-                      <CvText text={detail.raw_text} highlight={highlight} />
-                    ) : (
-                      <CvPdf candidateId={candidateId} />
-                    )}
+                    <CvPdf candidateId={candidateId} />
                   </div>
                 </div>
               </div>
