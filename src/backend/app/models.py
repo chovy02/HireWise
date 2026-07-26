@@ -21,12 +21,6 @@ class User(Base):
         Boolean, default=False, nullable=False, server_default="false"
     )
     role: Mapped[str] = mapped_column(String(50), default="hr_staff")
-    # Tăng mỗi lần user đăng ký lại (chưa kích hoạt). Token xác minh mang version
-    # tại thời điểm phát hành; chỉ token có version KHỚP mới hợp lệ -> token cũ từ
-    # lần đăng ký trước tự động bị vô hiệu hóa.
-    verify_token_version: Mapped[int] = mapped_column(
-        Integer, default=0, nullable=False, server_default="0"
-    )
     # Mã OTP 6 chữ số gửi qua email + hạn dùng. Cột hạn dùng phải timezone-aware:
     # code so sánh với datetime.now(timezone.utc), lưu naive sẽ ném TypeError khi so sánh.
     verification_code: Mapped[str] = mapped_column(String(6), nullable=True)

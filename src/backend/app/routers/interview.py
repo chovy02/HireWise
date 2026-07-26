@@ -5,6 +5,12 @@ from uuid import UUID
 from app import models, schemas
 from app.database import get_db
 from app.core.dependencies import get_current_user, require_role
+from app.core.ownership import (
+    get_owned_candidate,
+    get_owned_interview,
+    get_owned_jd,
+    get_owned_question,
+)
 from app.services.ai_agent.interviewer import generate_interview_questions_ai, evaluate_interview_answer_ai, summarize_interview_ai
 
 router = APIRouter(
@@ -20,7 +26,8 @@ def get_candidate_interview(
     current_user: models.User = Depends(get_current_user),
 ):
     """Lấy buổi phỏng vấn hiện có của ứng viên (nếu đã tạo)."""
-    interview = db.query(models.Interview).filter(models.Interview.cv_id == candidate_id).first()
+    candidate = get_owned_candidate(db, candidate_id, current_user)
+    interview = db.query(models.Interview).filter(models.Interview.cv_id == candidate.id).first()
     if not interview:
         raise HTTPException(status_code=404, detail="Ứng viên chưa có buổi phỏng vấn.")
     return interview
@@ -33,14 +40,14 @@ def generate_interview(
     current_user: models.User = Depends(get_current_user),
 ):
     """Tạo buổi phỏng vấn mới và AI tự động sinh câu hỏi."""
-    candidate = db.query(models.Candidate).filter(models.Candidate.id == candidate_id).first()
-    if not candidate or not candidate.evaluation:
+    candidate = get_owned_candidate(db, candidate_id, current_user)
+    if not candidate.evaluation:
         raise HTTPException(status_code=400, detail="Ứng viên không tồn tại hoặc chưa được đánh giá AI.")
 
-    jd = db.query(models.JobDescription).filter(models.JobDescription.id == candidate.jd_id).first()
+    jd = get_owned_jd(db, candidate.jd_id, current_user)
 
     # Xóa lịch sử phỏng vấn cũ nếu HR muốn tạo lại
-    existing_interview = db.query(models.Interview).filter(models.Interview.cv_id == candidate_id).first()
+    existing_interview = db.query(models.Interview).filter(models.Interview.cv_id == candidate.id).first()
     if existing_interview:
         db.delete(existing_interview)
         db.commit()
@@ -86,10 +93,8 @@ def evaluate_answer(
     current_user: models.User = Depends(get_current_user),
 ):
     """HR nhập câu trả lời của ứng viên, AI đánh giá và sinh câu hỏi đào sâu nếu cần."""
-    question = db.query(models.InterviewQuestion).filter(models.InterviewQuestion.id == question_id).first()
-    if not question:
-        raise HTTPException(status_code=404, detail="Không tìm thấy câu hỏi.")
-    
+    question = get_owned_question(db, question_id, current_user)
+
     interview = db.query(models.Interview).filter(models.Interview.id == question.interview_id).first()
     if interview and interview.status == "pending":
         interview.status = "in_progress"
@@ -137,10 +142,8 @@ def complete_interview(
     current_user: models.User = Depends(get_current_user),
 ):
     """HR bấm nút kết thúc. Hệ thống gom toàn bộ dữ liệu cho AI tổng kết."""
-    interview = db.query(models.Interview).filter(models.Interview.id == interview_id).first()
-    if not interview:
-        raise HTTPException(status_code=404, detail="Không tìm thấy buổi phỏng vấn.")
-        
+    interview = get_owned_interview(db, interview_id, current_user)
+
     if interview.status == "completed":
         raise HTTPException(status_code=400, detail="Buổi phỏng vấn này đã được đóng lại trước đó.")
 

@@ -8,6 +8,12 @@ from sqlalchemy.orm import Session
 
 from app import models, schemas
 from app.core.dependencies import get_current_user, require_role
+from app.core.ownership import (
+    get_owned_candidate,
+    get_owned_evaluation,
+    get_owned_jd,
+    owned_jds,
+)
 from app.database import get_db
 from app.services.ai_agent import pipeline
 from app.services.ai_agent.exceptions import AIServiceError
@@ -56,16 +62,25 @@ def list_jds(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
+    # CHỈ JD do chính người dùng này tạo. Trước đây trả về cả bảng nên hai tài
+    # khoản HR khác nhau thấy y hệt danh sách project của nhau.
     jds = (
-        db.query(models.JobDescription)
+        owned_jds(db, current_user)
         .order_by(models.JobDescription.created_at.desc())
         .all()
     )
     # Đếm số ứng viên theo từng JD trong 1 query (tránh N+1) để trả kèm dashboard.
-    counts = dict(
-        db.query(models.Candidate.jd_id, func.count(models.Candidate.id))
-        .group_by(models.Candidate.jd_id)
-        .all()
+    # Giới hạn theo đúng các JD vừa lấy, không đếm tràn sang JD người khác.
+    jd_ids = [jd.id for jd in jds]
+    counts = (
+        dict(
+            db.query(models.Candidate.jd_id, func.count(models.Candidate.id))
+            .filter(models.Candidate.jd_id.in_(jd_ids))
+            .group_by(models.Candidate.jd_id)
+            .all()
+        )
+        if jd_ids
+        else {}
     )
     return [
         schemas.JDListItem(
@@ -86,10 +101,7 @@ def get_jd(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    jd = db.query(models.JobDescription).filter(models.JobDescription.id == jd_id).first()
-    if not jd:
-        raise HTTPException(status_code=404, detail="Không tìm thấy vị trí tuyển dụng.")
-    return jd
+    return get_owned_jd(db, jd_id, current_user)
 
 
 @jd_router.post(
@@ -110,9 +122,7 @@ async def upload_cvs(
     Frontend poll GET /jds/{jd_id}/candidates để thấy status/điểm cập nhật dần,
     không phải chờ toàn bộ CV xử lý xong.
     """
-    jd = db.query(models.JobDescription).filter(models.JobDescription.id == jd_id).first()
-    if not jd:
-        raise HTTPException(status_code=404, detail="Không tìm thấy vị trí tuyển dụng.")
+    jd = get_owned_jd(db, jd_id, current_user)
 
     if not file.filename.lower().endswith(".zip"):
         raise HTTPException(status_code=400, detail="Chỉ chấp nhận file .zip chứa nhiều CV PDF.")
@@ -149,7 +159,10 @@ def get_leaderboard(
     current_user: models.User = Depends(get_current_user),
 ):
     """UC U004 - View Candidate Leaderboard: bảng xếp hạng theo điểm phù hợp, giảm dần."""
-    candidates = db.query(models.Candidate).filter(models.Candidate.jd_id == jd_id).all()
+    # Chốt quyền trên JD trước: nếu không phải JD của mình thì 404 luôn, không lộ
+    # danh sách ứng viên của người khác.
+    jd = get_owned_jd(db, jd_id, current_user)
+    candidates = db.query(models.Candidate).filter(models.Candidate.jd_id == jd.id).all()
 
     items = [
         schemas.CandidateListItem(
@@ -185,10 +198,7 @@ def get_candidate(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    candidate = db.query(models.Candidate).filter(models.Candidate.id == candidate_id).first()
-    if not candidate:
-        raise HTTPException(status_code=404, detail="Không tìm thấy ứng viên.")
-    return candidate
+    return get_owned_candidate(db, candidate_id, current_user)
 
 
 @candidate_router.get("/{candidate_id}/cv")
@@ -198,9 +208,7 @@ def get_candidate_cv(
     current_user: models.User = Depends(get_current_user),
 ):
     """Trả file PDF gốc của ứng viên để hiển thị lại cho HR (nhúng trong CandidateModal)."""
-    candidate = db.query(models.Candidate).filter(models.Candidate.id == candidate_id).first()
-    if not candidate:
-        raise HTTPException(status_code=404, detail="Không tìm thấy ứng viên.")
+    candidate = get_owned_candidate(db, candidate_id, current_user)
     if not candidate.file_path or not os.path.exists(candidate.file_path):
         raise HTTPException(status_code=404, detail="Chưa lưu file CV gốc cho ứng viên này.")
 
@@ -231,9 +239,7 @@ def override_evaluation(
     current_user: models.User = Depends(get_current_user),
 ):
     """HR điều chỉnh điểm AI chấm sai, lưu lịch sử thay đổi vào evaluation_overrides."""
-    evaluation = db.query(models.Evaluation).filter(models.Evaluation.id == evaluation_id).first()
-    if not evaluation:
-        raise HTTPException(status_code=404, detail="Không tìm thấy đánh giá.")
+    evaluation = get_owned_evaluation(db, evaluation_id, current_user)
 
     db.add(models.EvaluationOverride(
         evaluation_id=evaluation.id,

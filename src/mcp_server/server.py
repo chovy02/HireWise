@@ -41,6 +41,11 @@ def _run(fn, *args, user_bound: bool = False, acting_user_id: str = "", **kwargs
     `acting_user_id`: do MCP CLIENT (backend) tiêm — chính là HR đang đăng nhập. LLM
     không nhìn thấy tham số này (backend lọc khỏi schema trước khi đưa cho model).
     Không có thì rơi về user mặc định (client ngoài như Claude Desktop).
+
+    `owner_id` được tiêm vào MỌI tool (không chỉ tool ghi): các tool đọc trước đây
+    truy vấn toàn bảng nên Copilot của HR này trả về được project/ứng viên của HR
+    khác. Tiêm ở đây — chứ không để từng tool tự nhớ — để một tool mới thêm sau này
+    không thể vô tình bỏ sót bộ lọc.
     """
     db = SessionLocal()
     actor = None
@@ -48,6 +53,7 @@ def _run(fn, *args, user_bound: bool = False, acting_user_id: str = "", **kwargs
         actor = acting_user_id or _default_user_id(db)
         if user_bound:
             kwargs.setdefault("created_by", actor)
+        kwargs["owner_id"] = actor
         result = fn(db, *args, **kwargs)
     except Exception as e:  # noqa: BLE001 - trả lỗi có cấu trúc cho client MCP
         result = {"error": f"{type(e).__name__}: {e}"}

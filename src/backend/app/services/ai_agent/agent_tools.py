@@ -33,40 +33,59 @@ def _uuid(value) -> uuid.UUID:
         raise ValueError(f"ID không hợp lệ: {value!r}")
 
 
-def _resolve_jd(db: Session, ref) -> models.JobDescription | None:
+def _owner_filter(q, owner_id):
+    """Giới hạn query JD về đúng người đang thao tác.
+
+    `owner_id` do agent loop / MCP tiêm vào (chính là HR đang đăng nhập), LLM không
+    điền được. Thiếu bộ lọc này thì Copilot đọc và thao tác được trên project của
+    MỌI tài khoản — cùng lỗ hổng như REST API trước đây.
+    """
+    if owner_id is None:
+        return q
+    return q.filter(models.JobDescription.created_by == _uuid(owner_id))
+
+
+def _resolve_jd(db: Session, ref, owner_id=None) -> models.JobDescription | None:
     """
     Tìm JD từ `ref` là UUID HOẶC tên vị trí. Model đôi khi truyền tên thay vì id;
     resolve theo tên giúp khỏi crash và đỡ 1 lượt gọi list_jds (tiết kiệm token).
     Nếu trùng tên, ưu tiên JD có NHIỀU ứng viên nhất (thường là cái HR đang test).
+    Luôn chỉ nhìn trong phạm vi JD của `owner_id`.
     """
+    base = _owner_filter(db.query(models.JobDescription), owner_id)
+
     try:
-        jd = db.get(models.JobDescription, uuid.UUID(str(ref)))
+        jd = base.filter(models.JobDescription.id == uuid.UUID(str(ref))).first()
         if jd is not None:
             return jd
     except (ValueError, AttributeError, TypeError):
         pass
 
-    matches = (
-        db.query(models.JobDescription)
-        .filter(models.JobDescription.title.ilike(f"%{str(ref).strip()}%"))
-        .all()
-    )
+    matches = base.filter(
+        models.JobDescription.title.ilike(f"%{str(ref).strip()}%")
+    ).all()
     if not matches:
         return None
     return max(matches, key=lambda j: len(j.cvs))
 
 
-def _resolve_candidate(db: Session, ref) -> models.Candidate | None:
-    """Tìm ứng viên từ UUID HOẶC tên (model đôi khi truyền tên thay vì id)."""
+def _resolve_candidate(db: Session, ref, owner_id=None) -> models.Candidate | None:
+    """Tìm ứng viên từ UUID HOẶC tên, chỉ trong các JD thuộc `owner_id`."""
+    base = _owner_filter(
+        db.query(models.Candidate).join(
+            models.JobDescription,
+            models.Candidate.jd_id == models.JobDescription.id,
+        ),
+        owner_id,
+    )
     try:
-        c = db.get(models.Candidate, uuid.UUID(str(ref)))
+        c = base.filter(models.Candidate.id == uuid.UUID(str(ref))).first()
         if c is not None:
             return c
     except (ValueError, AttributeError, TypeError):
         pass
     return (
-        db.query(models.Candidate)
-        .filter(models.Candidate.name.ilike(f"%{str(ref).strip()}%"))
+        base.filter(models.Candidate.name.ilike(f"%{str(ref).strip()}%"))
         .order_by(models.Candidate.created_at.desc())
         .first()
     )
@@ -89,16 +108,16 @@ def _candidate_brief(c: models.Candidate) -> dict:
 # --------------------------------------------------------------------------- #
 # TOOLS (read-only)
 # --------------------------------------------------------------------------- #
-def list_jds(db: Session, status: str = "active") -> list[dict]:
-    q = db.query(models.JobDescription)
+def list_jds(db: Session, status: str = "active", owner_id=None) -> list[dict]:
+    q = _owner_filter(db.query(models.JobDescription), owner_id)
     if status != "all":
         q = q.filter(models.JobDescription.status == status)
     rows = q.order_by(models.JobDescription.created_at.desc()).all()
     return [{"jd_id": str(j.id), "title": j.title, "status": j.status} for j in rows]
 
 
-def get_jd(db: Session, jd_id: str) -> dict:
-    jd = _resolve_jd(db, jd_id)
+def get_jd(db: Session, jd_id: str, owner_id=None) -> dict:
+    jd = _resolve_jd(db, jd_id, owner_id)
     if jd is None:
         return {"error": "Không tìm thấy JD."}
     return {
@@ -116,6 +135,7 @@ def search_candidates(
     min_score: float = 0.0,
     skill: str | None = None,
     limit: int = 20,
+    owner_id=None,
 ) -> dict:
     """
     Tìm ứng viên đã được chấm điểm.
@@ -125,14 +145,21 @@ def search_candidates(
     """
     jd = None
     if jd_id:
-        jd = _resolve_jd(db, jd_id)
+        jd = _resolve_jd(db, jd_id, owner_id)
         if jd is None:
             return {"error": f"Không tìm thấy vị trí: {jd_id}"}
 
-    q = (
+    # Không có jd_id -> tìm xuyên MỌI vị trí, nhưng vẫn phải chỉ trong vị trí của
+    # chính người đang hỏi, nếu không Copilot sẽ trả ứng viên của tài khoản khác.
+    q = _owner_filter(
         db.query(models.Candidate)
         .join(models.Evaluation, models.Evaluation.cv_id == models.Candidate.id)
-        .filter(models.Evaluation.score >= min_score)
+        .join(
+            models.JobDescription,
+            models.Candidate.jd_id == models.JobDescription.id,
+        )
+        .filter(models.Evaluation.score >= min_score),
+        owner_id,
     )
     if jd is not None:
         q = q.filter(models.Candidate.jd_id == jd.id)
@@ -163,8 +190,8 @@ def search_candidates(
     return result
 
 
-def get_candidate(db: Session, candidate_id: str) -> dict:
-    c = _resolve_candidate(db, candidate_id)
+def get_candidate(db: Session, candidate_id: str, owner_id=None) -> dict:
+    c = _resolve_candidate(db, candidate_id, owner_id)
     if c is None:
         return {"error": "Không tìm thấy ứng viên."}
     ev = c.evaluation
@@ -177,10 +204,9 @@ def get_candidate(db: Session, candidate_id: str) -> dict:
             "explanation": ev.explanation,
             "evidence": ev.evidence,
         },
-        "projects": [
-            {"name": p.name, "tech_stack": p.tech_stack, "github_url": p.github_url}
-            for p in c.projects
-        ],
+        # Không có "projects": model Candidate chưa bao giờ có quan hệ đó (chỉ có
+        # skills / evaluation / interview), nên `c.projects` ném AttributeError và
+        # tool này hỏng ở MỌI lượt gọi. Kỹ năng đã nằm trong _candidate_brief.
         # LC1: mở popup chi tiết đánh giá ứng viên này trên app (query ?open=).
         "ui_action": {"type": "navigate", "path": f"/projects/{c.jd_id}?open={c.id}"},
     }
@@ -189,8 +215,9 @@ def get_candidate(db: Session, candidate_id: str) -> dict:
 # --------------------------------------------------------------------------- #
 # TOOLS (hành động / gọi AI)
 # --------------------------------------------------------------------------- #
-def create_jd(db: Session, raw_text: str, created_by: str) -> dict:
-    """created_by do agent loop tiêm vào (user đang đăng nhập), LLM không điền."""
+def create_jd(db: Session, raw_text: str, created_by: str, owner_id=None) -> dict:
+    """created_by do agent loop tiêm vào (user đang đăng nhập), LLM không điền.
+    `owner_id` nhận cho đồng nhất với các tool khác — ở đây chính là created_by."""
     jd = create_jd_from_text(db, raw_text, _uuid(created_by))
     return {"jd_id": str(jd.id), "title": jd.title, "status": jd.status}
 
@@ -201,6 +228,7 @@ def compare_candidates(
     jd_id: str | None = None,
     top_n: int | None = None,
     aspect: str = "",
+    owner_id=None,
 ) -> dict:
     """
     So sánh ứng viên. Hai cách dùng:
@@ -214,7 +242,7 @@ def compare_candidates(
 
     if candidate_ids:
         for cid in candidate_ids:
-            c = _resolve_candidate(db, cid)
+            c = _resolve_candidate(db, cid, owner_id)
             if c is None:
                 missing.append(str(cid))
             else:
@@ -227,7 +255,7 @@ def compare_candidates(
                 uniq.append(c)
         cands = uniq
     elif jd_id and top_n:
-        jd = _resolve_jd(db, jd_id)
+        jd = _resolve_jd(db, jd_id, owner_id)
         if jd is None:
             return {"error": f"Không tìm thấy vị trí: {jd_id}"}
         cands = (
@@ -252,7 +280,10 @@ def compare_candidates(
     if any(c.jd_id != jd_ref for c in cands):
         return {"error": "Các ứng viên phải cùng một vị trí (JD) mới so sánh được."}
 
-    jd = db.get(models.JobDescription, jd_ref)
+    jd = _owner_filter(
+        db.query(models.JobDescription).filter(models.JobDescription.id == jd_ref),
+        owner_id,
+    ).first()
     candidates_info = [
         {"name": c.name or str(c.id), "full_cv_text": c.raw_text} for c in cands
     ]
@@ -270,13 +301,15 @@ def compare_candidates(
     return result
 
 
-def generate_interview_questions(db: Session, candidate_id: str, aspect: str = "") -> dict:
+def generate_interview_questions(
+    db: Session, candidate_id: str, aspect: str = "", owner_id=None
+) -> dict:
     """
     Sinh bộ câu hỏi phỏng vấn bám CV + JD và LƯU vào DB (tạo Interview +
     InterviewQuestion) đúng như luồng /interviews/.../generate, để HR thấy được
     trong màn hình phỏng vấn. Nếu ứng viên đã có buổi phỏng vấn thì tạo lại.
     """
-    c = _resolve_candidate(db, candidate_id)
+    c = _resolve_candidate(db, candidate_id, owner_id)
     if c is None:
         return {"error": "Không tìm thấy ứng viên."}
     if c.evaluation is None:
@@ -331,9 +364,11 @@ def generate_interview_questions(db: Session, candidate_id: str, aspect: str = "
 # --------------------------------------------------------------------------- #
 # TOOLS Shortlist
 # --------------------------------------------------------------------------- #
-def create_shortlist(db: Session, jd_id: str, name: str, created_by: str) -> dict:
+def create_shortlist(
+    db: Session, jd_id: str, name: str, created_by: str, owner_id=None
+) -> dict:
     """Tạo 1 shortlist mới cho 1 vị trí."""
-    jd = _resolve_jd(db, jd_id)
+    jd = _resolve_jd(db, jd_id, owner_id)
     if jd is None:
         return {"error": "Không tìm thấy vị trí."}
     sl = models.Shortlist(jd_id=jd.id, name=name.strip(), created_by=_uuid(created_by))
@@ -343,9 +378,9 @@ def create_shortlist(db: Session, jd_id: str, name: str, created_by: str) -> dic
     return {"status": "created", "shortlist_id": str(sl.id), "name": sl.name, "jd": jd.title}
 
 
-def list_shortlists(db: Session, jd_id: str) -> dict:
+def list_shortlists(db: Session, jd_id: str, owner_id=None) -> dict:
     """Liệt kê các shortlist của 1 vị trí (kèm số ứng viên)."""
-    jd = _resolve_jd(db, jd_id)
+    jd = _resolve_jd(db, jd_id, owner_id)
     if jd is None:
         return {"error": "Không tìm thấy vị trí."}
     return {
@@ -358,14 +393,18 @@ def list_shortlists(db: Session, jd_id: str) -> dict:
 
 
 def add_to_shortlist(
-    db: Session, candidate_id: str, created_by: str, shortlist_name: str = "AI Shortlist"
+    db: Session,
+    candidate_id: str,
+    created_by: str,
+    shortlist_name: str = "AI Shortlist",
+    owner_id=None,
 ) -> dict:
     """
     Đưa 1 ứng viên vào shortlist. Tự tìm shortlist tên `shortlist_name` trong JD của
     ứng viên; nếu chưa có thì tạo. Chống thêm trùng. Đây là tool 'một phát ăn ngay'
     cho yêu cầu "đưa ứng viên X vào shortlisting".
     """
-    c = _resolve_candidate(db, candidate_id)
+    c = _resolve_candidate(db, candidate_id, owner_id)
     if c is None:
         return {"error": "Không tìm thấy ứng viên."}
 
@@ -410,13 +449,14 @@ def send_interview_invite(
     when: str,
     location: str = "Google Meet (link gửi sau)",
     confirm: bool = False,
+    owner_id=None,
 ) -> dict:
     """
     Gửi email mời phỏng vấn. AN TOÀN KHI TEST: mặc định confirm=False -> chỉ trả về
     BẢN XEM TRƯỚC, KHÔNG gửi thật. Chỉ khi HR xác nhận rõ ràng, agent mới đặt
     confirm=true để gửi.
     """
-    c = db.get(models.Candidate, _uuid(candidate_id))
+    c = _resolve_candidate(db, candidate_id, owner_id)
     if c is None or not c.email:
         return {"error": "Ứng viên không tồn tại hoặc chưa có email."}
 
@@ -443,9 +483,9 @@ def send_interview_invite(
 # --------------------------------------------------------------------------- #
 # TOOLS điều hướng GIAO DIỆN (không đổi dữ liệu; trả 'ui_action' để FE nhảy trang)
 # --------------------------------------------------------------------------- #
-def open_jd(db: Session, jd_id: str) -> dict:
+def open_jd(db: Session, jd_id: str, owner_id=None) -> dict:
     """Mở trang chi tiết 1 vị trí (project) ở phần giao diện bên phải."""
-    jd = _resolve_jd(db, jd_id)
+    jd = _resolve_jd(db, jd_id, owner_id)
     if jd is None:
         return {"error": "Không tìm thấy JD."}
     return {
@@ -454,12 +494,12 @@ def open_jd(db: Session, jd_id: str) -> dict:
     }
 
 
-def open_dashboard(db: Session) -> dict:
+def open_dashboard(db: Session, owner_id=None) -> dict:
     """Mở màn hình Dashboard (danh sách vị trí tuyển dụng)."""
     return {"ui_action": {"type": "navigate", "path": "/"}}
 
 
-def open_shortlisting(db: Session) -> dict:
+def open_shortlisting(db: Session, owner_id=None) -> dict:
     """Mở màn hình Shortlisting (danh sách rút gọn ứng viên)."""
     return {"ui_action": {"type": "navigate", "path": "/shortlisting"}}
 

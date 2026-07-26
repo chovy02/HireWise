@@ -26,9 +26,13 @@ export default function Dashboard() {
                 : 'Bắt đầu bằng cách tạo dự án đầu tiên.'}
             </p>
           </div>
-          {/* Once at least one project exists, the create button lives top-right. */}
+          {/* Có ít nhất 1 dự án -> nút tạo nằm góc trên bên phải.
+              whitespace-nowrap: ở 390px nhãn bị bẻ thành 2 dòng và ép sát tiêu đề. */}
           {hasProjects && (
-            <PrimaryButton onClick={() => navigate('/projects/new')}>
+            <PrimaryButton
+              onClick={() => navigate('/projects/new')}
+              className="flex-shrink-0 whitespace-nowrap"
+            >
               <Plus size={16} /> Dự án mới
             </PrimaryButton>
           )}

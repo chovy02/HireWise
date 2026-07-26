@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app import models, schemas
 from app.core.dependencies import get_current_user, require_role
+from app.core.ownership import get_owned_candidate, get_owned_jd, get_owned_shortlist
 from app.database import get_db
 from app.services.logging import write_audit_log
 
@@ -36,15 +37,11 @@ def _item_response(item: models.ShortlistItem) -> schemas.ShortlistItemResponse:
     )
 
 
-def _get_shortlist_or_404(db: Session, shortlist_id: UUID) -> models.Shortlist:
-    shortlist = (
-        db.query(models.Shortlist)
-        .filter(models.Shortlist.id == shortlist_id)
-        .first()
-    )
-    if not shortlist:
-        raise HTTPException(status_code=404, detail="Không tìm thấy shortlist.")
-    return shortlist
+def _get_shortlist_or_404(
+    db: Session, shortlist_id: UUID, user: models.User
+) -> models.Shortlist:
+    """Bắt buộc truyền `user`: shortlist chỉ thấy được nếu JD chứa nó là của người này."""
+    return get_owned_shortlist(db, shortlist_id, user)
 
 
 # ────────────────────────────────────────────────────────────
@@ -70,9 +67,7 @@ def create_shortlist(
     current_user: models.User = Depends(get_current_user),
 ):
     """Tạo một shortlist mới cho vị trí tuyển dụng."""
-    jd = db.query(models.JobDescription).filter(models.JobDescription.id == jd_id).first()
-    if not jd:
-        raise HTTPException(status_code=404, detail="Không tìm thấy vị trí tuyển dụng.")
+    jd = get_owned_jd(db, jd_id, current_user)
 
     shortlist = models.Shortlist(
         jd_id=jd.id,
@@ -103,9 +98,10 @@ def list_shortlists(
     current_user: models.User = Depends(get_current_user),
 ):
     """Liệt kê các shortlist của một JD (kèm số ứng viên)."""
+    jd = get_owned_jd(db, jd_id, current_user)
     shortlists = (
         db.query(models.Shortlist)
-        .filter(models.Shortlist.jd_id == jd_id)
+        .filter(models.Shortlist.jd_id == jd.id)
         .order_by(models.Shortlist.created_at.desc())
         .all()
     )
@@ -138,7 +134,7 @@ def get_shortlist(
     current_user: models.User = Depends(get_current_user),
 ):
     """Chi tiết một shortlist kèm danh sách ứng viên (sắp theo điểm giảm dần)."""
-    shortlist = _get_shortlist_or_404(db, shortlist_id)
+    shortlist = _get_shortlist_or_404(db, shortlist_id, current_user)
 
     items = [_item_response(item) for item in shortlist.items]
     # Ứng viên có điểm xếp trước, điểm cao trước; chưa có điểm (None) xếp cuối.
@@ -161,7 +157,7 @@ def delete_shortlist(
     current_user: models.User = Depends(get_current_user),
 ):
     """Xóa cả shortlist (kèm các item bên trong, do cascade)."""
-    shortlist = _get_shortlist_or_404(db, shortlist_id)
+    shortlist = _get_shortlist_or_404(db, shortlist_id, current_user)
     # Chụp lại TRƯỚC khi xóa — sau db.delete() object không còn đọc được.
     removed = {
         "name": shortlist.name,
@@ -191,15 +187,9 @@ def add_item(
     current_user: models.User = Depends(get_current_user),
 ):
     """Thêm 1 ứng viên vào shortlist. Ứng viên phải thuộc đúng JD của shortlist."""
-    shortlist = _get_shortlist_or_404(db, shortlist_id)
+    shortlist = _get_shortlist_or_404(db, shortlist_id, current_user)
 
-    candidate = (
-        db.query(models.Candidate)
-        .filter(models.Candidate.id == payload.candidate_id)
-        .first()
-    )
-    if not candidate:
-        raise HTTPException(status_code=404, detail="Không tìm thấy ứng viên.")
+    candidate = get_owned_candidate(db, payload.candidate_id, current_user)
 
     # Ứng viên phải cùng JD với shortlist (tránh xếp nhầm ứng viên vị trí khác).
     if candidate.jd_id != shortlist.jd_id:
@@ -243,11 +233,14 @@ def update_item_status(
     current_user: models.User = Depends(get_current_user),
 ):
     """HR quyết định ứng viên trong shortlist: accepted / rejected / pending."""
+    # Chốt quyền trên shortlist trước: thiếu bước này thì chỉ cần đoán đúng cặp
+    # (shortlist_id, item_id) là sửa/xoá được dữ liệu của tài khoản khác.
+    shortlist = _get_shortlist_or_404(db, shortlist_id, current_user)
     item = (
         db.query(models.ShortlistItem)
         .filter(
             models.ShortlistItem.id == item_id,
-            models.ShortlistItem.shortlist_id == shortlist_id,
+            models.ShortlistItem.shortlist_id == shortlist.id,
         )
         .first()
     )
@@ -281,11 +274,14 @@ def remove_item(
     current_user: models.User = Depends(get_current_user),
 ):
     """Gỡ 1 ứng viên khỏi shortlist (không xóa ứng viên khỏi hệ thống)."""
+    # Chốt quyền trên shortlist trước: thiếu bước này thì chỉ cần đoán đúng cặp
+    # (shortlist_id, item_id) là sửa/xoá được dữ liệu của tài khoản khác.
+    shortlist = _get_shortlist_or_404(db, shortlist_id, current_user)
     item = (
         db.query(models.ShortlistItem)
         .filter(
             models.ShortlistItem.id == item_id,
-            models.ShortlistItem.shortlist_id == shortlist_id,
+            models.ShortlistItem.shortlist_id == shortlist.id,
         )
         .first()
     )

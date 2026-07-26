@@ -3,6 +3,7 @@ import { Outlet, Navigate, useLocation } from 'react-router-dom'
 import { Loader2, Menu, Sparkles } from 'lucide-react'
 import Sidebar from './Sidebar.jsx'
 import CopilotChat from './CopilotChat.jsx'
+import { NotificationBell } from './Topbar.jsx'
 import { useAuth } from '../context/AuthContext.jsx'
 
 // App shell: app bình thường (Sidebar + nội dung) ở bên trái | AI Copilot ở cột
@@ -73,17 +74,13 @@ export default function Layout() {
             Thanh ẩn ở lg (không phải md) vì hai thứ nó mở có hai ngưỡng KHÁC NHAU:
             sidebar quay lại từ md, còn Copilot mãi tới lg. Nếu ẩn cả thanh ở md thì
             khoảng 768–1023px sẽ không có Copilot lẫn nút mở nó — mất hẳn tính năng
-            chính trên máy tính bảng. Vì vậy ở md thanh vẫn còn nhưng chỉ giữ nút
-            Copilot; nút hamburger tự ẩn khi sidebar đã hiện. */}
-        <div
-          className={[
-            'flex flex-shrink-0 items-center gap-3 border-b border-slate-200 bg-white px-4 py-2.5',
-            // Admin không có Copilot -> thanh chỉ phục vụ hamburger, bỏ hẳn từ md.
-            // HR còn nút Copilot nên thanh phải sống tới lg (và căn phải khi
-            // hamburger đã biến mất, tránh chừa khoảng trống bên trái).
-            showCopilot ? 'md:justify-end lg:hidden' : 'md:hidden',
-          ].join(' ')}
-        >
+            chính trên máy tính bảng. Vì vậy ở md thanh vẫn còn nhưng chỉ giữ chuông
+            + nút Copilot; nút hamburger tự ẩn khi sidebar đã hiện.
+
+            Chuông nằm luôn ở đây (Topbar tự ẩn dưới lg) để không có hai thanh
+            chồng nhau — trước đây thanh này và Topbar cùng hiện, ngốn ~100px chiều
+            cao trước khi tới nội dung. */}
+        <div className="flex flex-shrink-0 items-center gap-3 border-b border-slate-200 bg-white px-4 py-2.5 lg:hidden">
           <button
             onClick={() => setNavOpen(true)}
             aria-label="Mở menu điều hướng"
@@ -94,15 +91,18 @@ export default function Layout() {
           <span className="text-sm font-semibold text-slate-900 md:hidden">
             HireWise
           </span>
-          {showCopilot && (
-            <button
-              onClick={() => setCopilotOpen(true)}
-              aria-label="Mở AI Copilot"
-              className="ml-auto rounded-lg p-2 text-slate-600 transition hover:bg-slate-100 md:ml-0"
-            >
-              <Sparkles size={20} />
-            </button>
-          )}
+          <div className="ml-auto flex items-center gap-1">
+            {showCopilot && (
+              <button
+                onClick={() => setCopilotOpen(true)}
+                aria-label="Mở AI Copilot"
+                className="rounded-lg p-2 text-slate-600 transition hover:bg-slate-100"
+              >
+                <Sparkles size={20} />
+              </button>
+            )}
+            <NotificationBell />
+          </div>
         </div>
 
         <Outlet />

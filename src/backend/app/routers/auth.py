@@ -1,8 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta, timezone
-from jose import jwt, JWTError
-import os
 
 from app import models, schemas
 from app.core.dependencies import get_current_user
@@ -12,10 +10,38 @@ from app.services.email import send_verification_email
 from app.services.logging import write_system_log
 from app.utils.security import generate_6_digit_code
 
+# Gửi SMTP mất ~3.4s (đo được), so với ~0.2s cho login. Chạy đồng bộ trong request
+# khiến người dùng ngồi nhìn spinner suốt quãng đó, và tệ hơn: hàng user đã commit
+# TRƯỚC lệnh gửi, nên SMTP lỗi là endpoint trả 500 dù tài khoản đã tạo xong —
+# người dùng thấy "thất bại", không đăng nhập được (chưa active), cũng không có mã.
+# Đẩy sang BackgroundTasks: request trả về ngay, lỗi gửi mail không thể làm hỏng
+# một lượt đăng ký đã thành công (người dùng vẫn còn nút "Gửi lại mã").
+async def _send_code_safely(email_to: str, code: str) -> None:
+    try:
+        await send_verification_email(email_to=email_to, token=code)
+    except Exception as e:  # noqa: BLE001 - chạy nền, không có ai để ném lỗi lên
+        print(f"[auth] Không gửi được mã xác minh tới {email_to}: {type(e).__name__}: {e}")
+
+# Mã OTP sống 15 phút; hai lần xin mã phải cách nhau ít nhất 60 giây.
+OTP_TTL = timedelta(minutes=15)
+RESEND_COOLDOWN = timedelta(seconds=60)
+
+
+def _as_utc(dt: datetime | None) -> datetime | None:
+    """Hàng cũ có thể lưu naive -> gán UTC, tránh vỡ khi so sánh với now(timezone.utc)."""
+    if dt is None:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 @router.post("/register", status_code=status.HTTP_201_CREATED)
-async def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
+def register(
+    user: schemas.UserCreate,
+    background: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
     # 1. Kiểm tra email đã tồn tại chưa
     user_exist = db.query(models.User).filter(models.User.email == user.email).first()
     
@@ -40,15 +66,13 @@ async def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
         )
         db.add(user_obj)
 
-    # Mỗi lần đăng ký lại -> tăng version để VÔ HIỆU HÓA mọi token xác minh cũ.
-    # Token phát hành lần trước mang version cũ sẽ bị verify-email từ chối.
-    user_obj.verify_token_version = (user_obj.verify_token_version or 0) + 1
     db.commit()
     db.refresh(user_obj)
 
-    # 3. Tạo mã JWT xác minh (Chỉ sống 15 phút), gắn kèm version hiện tại.
+    # 3. Sinh mã OTP 6 chữ số (sống 15 phút). Đăng ký lại sẽ ghi đè mã cũ, nên mã
+    #    trước đó tự động mất hiệu lực — không cần cơ chế version như thời dùng JWT.
     otp_code = generate_6_digit_code()
-    expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
+    expires_at = datetime.now(timezone.utc) + OTP_TTL
 
     user_obj.verification_code = otp_code
     user_obj.verification_code_expires_at = expires_at
@@ -56,19 +80,28 @@ async def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(user_obj)
 
-    # 4. Gửi email
-    await send_verification_email(email_to=user.email, token=otp_code)
+    # 4. Gửi email (chạy nền, xem ghi chú ở _send_code_safely)
+    background.add_task(_send_code_safely, user.email, otp_code)
 
     return {"message": "Đăng ký thành công. Vui lòng kiểm tra email để lấy mã kích hoạt."}
 
 
 @router.post("/resend-code")
-async def resend_code(data: schemas.ResendCode, db: Session = Depends(get_db)):
+def resend_code(
+    data: schemas.ResendCode,
+    background: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
     """Cấp lại mã OTP mới. Mã chỉ sống 15 phút, mà trước đây cách duy nhất để lấy mã
     mới là đăng ký lại từ đầu (phải nhập lại cả mật khẩu) — người dùng bị kẹt.
 
     LUÔN trả cùng một thông điệp dù email có tồn tại hay không: phản hồi khác nhau
     sẽ biến endpoint này thành công cụ dò xem email nào đã đăng ký.
+
+    CHẶN TẦN SUẤT Ở SERVER: cooldown 60s bên frontend chỉ là state của React, F5 một
+    cái là mất. Không chặn ở đây thì bất kỳ ai cũng bơm được vô hạn email qua hạn
+    mức SMTP. Mốc "lần gửi gần nhất" suy ra từ chính hạn dùng của mã đang lưu
+    (expires_at - OTP_TTL) nên không cần thêm cột.
     """
     generic = {"message": "Nếu email tồn tại và chưa kích hoạt, mã mới đã được gửi đi."}
 
@@ -76,12 +109,20 @@ async def resend_code(data: schemas.ResendCode, db: Session = Depends(get_db)):
     if not user or user.is_active:
         return generic
 
+    now = datetime.now(timezone.utc)
+    expires_at = _as_utc(user.verification_code_expires_at)
+    if user.verification_code and expires_at:
+        last_sent = expires_at - OTP_TTL
+        if now - last_sent < RESEND_COOLDOWN:
+            # Im lặng bỏ qua: trả cùng `generic` để không tiết lộ là có tài khoản.
+            return generic
+
     user.verification_code = generate_6_digit_code()
-    user.verification_code_expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
+    user.verification_code_expires_at = now + OTP_TTL
     db.commit()
     db.refresh(user)
 
-    await send_verification_email(email_to=user.email, token=user.verification_code)
+    background.add_task(_send_code_safely, user.email, user.verification_code)
     return generic
 
 

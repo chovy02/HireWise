@@ -22,15 +22,29 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def _existing_columns() -> set[str]:
+    return {c["name"] for c in sa.inspect(op.get_bind()).get_columns("users")}
+
+
 def upgrade() -> None:
-    op.add_column('users', sa.Column('verification_code', sa.String(length=6), nullable=True))
-    op.add_column(
-        'users',
-        # timezone=True: code so sánh hạn dùng với datetime.now(timezone.utc).
-        sa.Column('verification_code_expires_at', sa.DateTime(timezone=True), nullable=True),
-    )
+    # Bỏ qua cột đã có. Trên nhánh dev từng tồn tại một migration auto-generate trùng
+    # (eff88ce6f969) cũng thêm đúng 2 cột này; máy nào đã chạy bản đó rồi mà chạy tiếp
+    # bản này sẽ chết vì DuplicateColumn. create_all() với DB trống cũng dựng sẵn 2 cột.
+    existing = _existing_columns()
+
+    if "verification_code" not in existing:
+        op.add_column('users', sa.Column('verification_code', sa.String(length=6), nullable=True))
+    if "verification_code_expires_at" not in existing:
+        op.add_column(
+            'users',
+            # timezone=True: code so sánh hạn dùng với datetime.now(timezone.utc).
+            sa.Column('verification_code_expires_at', sa.DateTime(timezone=True), nullable=True),
+        )
 
 
 def downgrade() -> None:
-    op.drop_column('users', 'verification_code_expires_at')
-    op.drop_column('users', 'verification_code')
+    existing = _existing_columns()
+    if "verification_code_expires_at" in existing:
+        op.drop_column('users', 'verification_code_expires_at')
+    if "verification_code" in existing:
+        op.drop_column('users', 'verification_code')

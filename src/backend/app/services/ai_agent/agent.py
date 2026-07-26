@@ -157,6 +157,10 @@ def _execute_tool(db: Session, name: str, args: dict, user_id) -> dict:
     # Tiêm user_id cho các tool cần (LLM không được tự điền).
     if name in USER_BOUND:
         args[USER_BOUND[name]] = str(user_id)
+    # Phạm vi dữ liệu: mọi tool chỉ được thấy JD/ứng viên của HR đang đăng nhập.
+    # GHI ĐÈ chứ không setdefault — owner_id không nằm trong schema đưa cho LLM, nên
+    # nếu nó vẫn bịa ra một giá trị thì đó là mưu toan đọc dữ liệu tài khoản khác.
+    args["owner_id"] = str(user_id)
     # Lọc bỏ tham số thừa mà LLM có thể bịa (llama hay kèm arg lạ, nhất là với tool
     # không có tham số) -> tránh TypeError làm tool điều hướng thất bại.
     try:

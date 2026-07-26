@@ -27,7 +27,10 @@ function readSeen() {
   }
 }
 
-export default function Topbar() {
+// Chuông tách riêng để dùng được ở HAI nơi: thanh Topbar (màn rộng) và thanh công
+// cụ hẹp của Layout. Trước đây hai thanh này chồng lên nhau ở dưới lg, tốn ~100px
+// chiều cao mà thanh trên chỉ chứa mỗi cái chuông.
+export function NotificationBell() {
   const [open, setOpen] = useState(false)
   const [items, setItems] = useState([])
   const [err, setErr] = useState('')
@@ -82,8 +85,7 @@ export default function Topbar() {
   }
 
   return (
-    <header className="relative flex h-14 flex-shrink-0 items-center justify-end gap-4 border-b border-slate-200 bg-white px-6">
-      <div className="relative" ref={panelRef}>
+    <div className="relative" ref={panelRef}>
         <button
           onClick={toggle}
           className="relative rounded-lg p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
@@ -141,8 +143,19 @@ export default function Topbar() {
               )}
             </div>
           </div>
-        )}
-      </div>
+      )}
+    </div>
+  )
+}
+
+
+// Thanh trắng mảnh trên cùng của Dashboard / Shortlisting / Admin.
+// Ẩn dưới lg: ở đó Layout đã dựng thanh công cụ riêng (có hamburger + chuông +
+// nút Copilot), giữ cả hai sẽ thành hai thanh chồng nhau.
+export default function Topbar() {
+  return (
+    <header className="relative hidden h-14 flex-shrink-0 items-center justify-end gap-4 border-b border-slate-200 bg-white px-6 lg:flex">
+      <NotificationBell />
     </header>
   )
 }
