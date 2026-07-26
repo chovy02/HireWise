@@ -35,6 +35,7 @@ class UserLogin(BaseModel):
     password: str
 
 class VerifyEmail(BaseModel):
+    email: str
     token: str
 
 

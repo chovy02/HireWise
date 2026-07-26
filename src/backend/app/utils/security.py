@@ -2,6 +2,7 @@ from passlib.context import CryptContext
 from datetime import datetime, timedelta, timezone
 from jose import jwt, JWTError
 import os
+import secrets
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -9,6 +10,10 @@ SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = "HS256"
 # Phiên đăng nhập (session token), khác với token xác minh email (sống 15 phút, set riêng khi tạo)
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
+
+def generate_6_digit_code() -> str:
+    """Tạo mã OTP 6 chữ số ngẫu nhiên (VD: '048291')."""
+    return "".join(secrets.choice("0123456789") for _ in range(6))
 
 def get_password_hash(password: str) -> str:
     return pwd_context.hash(password)

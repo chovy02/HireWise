@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from jose import jwt, JWTError
 import os
 
@@ -10,6 +10,7 @@ from app.database import get_db
 from app.utils import security
 from app.services.email import send_verification_email
 from app.services.logging import write_system_log
+from app.utils.security import generate_6_digit_code
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -46,53 +47,39 @@ async def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
     db.refresh(user_obj)
 
     # 3. Tạo mã JWT xác minh (Chỉ sống 15 phút), gắn kèm version hiện tại.
-    verify_token = security.create_access_token(
-        data={
-            "sub": user.email,
-            "type": "verify_email",
-            "ver": user_obj.verify_token_version,
-        },
-        expires_delta=timedelta(minutes=15)
-    )
+    otp_code = generate_6_digit_code()
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
+
+    user_obj.verification_code = otp_code
+    user_obj.verification_code_expires_at = expires_at
+
+    db.commit()
+    db.refresh(user_obj)
 
     # 4. Gửi email
-    await send_verification_email(email_to=user.email, token=verify_token)
+    await send_verification_email(email_to=user.email, token=otp_code)
 
     return {"message": "Đăng ký thành công. Vui lòng kiểm tra email để lấy mã kích hoạt."}
 
 
 @router.post("/verify-email")
 def verify_email(data: schemas.VerifyEmail, db: Session = Depends(get_db)):
-    try:
-        # 1. Giải mã token người dùng gửi lên
-        payload = jwt.decode(data.token, security.SECRET_KEY, algorithms=[security.ALGORITHM])
-        email: str = payload.get("sub")
-        token_type: str = payload.get("type")
-        token_ver = payload.get("ver")
-
-        if email is None or token_type != "verify_email":
-            raise HTTPException(status_code=400, detail="Mã xác minh không hợp lệ.")
-
-    except JWTError:
-        raise HTTPException(status_code=400, detail="Mã xác minh đã hết hạn hoặc bị sai.")
-
-    # 2. Tìm User và kích hoạt
-    user = db.query(models.User).filter(models.User.email == email).first()
+    
+    user = db.query(models.User).filter(models.User.email == data.email).first()
     if not user:
         raise HTTPException(status_code=404, detail="Không tìm thấy tài khoản.")
     if user.is_active:
         return {"message": "Tài khoản này đã được kích hoạt từ trước."}
 
-    # Chỉ chấp nhận token MỚI NHẤT: version trong token phải khớp version hiện tại
-    # của user. Token từ lần đăng ký trước (version cũ, hoặc token cũ không có "ver")
-    # bị từ chối.
-    if token_ver != user.verify_token_version:
-        raise HTTPException(
-            status_code=400,
-            detail="Mã xác minh này đã hết hiệu lực. Vui lòng dùng mã mới nhất được gửi tới email của bạn.",
-        )
+    if not user.verification_code or user.verification_code != data.code:
+        raise HTTPException(status_code=400, detail="Mã xác minh không chính xác.")
+
+    if datetime.now(timezone.utc) > user.verification_code_expires_at:
+        raise HTTPException(status_code=400, detail="Mã xác minh đã hết hạn. Vui lòng đăng ký lại để nhận mã mới.")
 
     user.is_active = True
+    user.verification_code = None
+    user.verification_code_expires_at = None
     db.commit()
     
     return {"message": "Kích hoạt tài khoản thành công! Bạn có thể đăng nhập ngay."}
