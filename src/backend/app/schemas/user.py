@@ -35,8 +35,10 @@ class UserLogin(BaseModel):
     password: str
 
 class VerifyEmail(BaseModel):
-    email: str
-    token: str
+    """Xác minh bằng mã OTP 6 chữ số gửi qua email (không còn là JWT).
+    Vì mã chỉ có 6 chữ số nên phải kèm email để biết đối chiếu với tài khoản nào."""
+    email: EmailStr
+    token: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
 
 
 class UserCreateByAdmin(BaseModel):

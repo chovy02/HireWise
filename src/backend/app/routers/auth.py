@@ -71,10 +71,20 @@ def verify_email(data: schemas.VerifyEmail, db: Session = Depends(get_db)):
     if user.is_active:
         return {"message": "Tài khoản này đã được kích hoạt từ trước."}
 
-    if not user.verification_code or user.verification_code != data.code:
+    if not user.verification_code or user.verification_code != data.token.strip():
         raise HTTPException(status_code=400, detail="Mã xác minh không chính xác.")
 
-    if datetime.now(timezone.utc) > user.verification_code_expires_at:
+    # Hàng cũ (đăng ký trước khi có OTP) có thể thiếu hạn dùng -> coi như hết hạn,
+    # thay vì so sánh với None và ném 500.
+    expires_at = user.verification_code_expires_at
+    if expires_at is None:
+        raise HTTPException(status_code=400, detail="Mã xác minh đã hết hạn. Vui lòng đăng ký lại để nhận mã mới.")
+    # Cột lưu timezone-aware; hàng cũ có thể còn naive -> gán UTC trước khi so sánh
+    # để không vỡ vì "can't compare offset-naive and offset-aware datetimes".
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+    if datetime.now(timezone.utc) > expires_at:
         raise HTTPException(status_code=400, detail="Mã xác minh đã hết hạn. Vui lòng đăng ký lại để nhận mã mới.")
 
     user.is_active = True

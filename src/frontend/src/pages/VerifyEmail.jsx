@@ -10,21 +10,26 @@ const inputClass =
 export default function VerifyEmail() {
   const navigate = useNavigate()
   const location = useLocation()
-  const email = location.state?.email
+  const emailFromSignup = location.state?.email
 
-  const [token, setToken] = useState('')
+  // Email đến từ bước đăng ký, nhưng router state MẤT khi người dùng F5 hoặc mở
+  // thẳng /verify. Giữ nó trong state và cho sửa được để trang vẫn dùng được.
+  const [email, setEmail] = useState(emailFromSignup ?? '')
+  const [code, setCode] = useState('')
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [loading, setLoading] = useState(false)
 
-  // BUTTON: "Verify account" -> POST /auth/verify-email (exists in backend)
+  const codeComplete = /^\d{6}$/.test(code)
+
+  // BUTTON: "Verify account" -> POST /auth/verify-email { email, token }
   async function handleSubmit(e) {
     e.preventDefault()
     setError('')
     setSuccess('')
     setLoading(true)
     try {
-      const res = await verifyEmail(token.trim())
+      const res = await verifyEmail({ email: email.trim(), token: code })
       setSuccess(res?.message || 'Account verified! You can now sign in.')
       setTimeout(() => navigate('/login'), 1500)
     } catch (err) {
@@ -38,9 +43,9 @@ export default function VerifyEmail() {
     <AuthLayout
       title="Verify your email"
       subtitle={
-        email
-          ? `We sent a verification code to ${email}. Paste it below to activate your account.`
-          : 'Paste the verification code from your email to activate your account.'
+        emailFromSignup
+          ? `We sent a 6-digit code to ${emailFromSignup}. Enter it below to activate your account.`
+          : 'Enter your email and the 6-digit code we sent you to activate your account.'
       }
     >
       <div className="mb-6 flex items-start gap-3 rounded-lg border border-indigo-100 bg-indigo-50 px-3.5 py-3 text-sm text-indigo-700">
@@ -67,21 +72,41 @@ export default function VerifyEmail() {
 
         <div>
           <label className="mb-1.5 block text-sm font-medium text-slate-700">
+            Email
+          </label>
+          <input
+            type="email"
+            required
+            autoComplete="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="you@company.com"
+            className={inputClass}
+          />
+        </div>
+
+        <div>
+          <label className="mb-1.5 block text-sm font-medium text-slate-700">
             Verification code
           </label>
-          <textarea
+          <input
+            type="text"
             required
-            rows={4}
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
-            placeholder="Paste the long code from your email here…"
-            className={`${inputClass} resize-none font-mono text-xs`}
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            maxLength={6}
+            value={code}
+            // Backend chỉ nhận đúng 6 chữ số -> lọc ngay khi gõ/dán để người dùng
+            // không bấm submit rồi mới ăn lỗi 422.
+            onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+            placeholder="000000"
+            className={`${inputClass} text-center font-mono text-lg tracking-[0.4em]`}
           />
         </div>
 
         <button
           type="submit"
-          disabled={loading || !token.trim()}
+          disabled={loading || !codeComplete || !email.trim()}
           className="flex w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {loading && <Loader2 size={16} className="animate-spin" />}

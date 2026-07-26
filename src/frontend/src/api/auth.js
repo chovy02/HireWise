@@ -12,11 +12,13 @@ export function register({ name, email, password }) {
 }
 
 // POST /auth/verify-email -> { message }
-// Backend schema (VerifyEmail): { token }
-export function verifyEmail(token) {
+// Backend schema (VerifyEmail): { email, token }
+// `token` là mã OTP 6 chữ số gửi qua email (trước đây là JWT dài). Vì mã ngắn và
+// không tự mang danh tính, backend cần `email` đi kèm để biết đối chiếu tài khoản nào.
+export function verifyEmail({ email, token }) {
   return apiFetch('/auth/verify-email', {
     method: 'POST',
-    body: { token },
+    body: { email, token },
   })
 }
 

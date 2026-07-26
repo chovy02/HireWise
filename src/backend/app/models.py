@@ -27,8 +27,10 @@ class User(Base):
     verify_token_version: Mapped[int] = mapped_column(
         Integer, default=0, nullable=False, server_default="0"
     )
+    # Mã OTP 6 chữ số gửi qua email + hạn dùng. Cột hạn dùng phải timezone-aware:
+    # code so sánh với datetime.now(timezone.utc), lưu naive sẽ ném TypeError khi so sánh.
     verification_code: Mapped[str] = mapped_column(String(6), nullable=True)
-    verification_code_expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    verification_code_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
