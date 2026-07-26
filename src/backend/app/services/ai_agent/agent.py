@@ -27,6 +27,7 @@ from app.services.ai_agent.mcp_client import (
     mcp_session,
 )
 from app.services.logging import write_tool_log
+from app.services.ai_agent.gemini_client import record_ai_log
 
 _client = Groq(api_key=os.getenv("GROQ_MCP_API_KEY"))
 AGENT_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
@@ -36,21 +37,80 @@ MAX_STEPS = int(os.getenv("AGENT_MAX_STEPS", "10"))
 _LLM_RETRIES = int(os.getenv("AGENT_LLM_RETRIES", "3"))
 
 
+# Trần độ dài prompt ghi vào ai_logs: hội thoại nhiều lượt kèm kết quả tool có thể
+# rất dài, không đáng để phình bảng log.
+_LOG_PROMPT_CHARS = 8000
+
+
+def _prompt_for_log(messages: list) -> str:
+    try:
+        text = json.dumps(messages, ensure_ascii=False, default=str)
+    except Exception:  # noqa: BLE001
+        text = str(messages)
+    return text[:_LOG_PROMPT_CHARS]
+
+
+def _completion_for_log(resp) -> str:
+    """Nội dung trả lời + tên tool mà model quyết định gọi (nếu có).
+
+    Lượt agent thường trả content rỗng và chỉ chứa tool_calls; nếu chỉ ghi content
+    thì trang Giám sát AI hiện một dòng trống, mất đúng thông tin đáng xem nhất.
+    """
+    try:
+        msg = resp.choices[0].message
+        parts = []
+        if getattr(msg, "content", None):
+            parts.append(msg.content)
+        calls = getattr(msg, "tool_calls", None)
+        if calls:
+            parts.append("[tool_calls] " + ", ".join(c.function.name for c in calls))
+        return "\n".join(parts)
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def _complete(messages: list, tools: list):
-    """Gọi Groq (có tools), tự retry khi model sinh tool-call hỏng hoặc lỗi tạm thời."""
+    """Gọi Groq (có tools), tự retry khi model sinh tool-call hỏng hoặc lỗi tạm thời.
+
+    Mọi lượt gọi đều ghi vào ai_logs như các agent khác: agent chat đi thẳng qua
+    Groq chứ không qua `generate_text`, nên nếu không ghi ở đây thì phần token/độ
+    trễ tốn nhiều nhất của hệ thống lại vô hình với trang Giám sát AI.
+    """
     last_err = None
+    start = time.time()
     for attempt in range(_LLM_RETRIES):
         try:
-            return _client.chat.completions.create(
+            resp = _client.chat.completions.create(
                 model=AGENT_MODEL,
                 messages=messages,
                 tools=tools,
                 tool_choice="auto",
                 temperature=0.2,
             )
+            record_ai_log(
+                agent_name="copilot_agent",
+                prompt=_prompt_for_log(messages),
+                completion=_completion_for_log(resp),
+                total_tokens=getattr(getattr(resp, "usage", None), "total_tokens", 0) or 0,
+                latency_ms=(time.time() - start) * 1000,
+                is_error=False,
+                error_message=None,
+            )
+            return resp
         except Exception as e:  # noqa: BLE001 - thử lại cho cả tool_use_failed lẫn 429/5xx
             last_err = e
             time.sleep(0.8 * (attempt + 1))
+
+    # Hết lượt retry -> ghi 1 dòng lỗi rồi mới ném ra.
+    record_ai_log(
+        agent_name="copilot_agent",
+        prompt=_prompt_for_log(messages),
+        completion=None,
+        total_tokens=0,
+        latency_ms=(time.time() - start) * 1000,
+        is_error=True,
+        error_message=str(last_err),
+    )
     raise last_err
 
 

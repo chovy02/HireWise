@@ -12,6 +12,7 @@ from app.database import get_db
 from app.services.ai_agent import pipeline
 from app.services.ai_agent.exceptions import AIServiceError
 from app.services.ai_agent.tasks import evaluate_candidate_task
+from app.services.logging import write_audit_log
 
 # ────────────────────────────────────────────────────────────
 # Router 1: Job Description
@@ -40,6 +41,13 @@ def create_jd(
     except AIServiceError as e:
         # Gemini lỗi/không cấu hình -> lỗi hạ tầng, HR nhập đúng vẫn gặp.
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(e))
+
+    write_audit_log(
+        db, user_id=current_user.id, action="CREATE_JD", entity_type="job_description",
+        entity_id=jd.id,
+        old_data=None,
+        new_data={"title": jd.title, "status": jd.status},
+    )
     return jd
 
 
@@ -235,8 +243,24 @@ def override_evaluation(
         reason=payload.reason,
     ))
 
+    old_score = evaluation.score
+    was_overridden = evaluation.is_overridden
+
     evaluation.score = payload.new_score
     evaluation.is_overridden = True
     db.commit()
     db.refresh(evaluation)
+
+    # Con người ghi đè điểm máy chấm là hành động cần truy vết được: nó thay đổi
+    # thứ hạng ứng viên và phải giải trình được khi bị chất vấn về tính công bằng.
+    write_audit_log(
+        db, user_id=current_user.id, action="OVERRIDE_EVALUATION", entity_type="evaluation",
+        entity_id=evaluation.id,
+        old_data={"score": old_score, "is_overridden": was_overridden},
+        new_data={
+            "score": payload.new_score,
+            "is_overridden": True,
+            "reason": payload.reason,
+        },
+    )
     return evaluation

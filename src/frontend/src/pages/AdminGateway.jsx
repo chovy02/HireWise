@@ -28,6 +28,7 @@ import {
   EyeOff,
   ChevronRight,
   FileSpreadsheet,
+  Wrench,
 } from 'lucide-react'
 import Topbar from '../components/Topbar.jsx'
 import {
@@ -39,6 +40,7 @@ import {
   ScoreRing,
   ProgressBar,
   Dropdown,
+  Segmented,
   PrimaryButton,
   SecondaryButton,
   PageHeader,
@@ -50,7 +52,9 @@ import {
   getSystemLogs,
   getAiMetrics,
   getAiLogs,
+  getAgentToolLogs,
   getAuditLogs,
+  getAuditFilters,
   getBusinessMetrics,
   getNotifications,
   createNotification,
@@ -76,6 +80,62 @@ const NOTI_VARIANT = {
 }
 const inputCls =
   'w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100'
+// Ô lọc trên thanh công cụ (select + input tìm kiếm) — hẹp hơn inputCls, không w-full.
+const selectCls =
+  'rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-400'
+
+// Cửa sổ thời gian dùng chung cho Giám sát AI và Kiểm toán. Giá trị = số giờ,
+// chuỗi rỗng = không giới hạn (backend hiểu "bỏ trống" là toàn bộ lịch sử).
+const TIME_WINDOWS = [
+  { value: '', label: 'Toàn bộ' },
+  { value: '24', label: '24 giờ qua' },
+  { value: '168', label: '7 ngày qua' },
+  { value: '720', label: '30 ngày qua' },
+]
+
+// Nhãn tiếng Việt cho action/entity trong audit_logs. Thiếu nhãn thì hiện thẳng mã
+// gốc (vd action mới thêm ở backend) chứ không để trống.
+const AUDIT_ACTION_LABEL = {
+  CREATE_USER: 'Tạo tài khoản',
+  UPDATE_USER: 'Cập nhật tài khoản',
+  BAN_USER: 'Khóa tài khoản',
+  CREATE_JD: 'Tạo vị trí tuyển dụng',
+  OVERRIDE_EVALUATION: 'Ghi đè điểm AI',
+  DELETE_SHORTLIST: 'Xóa shortlist',
+  UPDATE_CANDIDATE_STATUS: 'Đổi trạng thái ứng viên',
+  CREATE_NOTIFICATION: 'Phát thông báo',
+  TOGGLE_NOTIFICATION: 'Bật/tắt thông báo',
+}
+const AUDIT_ACTION_VARIANT = {
+  BAN_USER: 'error',
+  DELETE_SHORTLIST: 'error',
+  OVERRIDE_EVALUATION: 'warning',
+  UPDATE_USER: 'warning',
+  CREATE_USER: 'success',
+  CREATE_JD: 'info',
+  CREATE_NOTIFICATION: 'info',
+  TOGGLE_NOTIFICATION: 'neutral',
+  UPDATE_CANDIDATE_STATUS: 'processing',
+}
+const ENTITY_LABEL = {
+  user: 'Tài khoản',
+  job_description: 'Vị trí tuyển dụng',
+  evaluation: 'Đánh giá',
+  shortlist: 'Shortlist',
+  shortlist_item: 'Ứng viên trong shortlist',
+  notification: 'Thông báo',
+}
+
+// JSONB trả về có thể là object, mảng, hoặc null -> in đẹp, null thành gạch ngang.
+function jsonText(value) {
+  if (value === null || value === undefined) return '—'
+  if (typeof value === 'string') return value
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
+  }
+}
 
 // Các mục quản trị — hiển thị dưới dạng dropdown ở sidebar (thay tab cũ).
 const SECTIONS = [
@@ -566,92 +626,337 @@ function BusinessAnalytics() {
 /* Giám sát AI (AI Monitoring)                                        */
 /* ================================================================== */
 function AiMonitoring() {
+  // 'llm'   = lượt gọi model sinh chữ (bảng ai_logs)
+  // 'tools' = lượt Agent gọi tool nghiệp vụ (bảng agent_tool_logs)
+  const [view, setView] = useState('llm')
+  const [hours, setHours] = useState('')   // '' = toàn bộ lịch sử
+  const [nonce, setNonce] = useState(0)    // bấm "Tải lại" -> ép chạy lại effect
+
   const [metrics, setMetrics] = useState(null)
   const [logs, setLogs] = useState(null)
+  const [toolLogs, setToolLogs] = useState(null)
   const [err, setErr] = useState('')
+
+  const [agent, setAgent] = useState('')
+  const [tool, setTool] = useState('')
+  const [toolOptions, setToolOptions] = useState([])
+  const [status, setStatus] = useState('')
+  const [search, setSearch] = useState('')
+  const [q, setQ] = useState('')
+
   const [openLog, setOpenLog] = useState(null)
+  const [openTool, setOpenTool] = useState(null)
 
-  function load() {
-    setErr('')
-    setLogs(null)
+  // Gõ tới đâu gọi API tới đó sẽ bắn một request mỗi phím; đợi 400ms ngừng gõ.
+  useEffect(() => {
+    const id = setTimeout(() => setQ(search.trim()), 400)
+    return () => clearTimeout(id)
+  }, [search])
+
+  const win = hours || undefined
+
+  useEffect(() => {
     setMetrics(null)
-    getAiMetrics().then(setMetrics).catch((e) => setErr(e.message))
-    getAiLogs().then(setLogs).catch((e) => setErr(e.message))
-  }
-  useEffect(load, [])
+    getAiMetrics({ hours: win })
+      .then(setMetrics)
+      .catch((e) => setErr(e.message))
+  }, [hours, nonce])
 
+  useEffect(() => {
+    if (view !== 'llm') return
+    setLogs(null)
+    setErr('')
+    getAiLogs({ limit: 200, hours: win, agentName: agent, status, q })
+      .then(setLogs)
+      .catch((e) => setErr(e.message))
+  }, [view, hours, agent, status, q, nonce])
+
+  useEffect(() => {
+    if (view !== 'tools') return
+    setToolLogs(null)
+    setErr('')
+    getAgentToolLogs({ limit: 200, hours: win, toolName: tool, status })
+      .then(setToolLogs)
+      .catch((e) => setErr(e.message))
+  }, [view, hours, tool, status, nonce])
+
+  // Chỉ cập nhật danh sách tool khi KHÔNG lọc theo tool, nếu không dropdown sẽ co
+  // lại còn đúng mục đang chọn và không thoát ra được.
+  useEffect(() => {
+    if (tool || !Array.isArray(toolLogs)) return
+    setToolOptions(
+      Array.from(new Set(toolLogs.map((l) => l.tool_name).filter(Boolean))).sort()
+    )
+  }, [toolLogs, tool])
+
+  const agentOptions = metrics?.by_agent?.map((a) => a.agent_name) || []
   const errorTone = metrics && metrics.error_rate > 5
+  const num = (n) => (n || 0).toLocaleString('vi-VN')
 
   return (
     <>
-      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard icon={Activity} iconClass="bg-sky-50 text-sky-600" label="Tổng request" value={metrics == null ? '…' : metrics.total_requests} />
+      {/* Thanh điều khiển: cửa sổ thời gian + chế độ xem */}
+      <Card className="flex flex-wrap items-center gap-3 p-3">
+        <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+          <Gauge size={18} className="text-sky-500" /> Phạm vi giám sát
+        </div>
+        <Dropdown
+          className="min-w-[170px]"
+          value={hours}
+          onChange={setHours}
+          options={TIME_WINDOWS}
+        />
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          <Segmented
+            value={view}
+            onChange={setView}
+            options={[
+              { value: 'llm', label: 'Lượt gọi LLM' },
+              { value: 'tools', label: 'Tool của Agent' },
+            ]}
+          />
+          <button
+            onClick={() => setNonce((n) => n + 1)}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-600 transition hover:bg-slate-50"
+          >
+            <RefreshCw size={14} /> Tải lại
+          </button>
+        </div>
+      </Card>
+
+      {/* Số liệu tổng quan */}
+      <div className="mt-5 grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard
+          icon={Activity}
+          iconClass="bg-sky-50 text-sky-600"
+          label="Lượt gọi LLM"
+          value={metrics == null ? '…' : num(metrics.total_requests)}
+          footnote={metrics == null ? undefined : `${num(metrics.tool_calls)} lượt gọi tool`}
+        />
         <StatCard
           icon={AlertTriangle}
           iconClass={errorTone ? 'bg-red-50 text-red-600' : 'bg-emerald-50 text-emerald-600'}
           label="Tỷ lệ lỗi"
           value={metrics == null ? '…' : `${metrics.error_rate}%`}
+          footnote={metrics == null ? undefined : `${num(metrics.tool_errors)} tool lỗi`}
         />
-        <StatCard icon={Zap} iconClass="bg-amber-50 text-amber-600" label="Độ trễ TB" value={metrics == null ? '…' : `${metrics.avg_latency_ms} ms`} />
-        <StatCard icon={Coins} iconClass="bg-violet-50 text-violet-600" label="Tổng token" value={metrics == null ? '…' : (metrics.total_tokens || 0).toLocaleString('vi-VN')} />
+        <StatCard
+          icon={Zap}
+          iconClass="bg-amber-50 text-amber-600"
+          label="Độ trễ TB"
+          value={metrics == null ? '…' : `${num(Math.round(metrics.avg_latency_ms))} ms`}
+          footnote={metrics == null ? undefined : `Chậm nhất ${num(Math.round(metrics.max_latency_ms))} ms`}
+        />
+        <StatCard
+          icon={Coins}
+          iconClass="bg-violet-50 text-violet-600"
+          label="Tổng token"
+          value={metrics == null ? '…' : num(metrics.total_tokens)}
+        />
       </div>
 
-      <Card className="mt-6 overflow-hidden">
-        <CardHeader icon={Cpu} title="Lịch sử gọi AI">
-          <button
-            onClick={load}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-600 transition hover:bg-slate-50"
-          >
-            <RefreshCw size={14} /> Tải lại
-          </button>
-        </CardHeader>
-
-        {logs === null && !err && <StateRow>Đang tải lịch sử AI…</StateRow>}
-        {err && <StateRow tone="error">Lỗi tải: {err}</StateRow>}
-        {logs && logs.length === 0 && <StateRow>Chưa có lượt gọi AI nào được ghi nhận.</StateRow>}
-        {logs && logs.length > 0 && (
+      {/* Bóc tách theo agent — biết agent nào đắt/chậm/hay lỗi */}
+      {metrics?.by_agent?.length > 0 && (
+        <Card className="mt-6 overflow-hidden">
+          <CardHeader icon={Cpu} title="Theo từng agent" />
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[820px] text-left">
+            <table className="w-full min-w-[720px] text-left">
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50/60 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                  <th className="px-6 py-3">Thời gian</th>
                   <th className="px-6 py-3">Agent</th>
+                  <th className="px-6 py-3 text-right">Lượt gọi</th>
+                  <th className="px-6 py-3">Tỷ lệ lỗi</th>
+                  <th className="px-6 py-3 text-right">Độ trễ TB</th>
                   <th className="px-6 py-3 text-right">Token</th>
-                  <th className="px-6 py-3 text-right">Độ trễ</th>
-                  <th className="px-6 py-3">Trạng thái</th>
-                  <th className="px-6 py-3 text-right"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {logs.map((l) => (
-                  <tr key={l.id} className="cursor-pointer hover:bg-slate-50/60" onClick={() => setOpenLog(l)}>
-                    <td className="whitespace-nowrap px-6 py-3 text-xs text-slate-500">
-                      {new Date(l.created_at).toLocaleString('vi-VN')}
-                    </td>
+                {metrics.by_agent.map((a) => (
+                  <tr key={a.agent_name} className="hover:bg-slate-50/60">
                     <td className="px-6 py-3">
                       <span className="inline-flex items-center gap-1.5 text-sm font-medium text-slate-700">
-                        <Cpu size={14} className="text-indigo-500" /> {l.agent_name}
+                        <Cpu size={14} className="text-indigo-500" /> {a.agent_name}
                       </span>
                     </td>
-                    <td className="px-6 py-3 text-right text-sm text-slate-600">
-                      {(l.total_tokens || 0).toLocaleString('vi-VN')}
-                    </td>
-                    <td className="px-6 py-3 text-right text-sm text-slate-600">{l.latency_ms} ms</td>
+                    <td className="px-6 py-3 text-right text-sm text-slate-600">{num(a.requests)}</td>
                     <td className="px-6 py-3">
-                      {l.is_error ? (
-                        <Badge variant="error" upper={false}>Lỗi</Badge>
-                      ) : (
-                        <Badge variant="success" upper={false}>Thành công</Badge>
-                      )}
+                      <div className="flex items-center gap-2">
+                        <div className="w-24">
+                          <ProgressBar value={a.error_rate} color={a.error_rate > 5 ? 'red' : 'green'} />
+                        </div>
+                        <span className={`text-xs font-medium ${a.error_rate > 5 ? 'text-red-600' : 'text-slate-500'}`}>
+                          {a.error_rate}%
+                        </span>
+                      </div>
                     </td>
-                    <td className="px-6 py-3 text-right">
-                      <ChevronRight size={16} className="ml-auto text-slate-300" />
+                    <td className="px-6 py-3 text-right text-sm text-slate-600">
+                      {num(Math.round(a.avg_latency_ms))} ms
                     </td>
+                    <td className="px-6 py-3 text-right text-sm text-slate-600">{num(a.total_tokens)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
+        </Card>
+      )}
+
+      {/* Bộ lọc + bảng nhật ký */}
+      <Card className="mt-6 overflow-hidden">
+        <CardHeader icon={view === 'llm' ? Cpu : Wrench} title={view === 'llm' ? 'Lịch sử gọi LLM' : 'Lịch sử gọi tool'}>
+          <div className="flex flex-wrap items-center gap-2">
+            {view === 'llm' ? (
+              <>
+                <select
+                  value={agent}
+                  onChange={(e) => setAgent(e.target.value)}
+                  className={selectCls}
+                >
+                  <option value="">Tất cả agent</option>
+                  {agentOptions.map((a) => (
+                    <option key={a} value={a}>{a}</option>
+                  ))}
+                </select>
+                <div className="relative">
+                  <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <input
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="Tìm trong prompt / kết quả…"
+                    className={`${selectCls} w-56 pl-8`}
+                  />
+                </div>
+              </>
+            ) : (
+              <select
+                value={tool}
+                onChange={(e) => setTool(e.target.value)}
+                className={selectCls}
+              >
+                <option value="">Tất cả tool</option>
+                {toolOptions.map((t) => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+              </select>
+            )}
+            <select
+              value={status}
+              onChange={(e) => setStatus(e.target.value)}
+              className={selectCls}
+            >
+              <option value="">Mọi trạng thái</option>
+              <option value="success">Thành công</option>
+              <option value="error">Lỗi</option>
+            </select>
+          </div>
+        </CardHeader>
+
+        {err && <StateRow tone="error">Lỗi tải: {err}</StateRow>}
+
+        {view === 'llm' ? (
+          <>
+            {logs === null && !err && <StateRow>Đang tải lịch sử AI…</StateRow>}
+            {logs && logs.length === 0 && (
+              <StateRow>
+                {agent || status || q
+                  ? 'Không có lượt gọi nào khớp bộ lọc.'
+                  : 'Chưa có lượt gọi AI nào được ghi nhận.'}
+              </StateRow>
+            )}
+            {logs && logs.length > 0 && (
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[820px] text-left">
+                  <thead>
+                    <tr className="border-b border-slate-200 bg-slate-50/60 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                      <th className="px-6 py-3">Thời gian</th>
+                      <th className="px-6 py-3">Agent</th>
+                      <th className="px-6 py-3 text-right">Token</th>
+                      <th className="px-6 py-3 text-right">Độ trễ</th>
+                      <th className="px-6 py-3">Trạng thái</th>
+                      <th className="px-6 py-3 text-right"></th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {logs.map((l) => (
+                      <tr key={l.id} className="cursor-pointer hover:bg-slate-50/60" onClick={() => setOpenLog(l)}>
+                        <td className="whitespace-nowrap px-6 py-3 text-xs text-slate-500">
+                          {new Date(l.created_at).toLocaleString('vi-VN')}
+                        </td>
+                        <td className="px-6 py-3">
+                          <span className="inline-flex items-center gap-1.5 text-sm font-medium text-slate-700">
+                            <Cpu size={14} className="text-indigo-500" /> {l.agent_name || '(không rõ)'}
+                          </span>
+                        </td>
+                        <td className="px-6 py-3 text-right text-sm text-slate-600">{num(l.total_tokens)}</td>
+                        <td className="px-6 py-3 text-right text-sm text-slate-600">
+                          {num(Math.round(l.latency_ms))} ms
+                        </td>
+                        <td className="px-6 py-3">
+                          {l.is_error ? (
+                            <Badge variant="error" upper={false}>Lỗi</Badge>
+                          ) : (
+                            <Badge variant="success" upper={false}>Thành công</Badge>
+                          )}
+                        </td>
+                        <td className="px-6 py-3 text-right">
+                          <ChevronRight size={16} className="ml-auto text-slate-300" />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            {toolLogs === null && !err && <StateRow>Đang tải lịch sử tool…</StateRow>}
+            {toolLogs && toolLogs.length === 0 && (
+              <StateRow>
+                {tool || status
+                  ? 'Không có lượt gọi tool nào khớp bộ lọc.'
+                  : 'Chưa có lượt gọi tool nào được ghi nhận.'}
+              </StateRow>
+            )}
+            {toolLogs && toolLogs.length > 0 && (
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[820px] text-left">
+                  <thead>
+                    <tr className="border-b border-slate-200 bg-slate-50/60 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                      <th className="px-6 py-3">Thời gian</th>
+                      <th className="px-6 py-3">Tool</th>
+                      <th className="px-6 py-3">Người dùng</th>
+                      <th className="px-6 py-3">Trạng thái</th>
+                      <th className="px-6 py-3 text-right"></th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {toolLogs.map((l) => (
+                      <tr key={l.id} className="cursor-pointer hover:bg-slate-50/60" onClick={() => setOpenTool(l)}>
+                        <td className="whitespace-nowrap px-6 py-3 text-xs text-slate-500">
+                          {new Date(l.created_at).toLocaleString('vi-VN')}
+                        </td>
+                        <td className="px-6 py-3">
+                          <span className="inline-flex items-center gap-1.5 text-sm font-medium text-slate-700">
+                            <Wrench size={14} className="text-sky-500" /> {l.tool_name}
+                          </span>
+                        </td>
+                        <td className="px-6 py-3 text-sm text-slate-600">{l.user_email || 'Hệ thống'}</td>
+                        <td className="px-6 py-3">
+                          <Badge variant={l.status === 'success' ? 'success' : 'error'} upper={false}>
+                            {l.status === 'success' ? 'Thành công' : l.status}
+                          </Badge>
+                        </td>
+                        <td className="px-6 py-3 text-right">
+                          <ChevronRight size={16} className="ml-auto text-slate-300" />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
         )}
       </Card>
 
@@ -659,12 +964,15 @@ function AiMonitoring() {
         <Modal title="Chi tiết lượt gọi AI" onClose={() => setOpenLog(null)} wide>
           <div className="space-y-4 px-6 py-5">
             <div className="flex flex-wrap gap-2">
-              <Badge variant="ai" upper={false}>{openLog.agent_name}</Badge>
+              <Badge variant="ai" upper={false}>{openLog.agent_name || '(không rõ)'}</Badge>
               <Badge variant={openLog.is_error ? 'error' : 'success'} upper={false}>
                 {openLog.is_error ? 'Lỗi' : 'Thành công'}
               </Badge>
-              <Badge variant="neutral" upper={false}>{openLog.total_tokens} token</Badge>
-              <Badge variant="neutral" upper={false}>{openLog.latency_ms} ms</Badge>
+              <Badge variant="neutral" upper={false}>{num(openLog.total_tokens)} token</Badge>
+              <Badge variant="neutral" upper={false}>{num(Math.round(openLog.latency_ms))} ms</Badge>
+              <Badge variant="neutral" upper={false}>
+                {new Date(openLog.created_at).toLocaleString('vi-VN')}
+              </Badge>
             </div>
             {openLog.error_message && (
               <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -673,6 +981,25 @@ function AiMonitoring() {
             )}
             <CodeBlock label="Prompt" text={openLog.prompt} />
             <CodeBlock label="Completion" text={openLog.completion} />
+          </div>
+        </Modal>
+      )}
+
+      {openTool && (
+        <Modal title="Chi tiết lượt gọi tool" onClose={() => setOpenTool(null)} wide>
+          <div className="space-y-4 px-6 py-5">
+            <div className="flex flex-wrap gap-2">
+              <Badge variant="ai" upper={false}>{openTool.tool_name}</Badge>
+              <Badge variant={openTool.status === 'success' ? 'success' : 'error'} upper={false}>
+                {openTool.status}
+              </Badge>
+              <Badge variant="neutral" upper={false}>{openTool.user_email || 'Hệ thống'}</Badge>
+              <Badge variant="neutral" upper={false}>
+                {new Date(openTool.created_at).toLocaleString('vi-VN')}
+              </Badge>
+            </div>
+            <CodeBlock label="Tham số đầu vào" text={jsonText(openTool.input_params)} />
+            <CodeBlock label="Kết quả trả về" text={jsonText(openTool.result)} />
           </div>
         </Modal>
       )}
@@ -685,43 +1012,110 @@ function AiMonitoring() {
 /* ================================================================== */
 function AuditSecurity() {
   const [logs, setLogs] = useState(null)
+  const [filters, setFilters] = useState({ actions: [], entity_types: [] })
   const [err, setErr] = useState('')
   const [entityType, setEntityType] = useState('')
+  const [action, setAction] = useState('')
+  const [hours, setHours] = useState('')
+  const [search, setSearch] = useState('')
+  const [q, setQ] = useState('')
+  const [nonce, setNonce] = useState(0)
   const [openLog, setOpenLog] = useState(null)
 
-  function load() {
-    setErr('')
+  useEffect(() => {
+    const id = setTimeout(() => setQ(search.trim()), 400)
+    return () => clearTimeout(id)
+  }, [search])
+
+  // Lấy danh sách action/entity từ BACKEND chứ không suy ra từ kết quả đang hiển
+  // thị: nếu suy ra, khi đã lọc thì dropdown chỉ còn đúng mục đang chọn.
+  useEffect(() => {
+    getAuditFilters()
+      .then(setFilters)
+      .catch(() => {
+        /* dropdown rỗng vẫn dùng được, không cần chặn cả trang */
+      })
+  }, [nonce])
+
+  useEffect(() => {
     setLogs(null)
-    getAuditLogs(200, entityType || undefined)
+    setErr('')
+    getAuditLogs({ limit: 200, entityType, action, hours: hours || undefined, q })
       .then(setLogs)
       .catch((e) => setErr(e.message))
-  }
-  useEffect(load, [entityType])
+  }, [entityType, action, hours, q, nonce])
 
-  const entityOptions = useMemo(() => {
-    const set = new Set((logs || []).map((l) => l.entity_type).filter(Boolean))
-    return Array.from(set)
+  const stats = useMemo(() => {
+    const list = logs || []
+    return {
+      total: list.length,
+      actions: new Set(list.map((l) => l.action)).size,
+      actors: new Set(list.map((l) => l.user_email || 'system')).size,
+      latest: list[0] ? new Date(list[0].created_at).toLocaleString('vi-VN') : '—',
+    }
   }, [logs])
+
+  const filtering = entityType || action || hours || q
 
   return (
     <>
-      <Card className="flex flex-wrap items-center gap-3 p-3">
+      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard
+          icon={FileSearch}
+          iconClass="bg-rose-50 text-rose-600"
+          label="Bản ghi hiển thị"
+          value={logs == null ? '…' : stats.total}
+          footnote="Tối đa 200 bản ghi mới nhất"
+        />
+        <StatCard
+          icon={ShieldCheck}
+          iconClass="bg-indigo-50 text-indigo-600"
+          label="Loại hành động"
+          value={logs == null ? '…' : stats.actions}
+        />
+        <StatCard
+          icon={Users}
+          iconClass="bg-violet-50 text-violet-600"
+          label="Người thực hiện"
+          value={logs == null ? '…' : stats.actors}
+        />
+        <StatCard
+          icon={Activity}
+          iconClass="bg-emerald-50 text-emerald-600"
+          label="Gần nhất"
+          value={logs == null ? '…' : stats.latest}
+        />
+      </div>
+
+      <Card className="mt-6 flex flex-wrap items-center gap-3 p-3">
         <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
           <FileSearch size={18} className="text-rose-500" /> Nhật ký kiểm toán
         </div>
-        <div className="ml-auto flex items-center gap-2">
-          <select
-            value={entityType}
-            onChange={(e) => setEntityType(e.target.value)}
-            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-400"
-          >
-            <option value="">Tất cả đối tượng</option>
-            {entityOptions.map((t) => (
-              <option key={t} value={t}>{t}</option>
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          <select value={action} onChange={(e) => setAction(e.target.value)} className={selectCls}>
+            <option value="">Tất cả hành động</option>
+            {filters.actions.map((a) => (
+              <option key={a} value={a}>{AUDIT_ACTION_LABEL[a] || a}</option>
             ))}
           </select>
+          <select value={entityType} onChange={(e) => setEntityType(e.target.value)} className={selectCls}>
+            <option value="">Tất cả đối tượng</option>
+            {filters.entity_types.map((t) => (
+              <option key={t} value={t}>{ENTITY_LABEL[t] || t}</option>
+            ))}
+          </select>
+          <Dropdown className="min-w-[150px]" value={hours} onChange={setHours} options={TIME_WINDOWS} />
+          <div className="relative">
+            <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Email hoặc ID đối tượng…"
+              className={`${selectCls} w-52 pl-8`}
+            />
+          </div>
           <button
-            onClick={load}
+            onClick={() => setNonce((n) => n + 1)}
             className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-600 transition hover:bg-slate-50"
           >
             <RefreshCw size={14} /> Tải lại
@@ -732,7 +1126,13 @@ function AuditSecurity() {
       <Card className="mt-4 overflow-hidden">
         {logs === null && !err && <StateRow>Đang tải nhật ký kiểm toán…</StateRow>}
         {err && <StateRow tone="error">Lỗi tải: {err}</StateRow>}
-        {logs && logs.length === 0 && <StateRow>Chưa có bản ghi kiểm toán nào.</StateRow>}
+        {logs && logs.length === 0 && (
+          <StateRow>
+            {filtering
+              ? 'Không có bản ghi nào khớp bộ lọc.'
+              : 'Chưa có bản ghi kiểm toán nào. Các hành động nhạy cảm (đổi quyền, khóa tài khoản, ghi đè điểm AI…) sẽ được ghi lại ở đây.'}
+          </StateRow>
+        )}
         {logs && logs.length > 0 && (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[820px] text-left">
@@ -758,17 +1158,17 @@ function AuditSecurity() {
                         {new Date(l.created_at).toLocaleString('vi-VN')}
                       </td>
                       <td className="px-6 py-3">
-                        <Badge variant="ai" upper={false}>{l.action}</Badge>
+                        <Badge variant={AUDIT_ACTION_VARIANT[l.action] || 'ai'} upper={false}>
+                          {AUDIT_ACTION_LABEL[l.action] || l.action}
+                        </Badge>
                       </td>
                       <td className="px-6 py-3 text-sm text-slate-600">
-                        {l.entity_type}
+                        {ENTITY_LABEL[l.entity_type] || l.entity_type}
                         {l.entity_id && (
                           <span className="ml-1 text-xs text-slate-400">#{String(l.entity_id).slice(0, 8)}</span>
                         )}
                       </td>
-                      <td className="px-6 py-3 text-xs text-slate-500">
-                        {l.user_id ? String(l.user_id).slice(0, 8) : 'Hệ thống'}
-                      </td>
+                      <td className="px-6 py-3 text-sm text-slate-600">{l.user_email || 'Hệ thống'}</td>
                       <td className="px-6 py-3 text-right">
                         {hasDiff && <ChevronRight size={16} className="ml-auto text-slate-300" />}
                       </td>
@@ -782,26 +1182,79 @@ function AuditSecurity() {
       </Card>
 
       {openLog && (
-        <Modal title="Chi tiết thay đổi (before / after)" onClose={() => setOpenLog(null)} wide>
+        <Modal title="Chi tiết thay đổi (trước / sau)" onClose={() => setOpenLog(null)} wide>
           <div className="space-y-4 px-6 py-5">
             <div className="flex flex-wrap gap-2">
-              <Badge variant="ai" upper={false}>{openLog.action}</Badge>
-              <Badge variant="neutral" upper={false}>{openLog.entity_type}</Badge>
+              <Badge variant={AUDIT_ACTION_VARIANT[openLog.action] || 'ai'} upper={false}>
+                {AUDIT_ACTION_LABEL[openLog.action] || openLog.action}
+              </Badge>
+              <Badge variant="neutral" upper={false}>
+                {ENTITY_LABEL[openLog.entity_type] || openLog.entity_type}
+              </Badge>
+              <Badge variant="neutral" upper={false}>{openLog.user_email || 'Hệ thống'}</Badge>
+              <Badge variant="neutral" upper={false}>
+                {new Date(openLog.created_at).toLocaleString('vi-VN')}
+              </Badge>
             </div>
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-              <CodeBlock
-                label="Trước"
-                text={openLog.old_data ? JSON.stringify(openLog.old_data, null, 2) : '—'}
-              />
-              <CodeBlock
-                label="Sau"
-                text={openLog.new_data ? JSON.stringify(openLog.new_data, null, 2) : '—'}
-              />
-            </div>
+            {openLog.entity_id && (
+              <p className="text-xs text-slate-500">
+                ID đối tượng: <span className="font-mono">{openLog.entity_id}</span>
+              </p>
+            )}
+            <DiffTable oldData={openLog.old_data} newData={openLog.new_data} />
           </div>
         </Modal>
       )}
     </>
+  )
+}
+
+// Bảng so sánh từng trường. old_data/new_data từ backend CHỈ chứa các trường thực
+// sự đổi, nên bảng này đọc thẳng ra "cái gì đã đổi" mà không phải dò 2 khối JSON.
+function DiffTable({ oldData, newData }) {
+  const keys = Array.from(
+    new Set([...Object.keys(oldData || {}), ...Object.keys(newData || {})])
+  )
+
+  if (!keys.length) {
+    return (
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+        <CodeBlock label="Trước" text={jsonText(oldData)} />
+        <CodeBlock label="Sau" text={jsonText(newData)} />
+      </div>
+    )
+  }
+
+  const fmt = (v) => {
+    if (v === null || v === undefined) return '—'
+    if (typeof v === 'boolean') return v ? 'Có' : 'Không'
+    if (typeof v === 'object') return JSON.stringify(v)
+    return String(v)
+  }
+
+  return (
+    <div className="overflow-hidden rounded-lg border border-slate-200">
+      <table className="w-full text-left text-sm">
+        <thead>
+          <tr className="bg-slate-50/60 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+            <th className="px-4 py-2.5">Trường</th>
+            <th className="px-4 py-2.5">Trước</th>
+            <th className="px-4 py-2.5">Sau</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100">
+          {keys.map((k) => (
+            <tr key={k}>
+              <td className="px-4 py-2.5 font-medium text-slate-700">{k}</td>
+              <td className="px-4 py-2.5 text-slate-500 line-through decoration-slate-300">
+                {fmt(oldData?.[k])}
+              </td>
+              <td className="px-4 py-2.5 font-medium text-slate-900">{fmt(newData?.[k])}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   )
 }
 
@@ -958,7 +1411,8 @@ function BroadcastNotifications() {
 const EXPORTS = [
   { kind: 'system-logs', file: 'system_logs.csv', title: 'Nhật ký hệ thống', desc: 'Log đăng nhập & hành động quản trị.', icon: ScrollText, cls: 'bg-slate-100 text-slate-600' },
   { kind: 'ai-logs', file: 'ai_logs.csv', title: 'Nhật ký giám sát AI', desc: 'Prompt, completion, token & độ trễ.', icon: Cpu, cls: 'bg-sky-50 text-sky-600' },
-  { kind: 'audit-logs', file: 'audit_logs.csv', title: 'Nhật ký kiểm toán', desc: 'Ai đã thay đổi gì (before/after).', icon: FileSearch, cls: 'bg-rose-50 text-rose-600' },
+  { kind: 'audit-logs', file: 'audit_logs.csv', title: 'Nhật ký kiểm toán', desc: 'Ai đã thay đổi gì, kèm giá trị trước/sau.', icon: FileSearch, cls: 'bg-rose-50 text-rose-600' },
+  { kind: 'agent-tool-logs', file: 'agent_tool_logs.csv', title: 'Nhật ký tool của Agent', desc: 'AI Agent đã gọi tool nào, tham số & kết quả.', icon: Wrench, cls: 'bg-indigo-50 text-indigo-600' },
 ]
 
 function ExportCenter() {

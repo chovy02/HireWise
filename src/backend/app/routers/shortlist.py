@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app import models, schemas
 from app.core.dependencies import get_current_user, require_role
 from app.database import get_db
+from app.services.logging import write_audit_log
 
 
 # ────────────────────────────────────────────────────────────
@@ -161,8 +162,21 @@ def delete_shortlist(
 ):
     """Xóa cả shortlist (kèm các item bên trong, do cascade)."""
     shortlist = _get_shortlist_or_404(db, shortlist_id)
+    # Chụp lại TRƯỚC khi xóa — sau db.delete() object không còn đọc được.
+    removed = {
+        "name": shortlist.name,
+        "jd_id": str(shortlist.jd_id),
+        "items": len(shortlist.items),
+    }
     db.delete(shortlist)
     db.commit()
+
+    write_audit_log(
+        db, user_id=current_user.id, action="DELETE_SHORTLIST", entity_type="shortlist",
+        entity_id=shortlist_id,
+        old_data=removed,
+        new_data=None,  # đã xóa -> không có trạng thái "sau"
+    )
 
 
 @shortlist_router.post(
@@ -240,9 +254,19 @@ def update_item_status(
     if not item:
         raise HTTPException(status_code=404, detail="Không tìm thấy ứng viên trong shortlist.")
 
+    old_status = item.candidate_status
     item.candidate_status = payload.candidate_status
     db.commit()
     db.refresh(item)
+
+    # Nhận/loại một ứng viên là quyết định tuyển dụng cuối cùng -> phải kiểm toán được.
+    if old_status != item.candidate_status:
+        write_audit_log(
+            db, user_id=current_user.id, action="UPDATE_CANDIDATE_STATUS",
+            entity_type="shortlist_item", entity_id=item.id,
+            old_data={"candidate_status": old_status, "cv_id": str(item.cv_id)},
+            new_data={"candidate_status": item.candidate_status, "cv_id": str(item.cv_id)},
+        )
     return _item_response(item)
 
 

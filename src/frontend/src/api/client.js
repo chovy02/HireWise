@@ -80,13 +80,27 @@ export async function apiFetch(path, { method = 'GET', body, auth = false } = {}
   }
 
   let data = null
-  const text = await res.text()
+  let parseFailed = false
+  const text = await res.text() // rỗng với 204 No Content -> data giữ null
   if (text) {
     try {
       data = JSON.parse(text)
     } catch {
+      parseFailed = true
       data = { detail: text }
     }
+  }
+
+  // Mọi endpoint của backend đều trả JSON. Nhận được HTML kèm 200 nghĩa là request
+  // KHÔNG tới được FastAPI mà rơi vào SPA fallback của Vite — hầu như luôn do
+  // thiếu prefix đường dẫn trong `server.proxy` (vite.config.js). Phải ném lỗi rõ
+  // ràng: nếu trả về nguyên object {detail:"<html>"} thì phía gọi tưởng thành công
+  // và hỏng âm thầm (đúng lỗi từng làm chuông thông báo luôn rỗng).
+  if (res.ok && parseFailed) {
+    throw new Error(
+      `Máy chủ trả về nội dung không phải JSON cho "${path}". ` +
+        'Nhiều khả năng thiếu prefix này trong proxy của vite.config.js.'
+    )
   }
 
   if (!res.ok) {

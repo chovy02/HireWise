@@ -59,6 +59,9 @@ export default defineConfig({
       '/interviews': backendProxy(),
       '/compare': backendProxy(),
       '/agent': backendProxy(),
+      // Chuông thông báo của người dùng. Thiếu dòng này thì request rơi vào SPA
+      // fallback của Vite (trả index.html kèm HTTP 200) và chuông im lặng rỗng.
+      '/notifications': backendProxy(),
     },
   },
 })

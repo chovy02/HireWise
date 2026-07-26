@@ -32,7 +32,7 @@ def _is_retryable(err: Exception) -> bool:
     )
 
 
-def _record_ai_log(agent_name, prompt, completion, total_tokens, latency_ms, is_error, error_message):
+def record_ai_log(agent_name, prompt, completion, total_tokens, latency_ms, is_error, error_message):
     """Ghi 1 dòng AILog để trang Giám sát AI (admin) thống kê request/độ trễ/token/lỗi.
 
     Dùng session RIÊNG (SessionLocal) để không đụng transaction của caller — hàm này
@@ -82,7 +82,7 @@ def generate_text(model_name: str, prompt: str, agent_name: str = None) -> str:
             )
             content = resp.choices[0].message.content
             total_tokens = getattr(getattr(resp, "usage", None), "total_tokens", 0) or 0
-            _record_ai_log(
+            record_ai_log(
                 agent_name=label, prompt=prompt, completion=content,
                 total_tokens=total_tokens,
                 latency_ms=(time.time() - start_time) * 1000,
@@ -91,7 +91,7 @@ def generate_text(model_name: str, prompt: str, agent_name: str = None) -> str:
             return content
         except Exception as e:  # noqa: BLE001 - phân loại lại qua _is_retryable
             if attempt == MAX_RETRIES or not _is_retryable(e):
-                _record_ai_log(
+                record_ai_log(
                     agent_name=label, prompt=prompt, completion=None,
                     total_tokens=0,
                     latency_ms=(time.time() - start_time) * 1000,

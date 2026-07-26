@@ -30,21 +30,27 @@ function readSeen() {
 export default function Topbar() {
   const [open, setOpen] = useState(false)
   const [items, setItems] = useState([])
+  const [err, setErr] = useState('')
   const [seen, setSeen] = useState(readSeen)
   const panelRef = useRef(null)
 
   function load() {
     getActiveNotifications()
-      .then((data) => setItems(Array.isArray(data) ? data : []))
-      .catch(() => {
-        /* im lặng — chuông không nên chặn luồng chính nếu lỗi mạng */
+      .then((data) => {
+        setItems(Array.isArray(data) ? data : [])
+        setErr('')
+      })
+      .catch((e) => {
+        // Không chặn luồng chính, nhưng PHẢI hiện lỗi trong panel: nuốt im lặng
+        // khiến chuông hỏng trông y hệt chuông không có thông báo nào.
+        setErr(e.message || 'Không tải được thông báo.')
       })
   }
 
-  // Tải khi mount + poll mỗi 60s để bắt thông báo mới admin vừa phát.
+  // Tải khi mount + poll mỗi 30s để bắt thông báo mới admin vừa phát.
   useEffect(() => {
     load()
-    const id = setInterval(load, 60_000)
+    const id = setInterval(load, 30_000)
     return () => clearInterval(id)
   }, [])
 
@@ -107,7 +113,9 @@ export default function Topbar() {
             </div>
 
             <div className="max-h-[70vh] overflow-y-auto">
-              {items.length === 0 ? (
+              {err ? (
+                <div className="px-4 py-8 text-center text-sm text-red-500">{err}</div>
+              ) : items.length === 0 ? (
                 <div className="px-4 py-10 text-center text-sm text-slate-400">
                   Chưa có thông báo nào.
                 </div>
