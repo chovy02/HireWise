@@ -41,19 +41,6 @@ class AIStatsResponse(BaseModel):
     total_tokens: int
 
 
-# 2. Schemas cho Cấu hình hệ thống (System Settings)
-class SystemSettingResponse(BaseModel):
-    key: str
-    value: dict
-    description: Optional[str] = None
-    updated_at: datetime
-
-    class Config:
-        from_attributes = True
-
-class SystemSettingUpdate(BaseModel):
-    value: dict
-
 # 5. Schemas cho Thông báo (Notifications)
 class NotificationCreate(BaseModel):
     title: str
@@ -167,35 +154,6 @@ def list_ai_logs(
         .limit(min(max(limit, 1), 500))
         .all()
     )
-
-
-# ==========================================
-# III. ROUTES: CẤU HÌNH HỆ THỐNG (SYSTEM SETTINGS)
-# ==========================================
-
-@router.get("/settings", response_model=List[SystemSettingResponse])
-def get_system_settings(db: Session = Depends(get_db)):
-    """Lấy danh sách các cấu hình hệ thống hiện tại."""
-    return db.query(models.SystemSetting).all()
-
-@router.put("/settings/{key}", response_model=SystemSettingResponse)
-def update_system_setting(
-    key: str, 
-    setting_in: SystemSettingUpdate, 
-    db: Session = Depends(get_db)
-):
-    """Cập nhật hoặc tạo mới một cấu hình hệ thống (VD: Tắt/mở maintenance, Ngưỡng điểm chuẩn)."""
-    setting = db.query(models.SystemSetting).filter(models.SystemSetting.key == key).first()
-    
-    if not setting:
-        setting = models.SystemSetting(key=key, value=setting_in.value)
-        db.add(setting)
-    else:
-        setting.value = setting_in.value
-        
-    db.commit()
-    db.refresh(setting)
-    return setting
 
 
 # ==========================================

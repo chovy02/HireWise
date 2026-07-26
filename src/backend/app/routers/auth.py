@@ -105,7 +105,11 @@ def login(user_credentials: schemas.UserLogin, db: Session = Depends(get_db)):
     if not user:
         raise HTTPException(status_code=403, detail="Tài khoản hoặc mật khẩu không chính xác.")
 
-    # 2. Kiểm tra tài khoản đã kích hoạt chưa
+    # 2a. Tài khoản bị admin khóa -> chặn đăng nhập (tách khỏi trạng thái xác minh).
+    if user.is_banned:
+        raise HTTPException(status_code=403, detail="Tài khoản của bạn đã bị khóa bởi quản trị viên.")
+
+    # 2b. Kiểm tra tài khoản đã kích hoạt (xác minh email) chưa
     if not user.is_active:
         raise HTTPException(status_code=403, detail="Vui lòng kiểm tra email và kích hoạt tài khoản trước khi đăng nhập.")
 

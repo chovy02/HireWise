@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   ShieldCheck,
   Users,
-  UserCog,
   UserPlus,
   Pencil,
   Lock,
@@ -18,9 +17,6 @@ import {
   AlertTriangle,
   Coins,
   Gauge,
-  SlidersHorizontal,
-  Save,
-  Plus,
   FileSearch,
   Megaphone,
   Send,
@@ -32,7 +28,6 @@ import {
   EyeOff,
   ChevronRight,
   FileSpreadsheet,
-  CheckCircle2,
 } from 'lucide-react'
 import Topbar from '../components/Topbar.jsx'
 import {
@@ -41,7 +36,6 @@ import {
   StateRow,
   StatCard,
   Badge,
-  Toggle,
   ScoreRing,
   ProgressBar,
   Dropdown,
@@ -56,8 +50,6 @@ import {
   getSystemLogs,
   getAiMetrics,
   getAiLogs,
-  getSystemSettings,
-  updateSystemSetting,
   getAuditLogs,
   getBusinessMetrics,
   getNotifications,
@@ -90,7 +82,6 @@ const SECTIONS = [
   { value: 'users', label: 'Tài khoản', icon: Users, title: 'Quản lý tài khoản', desc: 'RBAC — tạo, sửa, khóa tài khoản người dùng.', hIcon: Users, hClass: 'bg-indigo-50 text-indigo-600' },
   { value: 'analytics', label: 'Phân tích doanh nghiệp', icon: BarChart3, title: 'Phân tích doanh nghiệp', desc: 'Số liệu tổng quan hiệu quả tuyển dụng.', hIcon: BarChart3, hClass: 'bg-violet-50 text-violet-600' },
   { value: 'ai', label: 'Giám sát AI', icon: Cpu, title: 'Giám sát AI', desc: 'Theo dõi request, độ trễ, token và lỗi của các AI agent.', hIcon: Cpu, hClass: 'bg-sky-50 text-sky-600' },
-  { value: 'config', label: 'Cấu hình hệ thống', icon: SlidersHorizontal, title: 'Cấu hình hệ thống động', desc: 'Bật/tắt tính năng và điều chỉnh ngưỡng hệ thống theo thời gian thực.', hIcon: SlidersHorizontal, hClass: 'bg-amber-50 text-amber-600' },
   { value: 'audit', label: 'Kiểm toán & Bảo mật', icon: FileSearch, title: 'Kiểm toán & Bảo mật', desc: 'Ai đã thay đổi gì — nhật ký before/after mọi hành động nhạy cảm.', hIcon: FileSearch, hClass: 'bg-rose-50 text-rose-600' },
   { value: 'notifications', label: 'Trung tâm thông báo', icon: Megaphone, title: 'Trung tâm thông báo', desc: 'Phát thông báo tới toàn bộ người dùng của hệ thống.', hIcon: Megaphone, hClass: 'bg-fuchsia-50 text-fuchsia-600' },
   { value: 'export', label: 'Trung tâm trích xuất', icon: Download, title: 'Trung tâm trích xuất', desc: 'Xuất nhật ký & dữ liệu hệ thống ra file CSV.', hIcon: Download, hClass: 'bg-emerald-50 text-emerald-600' },
@@ -134,7 +125,6 @@ export default function AdminGateway() {
           {section === 'users' && <UserManagement />}
           {section === 'analytics' && <BusinessAnalytics />}
           {section === 'ai' && <AiMonitoring />}
-          {section === 'config' && <SystemConfiguration />}
           {section === 'audit' && <AuditSecurity />}
           {section === 'notifications' && <BroadcastNotifications />}
           {section === 'export' && <ExportCenter />}
@@ -155,6 +145,8 @@ function UserManagement() {
   const [err, setErr] = useState('')
   const [query, setQuery] = useState('')
   const [editing, setEditing] = useState(null) // user obj (sửa) | 'new' (tạo) | null
+  const [confirmBan, setConfirmBan] = useState(null) // user sắp bị khóa (chờ xác nhận) | null
+  const [banning, setBanning] = useState(false)
 
   function load() {
     setErr('')
@@ -171,18 +163,30 @@ function UserManagement() {
       : true
   )
   const total = list.length
-  const active = list.filter((u) => u.is_active).length
+  // "Đang hoạt động" = đã xác minh (is_active) VÀ không bị khóa (is_banned).
+  const active = list.filter((u) => u.is_active && !u.is_banned).length
+  const banned = list.filter((u) => u.is_banned).length
   const admins = list.filter((u) => u.role === 'admin').length
-  const hrStaff = list.filter((u) => u.role === 'hr_staff').length
 
-  async function toggleActive(u) {
+  // Áp dụng khóa/mở khóa: đổi is_banned (KHÔNG đụng is_active — vốn là cờ xác minh).
+  async function applyBan(u, nextBanned) {
+    setBanning(true)
     try {
-      await updateUser(u.id, { is_active: !u.is_active })
-      toast(u.is_active ? `Đã khóa ${u.email}` : `Đã mở khóa ${u.email}`)
+      await updateUser(u.id, { is_banned: nextBanned })
+      toast(nextBanned ? `Đã khóa ${u.email}` : `Đã mở khóa ${u.email}`)
+      setConfirmBan(null)
       load()
     } catch (e) {
       toast(e.message)
+    } finally {
+      setBanning(false)
     }
+  }
+
+  // Bấm nút khóa: nếu đang khóa -> mở khóa ngay; nếu chưa -> hỏi xác nhận trước khi khóa.
+  function onLockClick(u) {
+    if (u.is_banned) applyBan(u, false)
+    else setConfirmBan(u)
   }
 
   return (
@@ -196,16 +200,16 @@ function UserManagement() {
           value={users == null ? '…' : active}
         />
         <StatCard
+          icon={Lock}
+          iconClass="bg-red-50 text-red-600"
+          label="Đã khóa"
+          value={users == null ? '…' : banned}
+        />
+        <StatCard
           icon={ShieldCheck}
           iconClass="bg-indigo-50 text-indigo-600"
           label="Admin"
           value={users == null ? '…' : admins}
-        />
-        <StatCard
-          icon={UserCog}
-          iconClass="bg-violet-50 text-violet-600"
-          label="HR Staff"
-          value={users == null ? '…' : hrStaff}
         />
       </div>
 
@@ -271,13 +275,17 @@ function UserManagement() {
                         </Badge>
                       </td>
                       <td className="px-6 py-4">
-                        {u.is_active ? (
+                        {u.is_banned ? (
+                          <Badge variant="error" upper={false}>
+                            Đã khóa
+                          </Badge>
+                        ) : u.is_active ? (
                           <Badge variant="completed" upper={false}>
                             Hoạt động
                           </Badge>
                         ) : (
-                          <Badge variant="error" upper={false}>
-                            Đã khóa
+                          <Badge variant="warning" upper={false}>
+                            Chưa xác minh
                           </Badge>
                         )}
                       </td>
@@ -291,22 +299,22 @@ function UserManagement() {
                             <Pencil size={16} />
                           </button>
                           <button
-                            onClick={() => toggleActive(u)}
+                            onClick={() => onLockClick(u)}
                             disabled={isSelf}
                             className={`rounded-lg border p-2 transition disabled:cursor-not-allowed disabled:opacity-40 ${
-                              u.is_active
-                                ? 'border-red-200 bg-white text-red-500 hover:bg-red-50'
-                                : 'border-emerald-200 bg-white text-emerald-600 hover:bg-emerald-50'
+                              u.is_banned
+                                ? 'border-emerald-200 bg-white text-emerald-600 hover:bg-emerald-50'
+                                : 'border-red-200 bg-white text-red-500 hover:bg-red-50'
                             }`}
                             title={
                               isSelf
                                 ? 'Không thể tự khóa tài khoản của mình'
-                                : u.is_active
-                                  ? 'Khóa tài khoản'
-                                  : 'Mở khóa tài khoản'
+                                : u.is_banned
+                                  ? 'Mở khóa tài khoản'
+                                  : 'Khóa tài khoản'
                             }
                           >
-                            {u.is_active ? <Lock size={16} /> : <Unlock size={16} />}
+                            {u.is_banned ? <Unlock size={16} /> : <Lock size={16} />}
                           </button>
                         </div>
                       </td>
@@ -328,6 +336,47 @@ function UserManagement() {
             load()
           }}
         />
+      )}
+
+      {confirmBan && (
+        <Modal title="Xác nhận khóa tài khoản" onClose={() => (banning ? null : setConfirmBan(null))}>
+          <div className="px-6 py-5">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-red-50 text-red-600">
+                <Lock size={18} />
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm text-slate-700">
+                  Bạn có chắc muốn khóa tài khoản{' '}
+                  <span className="font-semibold text-slate-900">{confirmBan.email}</span>?
+                </p>
+                <p className="mt-1.5 text-sm text-slate-500">
+                  Người dùng sẽ không thể đăng nhập cho tới khi được mở khóa. Bạn có thể mở khóa lại bất cứ lúc nào.
+                </p>
+              </div>
+            </div>
+          </div>
+          <div className="flex justify-end gap-2 border-t border-slate-200 px-6 py-4">
+            <SecondaryButton className="px-3 py-2" onClick={() => setConfirmBan(null)} disabled={banning}>
+              Hủy
+            </SecondaryButton>
+            <button
+              onClick={() => applyBan(confirmBan, true)}
+              disabled={banning}
+              className="inline-flex items-center justify-center gap-2 rounded-lg bg-red-600 px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {banning ? (
+                <>
+                  <Loader2 size={15} className="animate-spin" /> Đang khóa…
+                </>
+              ) : (
+                <>
+                  <Lock size={15} /> Khóa tài khoản
+                </>
+              )}
+            </button>
+          </div>
+        </Modal>
       )}
     </>
   )
@@ -407,7 +456,7 @@ function UserFormModal({ user, onClose, onSaved }) {
               onChange={(e) => setIsActive(e.target.checked)}
               className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
             />
-            Tài khoản đang hoạt động
+            Đã xác minh (kích hoạt email)
           </label>
         )}
       </div>
@@ -628,231 +677,6 @@ function AiMonitoring() {
         </Modal>
       )}
     </>
-  )
-}
-
-/* ================================================================== */
-/* Cấu hình hệ thống động (System Configuration)                      */
-/* ================================================================== */
-function SystemConfiguration() {
-  const toast = useToast()
-  const [settings, setSettings] = useState(null)
-  const [err, setErr] = useState('')
-  const [adding, setAdding] = useState(false)
-
-  function load() {
-    setErr('')
-    getSystemSettings()
-      .then(setSettings)
-      .catch((e) => setErr(e.message))
-  }
-  useEffect(load, [])
-
-  async function handleSave(key, value) {
-    await updateSystemSetting(key, value)
-    toast(`Đã lưu cấu hình "${key}".`)
-    load()
-  }
-
-  return (
-    <>
-      <div className="flex items-center justify-end">
-        <PrimaryButton onClick={() => setAdding(true)}>
-          <Plus size={16} /> Thêm cấu hình
-        </PrimaryButton>
-      </div>
-
-      {settings === null && !err && (
-        <Card className="mt-4"><StateRow>Đang tải cấu hình…</StateRow></Card>
-      )}
-      {err && <Card className="mt-4"><StateRow tone="error">Lỗi tải: {err}</StateRow></Card>}
-      {settings && settings.length === 0 && (
-        <Card className="mt-4">
-          <StateRow>Chưa có cấu hình nào. Bấm “Thêm cấu hình” để tạo mới.</StateRow>
-        </Card>
-      )}
-
-      {settings && settings.length > 0 && (
-        <div className="mt-4 grid grid-cols-1 gap-5 lg:grid-cols-2">
-          {settings.map((s) => (
-            <SettingCard key={s.key} setting={s} onSave={handleSave} />
-          ))}
-        </div>
-      )}
-
-      {adding && (
-        <NewSettingModal
-          onClose={() => setAdding(false)}
-          onSaved={async (key, value) => {
-            await handleSave(key, value)
-            setAdding(false)
-          }}
-        />
-      )}
-    </>
-  )
-}
-
-// Rút cờ boolean đầu tiên (nếu có) để hiện toggle nhanh; phần còn lại chỉnh bằng JSON.
-function firstBoolKey(value) {
-  if (value && typeof value === 'object' && !Array.isArray(value)) {
-    return Object.keys(value).find((k) => typeof value[k] === 'boolean')
-  }
-  return null
-}
-
-function SettingCard({ setting, onSave }) {
-  const toast = useToast()
-  const [raw, setRaw] = useState(JSON.stringify(setting.value, null, 2))
-  const [saving, setSaving] = useState(false)
-  const [advanced, setAdvanced] = useState(false)
-
-  const boolKey = firstBoolKey(setting.value)
-
-  async function persist(value) {
-    setSaving(true)
-    try {
-      await onSave(setting.key, value)
-    } catch (e) {
-      toast(e.message || 'Lưu thất bại.')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  async function saveRaw() {
-    let parsed
-    try {
-      parsed = JSON.parse(raw)
-    } catch {
-      toast('Giá trị JSON không hợp lệ.')
-      return
-    }
-    await persist(parsed)
-  }
-
-  async function quickToggle(next) {
-    const value = { ...setting.value, [boolKey]: next }
-    setRaw(JSON.stringify(value, null, 2))
-    await persist(value)
-  }
-
-  return (
-    <Card className="flex flex-col p-5">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <code className="rounded bg-slate-100 px-2 py-0.5 text-sm font-semibold text-slate-800">
-            {setting.key}
-          </code>
-          {setting.description && (
-            <p className="mt-2 text-sm text-slate-500">{setting.description}</p>
-          )}
-        </div>
-        <span className="whitespace-nowrap text-xs text-slate-400">
-          {setting.updated_at ? new Date(setting.updated_at).toLocaleDateString('vi-VN') : ''}
-        </span>
-      </div>
-
-      {boolKey && !advanced ? (
-        <div className="mt-4 flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50/60 px-4 py-3">
-          <span className="text-sm font-medium text-slate-700">{boolKey}</span>
-          <div className="flex items-center gap-3">
-            <Badge variant={setting.value[boolKey] ? 'success' : 'neutral'} upper={false}>
-              {setting.value[boolKey] ? 'Bật' : 'Tắt'}
-            </Badge>
-            <Toggle
-              checked={!!setting.value[boolKey]}
-              onChange={quickToggle}
-              disabled={saving}
-            />
-          </div>
-        </div>
-      ) : (
-        <div className="mt-4">
-          <textarea
-            value={raw}
-            onChange={(e) => setRaw(e.target.value)}
-            rows={5}
-            spellCheck={false}
-            className="w-full resize-y rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-2 font-mono text-xs text-slate-700 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
-          />
-          <div className="mt-3 flex justify-end">
-            <PrimaryButton className="px-3 py-2" onClick={saveRaw} disabled={saving}>
-              {saving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
-              Lưu
-            </PrimaryButton>
-          </div>
-        </div>
-      )}
-
-      {boolKey && (
-        <button
-          onClick={() => setAdvanced((v) => !v)}
-          className="mt-3 self-start text-xs font-medium text-indigo-600 hover:text-indigo-700"
-        >
-          {advanced ? 'Ẩn chỉnh sửa JSON' : 'Chỉnh sửa JSON nâng cao'}
-        </button>
-      )}
-    </Card>
-  )
-}
-
-function NewSettingModal({ onClose, onSaved }) {
-  const toast = useToast()
-  const [key, setKey] = useState('')
-  const [raw, setRaw] = useState('{\n  "enabled": true\n}')
-  const [saving, setSaving] = useState(false)
-
-  async function save() {
-    if (!key.trim()) {
-      toast('Nhập key cấu hình.')
-      return
-    }
-    let parsed
-    try {
-      parsed = JSON.parse(raw)
-    } catch {
-      toast('Giá trị JSON không hợp lệ.')
-      return
-    }
-    setSaving(true)
-    try {
-      await onSaved(key.trim(), parsed)
-    } catch (e) {
-      toast(e.message || 'Lưu thất bại.')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return (
-    <Modal title="Thêm cấu hình mới" onClose={onClose}>
-      <div className="space-y-4 px-6 py-5">
-        <Field label="Key">
-          <input
-            value={key}
-            onChange={(e) => setKey(e.target.value)}
-            placeholder="vd: maintenance_mode"
-            className={inputCls}
-          />
-        </Field>
-        <Field label="Giá trị (JSON)">
-          <textarea
-            value={raw}
-            onChange={(e) => setRaw(e.target.value)}
-            rows={5}
-            spellCheck={false}
-            className="w-full resize-y rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-2 font-mono text-xs text-slate-700 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
-          />
-        </Field>
-      </div>
-      <div className="flex justify-end gap-2 border-t border-slate-200 px-6 py-4">
-        <SecondaryButton className="px-3 py-2" onClick={onClose} disabled={saving}>Hủy</SecondaryButton>
-        <PrimaryButton className="px-3 py-2" onClick={save} disabled={saving}>
-          {saving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />} Lưu
-        </PrimaryButton>
-      </div>
-    </Modal>
   )
 }
 

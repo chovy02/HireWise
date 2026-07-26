@@ -99,7 +99,7 @@ def parse_cv(raw_text: str) -> dict:
         return {"parse_error": "CV rỗng, không có text để parse."}
     try:
         prompt = PARSE_PROMPT.replace("{cv_text}", raw_text)
-        response_text = _clean_json_response(generate_text(PARSER_MODEL, prompt))
+        response_text = _clean_json_response(generate_text(PARSER_MODEL, prompt, agent_name="cv_parser"))
         return json.loads(response_text)
     except json.JSONDecodeError as e:
         return {"parse_error": f"Không parse được JSON từ response: {e}"}

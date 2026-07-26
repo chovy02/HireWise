@@ -55,7 +55,7 @@ def compare_candidates_ai(jd_requirements: dict, candidates_info: list[dict], as
     )
 
     try:
-        response_text = _clean_json_response(generate_text(COMPARE_MODEL, prompt))
+        response_text = _clean_json_response(generate_text(COMPARE_MODEL, prompt, agent_name="comparator"))
         return json.loads(response_text)
     except json.JSONDecodeError as e:
         return {"error": f"Lỗi parse JSON từ mô hình AI: {e}"}

@@ -56,7 +56,7 @@ def process_jd(jd_text: str) -> dict:
     prompt = JD_PROMPT.replace("{jd_text}", jd_text)
 
     try:
-        response_text = _clean_json_response(generate_text(JD_MODEL, prompt))
+        response_text = _clean_json_response(generate_text(JD_MODEL, prompt, agent_name="jd_processor"))
     except Exception as e:
         raise AIServiceError(f"Không gọi được dịch vụ AI: {e}") from e
 

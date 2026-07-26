@@ -21,22 +21,6 @@ export function getAiLogs(limit = 100) {
   return apiFetch(`/admin/ai-logs?limit=${limit}`, { auth: true })
 }
 
-// ---- Cấu hình hệ thống động (System Configuration) ----
-
-// GET /admin/settings -> [SystemSettingResponse]
-export function getSystemSettings() {
-  return apiFetch('/admin/settings', { auth: true })
-}
-
-// PUT /admin/settings/{key} { value } -> SystemSettingResponse
-export function updateSystemSetting(key, value) {
-  return apiFetch(`/admin/settings/${encodeURIComponent(key)}`, {
-    method: 'PUT',
-    body: { value },
-    auth: true,
-  })
-}
-
 // ---- Kiểm toán & bảo mật (Audit Logs) ----
 
 // GET /admin/audit-logs?limit=N&entity_type=... -> [AuditLogResponse]

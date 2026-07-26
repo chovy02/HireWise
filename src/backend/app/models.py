@@ -13,7 +13,13 @@ class User(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    # is_active: tài khoản đã XÁC MINH email hay chưa (kích hoạt qua verify-email).
     is_active: Mapped[bool] = mapped_column(Boolean, default=False)
+    # is_banned: admin CHỦ ĐỘNG khóa tài khoản (tách khỏi is_active để không nhầm
+    # với trạng thái xác minh email). True = bị khóa, không thể đăng nhập.
+    is_banned: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, server_default="false"
+    )
     role: Mapped[str] = mapped_column(String(50), default="hr_staff")
     # Tăng mỗi lần user đăng ký lại (chưa kích hoạt). Token xác minh mang version
     # tại thời điểm phát hành; chỉ token có version KHỚP mới hợp lệ -> token cũ từ

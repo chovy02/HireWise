@@ -24,6 +24,7 @@ class UserResponse(BaseModel):
     email: EmailStr
     role: UserRole
     is_active: bool
+    is_banned: bool
     created_at: datetime
 
     class Config:
@@ -51,4 +52,5 @@ class UserUpdateByAdmin(BaseModel):
     email: Optional[EmailStr] = None
     role: Optional[UserRole] = None
     is_active: Optional[bool] = None
+    is_banned: Optional[bool] = None
     password: Optional[str] = Field(default=None, min_length=8)

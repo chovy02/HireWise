@@ -35,10 +35,15 @@ def get_current_user(
     user = db.query(models.User).filter(models.User.email == email).first()
     if user is None:
         raise credentials_exception
+    if user.is_banned:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Tài khoản của bạn đã bị khóa bởi quản trị viên.",
+        )
     if not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Tài khoản đã bị khóa hoặc chưa được kích hoạt.",
+            detail="Tài khoản chưa được kích hoạt (chưa xác minh email).",
         )
     return user
 
