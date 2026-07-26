@@ -18,17 +18,17 @@ export default function AuthLayout({ title, subtitle, children }) {
 
         <div className="relative">
           <h1 className="max-w-md text-4xl font-bold leading-tight">
-            Automate your recruitment pipeline.
+            Tự động hoá quy trình tuyển dụng.
           </h1>
           <p className="mt-4 max-w-md text-indigo-100">
-            AI-powered CV analysis, candidate shortlisting, and multi-channel
-            ingestion — all in one place.
+            Phân tích CV bằng AI, lập danh sách rút gọn ứng viên và thu thập hồ sơ
+            đa kênh — tất cả trong một nơi.
           </p>
           <ul className="mt-8 space-y-3">
             {[
-              'Multi-channel candidate ingestion',
-              'AI suitability scoring & evidence',
-              'Role-based access control',
+              'Thu thập hồ sơ ứng viên đa kênh',
+              'AI chấm điểm phù hợp kèm dẫn chứng',
+              'Phân quyền truy cập theo vai trò',
             ].map((f) => (
               <li key={f} className="flex items-center gap-3 text-indigo-50">
                 <CheckCircle2 size={18} className="text-violet-200" />
@@ -39,7 +39,7 @@ export default function AuthLayout({ title, subtitle, children }) {
         </div>
 
         <p className="relative text-sm text-indigo-200">
-          © 2026 HireWise. All rights reserved.
+          © 2026 HireWise. Bảo lưu mọi quyền.
         </p>
       </div>
 

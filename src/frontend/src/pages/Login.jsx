@@ -22,7 +22,7 @@ export default function Login() {
     return (e) => setForm((f) => ({ ...f, [field]: e.target.value }))
   }
 
-  // BUTTON: "Sign in" -> POST /auth/login (exists in backend)
+  // NÚT "Đăng nhập" -> POST /auth/login
   async function handleSubmit(e) {
     e.preventDefault()
     setError('')
@@ -38,7 +38,7 @@ export default function Login() {
   }
 
   return (
-    <AuthLayout title="Welcome back" subtitle="Sign in to your HireWise account.">
+    <AuthLayout title="Chào mừng trở lại" subtitle="Đăng nhập vào tài khoản HireWise của bạn.">
       <form onSubmit={handleSubmit} className="space-y-4">
         {error && (
           <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3.5 py-2.5 text-sm text-red-700">
@@ -57,14 +57,14 @@ export default function Login() {
             autoComplete="email"
             value={form.email}
             onChange={update('email')}
-            placeholder="you@company.com"
+            placeholder="ban@congty.com"
             className={inputClass}
           />
         </div>
 
         <div>
           <label className="mb-1.5 block text-sm font-medium text-slate-700">
-            Password
+            Mật khẩu
           </label>
           <input
             type="password"
@@ -83,14 +83,14 @@ export default function Login() {
           className="flex w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {loading && <Loader2 size={16} className="animate-spin" />}
-          {loading ? 'Signing in…' : 'Sign in'}
+          {loading ? 'Đang đăng nhập…' : 'Đăng nhập'}
         </button>
       </form>
 
       <p className="mt-6 text-center text-sm text-slate-500">
-        Don&apos;t have an account?{' '}
+        Chưa có tài khoản?{' '}
         <Link to="/signup" className="font-semibold text-indigo-600 hover:text-indigo-700">
-          Sign up
+          Đăng ký
         </Link>
       </p>
     </AuthLayout>

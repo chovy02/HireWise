@@ -26,7 +26,7 @@ export const ingestionQueue = [
   {
     id: 'q2',
     title: 'Product Manager Candidates',
-    source: 'Google Forms Integration',
+    source: 'ZIP Upload',
     status: 'completed',
     statusLabel: 'Completed',
     detail: 'Added 12 new candidates. 3 duplicates prevented.',
@@ -35,8 +35,8 @@ export const ingestionQueue = [
   },
   {
     id: 'q3',
-    title: 'Data Science Inbox Sync',
-    source: 'Email Sync',
+    title: 'Data Science Batch',
+    source: 'ZIP Upload',
     status: 'error',
     statusLabel: 'Error',
     detail: 'Failed to parse 2 attachments. Auto-retrying...',
@@ -59,7 +59,7 @@ export const systemAlerts = [
   {
     id: 'a3',
     level: 'error',
-    text: "Missing permissions for shared inbox 'careers@company.com'. Check Admin Gateway.",
+    text: 'Failed to extract 2 CVs from the last ZIP upload. Check Admin Gateway.',
   },
 ]
 
@@ -420,8 +420,8 @@ export const rbacPermissions = [
   },
   {
     key: 'ingestion',
-    label: 'Configure Ingestion Channels',
-    sub: 'Link Google Forms, sync emails',
+    label: 'Upload Candidate CVs',
+    sub: 'Send ZIP archives of CVs into a project',
     values: { admin: true, hr: true, recruiter: false },
   },
   {

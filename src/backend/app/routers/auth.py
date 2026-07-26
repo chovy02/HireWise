@@ -62,6 +62,29 @@ async def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
     return {"message": "Đăng ký thành công. Vui lòng kiểm tra email để lấy mã kích hoạt."}
 
 
+@router.post("/resend-code")
+async def resend_code(data: schemas.ResendCode, db: Session = Depends(get_db)):
+    """Cấp lại mã OTP mới. Mã chỉ sống 15 phút, mà trước đây cách duy nhất để lấy mã
+    mới là đăng ký lại từ đầu (phải nhập lại cả mật khẩu) — người dùng bị kẹt.
+
+    LUÔN trả cùng một thông điệp dù email có tồn tại hay không: phản hồi khác nhau
+    sẽ biến endpoint này thành công cụ dò xem email nào đã đăng ký.
+    """
+    generic = {"message": "Nếu email tồn tại và chưa kích hoạt, mã mới đã được gửi đi."}
+
+    user = db.query(models.User).filter(models.User.email == data.email).first()
+    if not user or user.is_active:
+        return generic
+
+    user.verification_code = generate_6_digit_code()
+    user.verification_code_expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
+    db.commit()
+    db.refresh(user)
+
+    await send_verification_email(email_to=user.email, token=user.verification_code)
+    return generic
+
+
 @router.post("/verify-email")
 def verify_email(data: schemas.VerifyEmail, db: Session = Depends(get_db)):
     

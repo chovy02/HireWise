@@ -37,18 +37,18 @@ export default function SignUp() {
     passwordsMatch &&
     !loading
 
-  // BUTTON: "Create account" -> POST /auth/register (exists in backend)
-  // The confirm-password match is verified HERE, in the browser only.
+  // NÚT "Tạo tài khoản" -> POST /auth/register
+  // Việc khớp mật khẩu xác nhận được kiểm tra Ở ĐÂY, chỉ trên trình duyệt.
   async function handleSubmit(e) {
     e.preventDefault()
     setError('')
 
     if (!passwordLongEnough) {
-      setError(`Password must be at least ${MIN_PASSWORD} characters.`)
+      setError(`Mật khẩu phải có ít nhất ${MIN_PASSWORD} ký tự.`)
       return
     }
     if (form.password !== form.confirm) {
-      setError('Passwords do not match.')
+      setError('Mật khẩu nhập lại không khớp.')
       return
     }
 
@@ -59,7 +59,7 @@ export default function SignUp() {
         email: form.email.trim(),
         password: form.password,
       })
-      // Backend emails a verification token; send the user to the verify page.
+      // Backend gửi mã OTP qua email; chuyển người dùng sang trang xác minh.
       navigate('/verify', { state: { email: form.email.trim() } })
     } catch (err) {
       setError(err.message)
@@ -70,8 +70,8 @@ export default function SignUp() {
 
   return (
     <AuthLayout
-      title="Create your account"
-      subtitle="Start automating your hiring in minutes."
+      title="Tạo tài khoản"
+      subtitle="Bắt đầu tự động hoá tuyển dụng chỉ trong vài phút."
     >
       <form onSubmit={handleSubmit} className="space-y-4">
         {error && (
@@ -83,7 +83,7 @@ export default function SignUp() {
 
         <div>
           <label className="mb-1.5 block text-sm font-medium text-slate-700">
-            Full name
+            Họ và tên
           </label>
           <input
             type="text"
@@ -91,7 +91,7 @@ export default function SignUp() {
             autoComplete="name"
             value={form.name}
             onChange={update('name')}
-            placeholder="Sarah Jenkins"
+            placeholder="Nguyễn Văn An"
             className={inputClass}
           />
         </div>
@@ -106,14 +106,14 @@ export default function SignUp() {
             autoComplete="email"
             value={form.email}
             onChange={update('email')}
-            placeholder="you@company.com"
+            placeholder="ban@congty.com"
             className={inputClass}
           />
         </div>
 
         <div>
           <label className="mb-1.5 block text-sm font-medium text-slate-700">
-            Password
+            Mật khẩu
           </label>
           <input
             type="password"
@@ -121,7 +121,7 @@ export default function SignUp() {
             autoComplete="new-password"
             value={form.password}
             onChange={update('password')}
-            placeholder="At least 8 characters"
+            placeholder="Tối thiểu 8 ký tự"
             className={inputClass}
           />
           {form.password.length > 0 && (
@@ -131,14 +131,14 @@ export default function SignUp() {
               }`}
             >
               {passwordLongEnough ? <Check size={13} /> : <X size={13} />}
-              At least {MIN_PASSWORD} characters
+              Tối thiểu {MIN_PASSWORD} ký tự
             </p>
           )}
         </div>
 
         <div>
           <label className="mb-1.5 block text-sm font-medium text-slate-700">
-            Confirm password
+            Xác nhận mật khẩu
           </label>
           <input
             type="password"
@@ -146,7 +146,7 @@ export default function SignUp() {
             autoComplete="new-password"
             value={form.confirm}
             onChange={update('confirm')}
-            placeholder="Re-enter your password"
+            placeholder="Nhập lại mật khẩu"
             className={`${inputClass} ${
               showMismatch ? 'border-red-300 focus:border-red-400 focus:ring-red-100' : ''
             }`}
@@ -158,7 +158,7 @@ export default function SignUp() {
               }`}
             >
               {passwordsMatch ? <Check size={13} /> : <X size={13} />}
-              {passwordsMatch ? 'Passwords match' : 'Passwords do not match'}
+              {passwordsMatch ? 'Mật khẩu khớp' : 'Mật khẩu không khớp'}
             </p>
           )}
         </div>
@@ -169,14 +169,14 @@ export default function SignUp() {
           className="flex w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {loading && <Loader2 size={16} className="animate-spin" />}
-          {loading ? 'Creating account…' : 'Create account'}
+          {loading ? 'Đang tạo tài khoản…' : 'Tạo tài khoản'}
         </button>
       </form>
 
       <p className="mt-6 text-center text-sm text-slate-500">
-        Already have an account?{' '}
+        Đã có tài khoản?{' '}
         <Link to="/login" className="font-semibold text-indigo-600 hover:text-indigo-700">
-          Sign in
+          Đăng nhập
         </Link>
       </p>
     </AuthLayout>

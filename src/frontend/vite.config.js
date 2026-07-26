@@ -46,6 +46,10 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     port: 5173,
+    // Bind mount của Docker trên Windows KHÔNG truyền sự kiện inotify vào container,
+    // nên Vite không thấy file đổi và hot-reload im lặng phục vụ code cũ (rất dễ
+    // tưởng là sửa không ăn). Poll để container luôn nhận thay đổi.
+    watch: { usePolling: true, interval: 300 },
     proxy: {
       '/auth': backendProxy(),
       '/api': backendProxy(),
@@ -55,7 +59,12 @@ export default defineConfig({
       '/evaluations': backendProxy(),
       '/shortlists': backendProxy(),
       '/users': backendProxy(),
-      '/admin': backendProxy(),
+      // CHÚ Ý dấu '/' cuối và '^': "/admin" vừa là route SPA (Admin Gateway) vừa là
+      // prefix router backend. Nếu để chuỗi '/admin' thì Vite khớp theo tiền tố và
+      // NUỐT luôn cả URL trang, khiến F5 / mở thẳng /admin trả JSON {"detail":"Not
+      // Found"} thay vì ứng dụng. Regex '^/admin/' chỉ khớp các endpoint thật
+      // (/admin/users, /admin/system-logs...) — backend không có endpoint /admin trần.
+      '^/admin/': backendProxy(),
       '/interviews': backendProxy(),
       '/compare': backendProxy(),
       '/agent': backendProxy(),

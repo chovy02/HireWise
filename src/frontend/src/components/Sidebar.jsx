@@ -8,18 +8,19 @@ import {
   LogOut,
   LogIn,
   UserPlus,
+  X,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext.jsx'
 
 // RBAC: mỗi mục nav chỉ hiện cho đúng role (khớp phân quyền backend).
-// HR làm pipeline tuyển dụng (Dashboard/Shortlisting); Admin quản trị (Admin Gateway).
+// HR làm pipeline tuyển dụng (Bảng điều khiển/Danh sách rút gọn); Admin quản trị.
 const NAV_ITEMS = [
-  { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true, roles: ['hr_staff'] },
-  { to: '/shortlisting', label: 'Shortlisting', icon: Users, roles: ['hr_staff'] },
-  { to: '/admin', label: 'Admin Gateway', icon: ShieldCheck, roles: ['admin'] },
+  { to: '/', label: 'Bảng điều khiển', icon: LayoutDashboard, end: true, roles: ['hr_staff'] },
+  { to: '/shortlisting', label: 'Danh sách rút gọn', icon: Users, roles: ['hr_staff'] },
+  { to: '/admin', label: 'Cổng quản trị', icon: ShieldCheck, roles: ['admin'] },
 ]
 
-export default function Sidebar() {
+export default function Sidebar({ open = false, onClose }) {
   const { user, signOut } = useAuth()
   const [menuOpen, setMenuOpen] = useState(false)
 
@@ -28,7 +29,7 @@ export default function Sidebar() {
     ? NAV_ITEMS.filter((item) => item.roles.includes(user.role))
     : NAV_ITEMS
 
-  const displayName = user?.name || 'User'
+  const displayName = user?.name || 'Người dùng'
   const initials = displayName
     .split(' ')
     .map((w) => w[0])
@@ -37,13 +38,29 @@ export default function Sidebar() {
     .toUpperCase()
 
   return (
-    <aside className="flex h-screen w-60 flex-shrink-0 flex-col bg-sidebar text-slate-300">
+    <aside
+      className={[
+        'flex h-screen w-60 flex-col bg-sidebar text-slate-300',
+        // Mobile: ngăn kéo trượt từ trái, nằm trên nền mờ của Layout.
+        'fixed inset-y-0 left-0 z-40 transform transition-transform duration-200',
+        open ? 'translate-x-0' : '-translate-x-full',
+        // md trở lên: trở lại cột cố định trong luồng, luôn hiện.
+        'md:static md:translate-x-0 md:flex-shrink-0',
+      ].join(' ')}
+    >
       {/* Logo */}
       <div className="flex items-center gap-2.5 px-5 py-5">
         <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-violet-500 to-indigo-600 text-lg font-bold text-white">
           A
         </div>
         <span className="text-[15px] font-semibold text-white">HireWise</span>
+        <button
+          onClick={onClose}
+          aria-label="Đóng menu điều hướng"
+          className="ml-auto rounded-md p-1.5 text-slate-400 transition hover:bg-white/5 hover:text-white md:hidden"
+        >
+          <X size={18} />
+        </button>
       </div>
 
       {/* Nav */}
@@ -86,7 +103,7 @@ export default function Sidebar() {
                   onClick={signOut}
                   className="flex w-full items-center gap-2 px-4 py-2.5 text-sm text-slate-200 hover:bg-white/5"
                 >
-                  <LogOut size={16} /> Sign out
+                  <LogOut size={16} /> Đăng xuất
                 </button>
               </div>
             )}
@@ -98,14 +115,14 @@ export default function Sidebar() {
                 <p className="truncate text-sm font-medium text-white">
                   {displayName}
                 </p>
-                <p className="truncate text-xs text-slate-500">
-                  {user.email || 'HR Director'}
-                </p>
+                <p className="truncate text-xs text-slate-500">{user.email}</p>
               </div>
               <button
                 onClick={() => setMenuOpen((v) => !v)}
                 className="rounded-md p-1.5 text-slate-400 hover:bg-white/5 hover:text-white"
-                title="Account settings"
+                title="Tuỳ chọn tài khoản"
+                aria-label="Tuỳ chọn tài khoản"
+                aria-expanded={menuOpen}
               >
                 <Settings size={18} />
               </button>
@@ -117,13 +134,13 @@ export default function Sidebar() {
               to="/login"
               className="flex w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 px-3 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-indigo-700"
             >
-              <LogIn size={16} /> Sign in
+              <LogIn size={16} /> Đăng nhập
             </Link>
             <Link
               to="/signup"
               className="flex w-full items-center justify-center gap-2 rounded-lg border border-white/10 px-3 py-2.5 text-sm font-medium text-slate-300 transition-colors hover:bg-white/5 hover:text-white"
             >
-              <UserPlus size={16} /> Sign up
+              <UserPlus size={16} /> Đăng ký
             </Link>
           </div>
         )}

@@ -18,18 +18,18 @@ export default function Dashboard() {
         <div className="flex items-start justify-between">
           <div>
             <h1 className="text-2xl font-bold text-slate-900">
-              Recruitment Dashboard
+              Bảng điều khiển tuyển dụng
             </h1>
             <p className="mt-1 text-sm text-slate-500">
               {hasProjects
-                ? 'Your active job description projects.'
-                : 'Get started by creating your first project.'}
+                ? 'Các dự án mô tả công việc đang hoạt động của bạn.'
+                : 'Bắt đầu bằng cách tạo dự án đầu tiên.'}
             </p>
           </div>
           {/* Once at least one project exists, the create button lives top-right. */}
           {hasProjects && (
             <PrimaryButton onClick={() => navigate('/projects/new')}>
-              <Plus size={16} /> Add
+              <Plus size={16} /> Dự án mới
             </PrimaryButton>
           )}
         </div>
@@ -41,16 +41,17 @@ export default function Dashboard() {
               <FolderPlus size={30} />
             </div>
             <h2 className="mt-5 text-lg font-semibold text-slate-900">
-              Create your first project
+              Tạo dự án đầu tiên của bạn
             </h2>
             <p className="mt-1.5 max-w-md text-sm text-slate-500">
-              A project pairs an AI-generated job description with the candidate
-              sources you want to ingest from. Click below to begin.
+              Mỗi dự án ghép một bản mô tả công việc do AI dựng với các nguồn hồ sơ
+              ứng viên bạn muốn thu thập. Bấm bên dưới để bắt đầu.
             </p>
             <button
               onClick={() => navigate('/projects/new')}
               className="mt-6 flex h-14 w-14 items-center justify-center rounded-full bg-indigo-600 text-white shadow-lg shadow-indigo-200 transition hover:bg-indigo-700"
-              title="Create your first project"
+              title="Tạo dự án đầu tiên"
+              aria-label="Tạo dự án đầu tiên"
             >
               <Plus size={28} />
             </button>
@@ -78,14 +79,14 @@ export default function Dashboard() {
                     </div>
                   </div>
                   <p className="mt-3 line-clamp-3 flex-1 text-sm leading-relaxed text-slate-500">
-                    {p.jdInput || 'No description provided.'}
+                    {p.jdInput || 'Chưa có mô tả.'}
                   </p>
                   <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3 text-xs text-slate-500">
                     <span className="inline-flex items-center gap-1.5">
-                      <Users size={14} /> {p.candidateCount ?? 0} candidates
+                      <Users size={14} /> {p.candidateCount ?? 0} ứng viên
                     </span>
                     <span className="inline-flex items-center gap-1 font-medium text-indigo-600 group-hover:gap-1.5">
-                      Open <ArrowRight size={14} />
+                      Mở <ArrowRight size={14} />
                     </span>
                   </div>
                 </Card>

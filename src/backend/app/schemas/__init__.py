@@ -4,6 +4,7 @@ from .user import (
     UserResponse,
     UserLogin,
     VerifyEmail,
+    ResendCode,
     UserRole,
     UserCreateByAdmin,
     UserUpdateByAdmin,

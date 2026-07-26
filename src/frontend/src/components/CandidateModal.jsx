@@ -289,12 +289,12 @@ export default function CandidateModal({
                 </h2>
                 {candidate.overridden && (
                   <Badge variant="new" upper={false}>
-                    Overridden
+                    Đã ghi đè
                   </Badge>
                 )}
                 {candidate.shortlisted && (
                   <Badge variant="completed" upper={false}>
-                    Shortlisted
+                    Đã rút gọn
                   </Badge>
                 )}
               </div>
@@ -308,17 +308,17 @@ export default function CandidateModal({
             {editing ? (
               <>
                 <SecondaryButton className="px-3 py-2" onClick={cancelEdit}>
-                  Cancel
+                  Huỷ
                 </SecondaryButton>
                 <PrimaryButton className="px-3 py-2" onClick={saveOverride}>
-                  <Save size={15} /> Save
+                  <Save size={15} /> Lưu
                 </PrimaryButton>
               </>
             ) : (
               <button
                 onClick={startEdit}
                 className="rounded-lg border border-slate-200 p-2 text-slate-500 transition hover:bg-slate-50"
-                title="Override AI evaluation"
+                title="Ghi đè đánh giá AI"
               >
                 <Pencil size={16} />
               </button>
@@ -326,7 +326,7 @@ export default function CandidateModal({
             <button
               onClick={onClose}
               className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
-              title="Close"
+              title="Đóng" aria-label="Đóng"
             >
               <X size={18} />
             </button>
@@ -341,7 +341,7 @@ export default function CandidateModal({
             <div className="flex items-center gap-6">
               <div>
                 <p className="text-xs uppercase tracking-wide text-slate-400">
-                  Suitability Score
+                  Điểm phù hợp
                 </p>
                 {editing ? (
                   <div className="mt-1 flex items-center gap-2">
@@ -371,7 +371,7 @@ export default function CandidateModal({
               </div>
               <div>
                 <p className="text-xs uppercase tracking-wide text-slate-400">
-                  Match
+                  Phù hợp
                 </p>
                 {editing ? (
                   <div className="mt-1 flex items-center gap-1">
@@ -403,7 +403,7 @@ export default function CandidateModal({
                     onClose()
                   }}
                 >
-                  <Trophy size={15} /> Leaderboard
+                  <Trophy size={15} /> Bảng xếp hạng
                 </SecondaryButton>
                 <SecondaryButton
                   className="px-3 py-2"
@@ -412,7 +412,7 @@ export default function CandidateModal({
                     onClose()
                   }}
                 >
-                  <GitCompare size={15} /> Compare
+                  <GitCompare size={15} /> So sánh
                 </SecondaryButton>
                 <PrimaryButton
                   className="px-3 py-2"
@@ -435,7 +435,7 @@ export default function CandidateModal({
           {editing && (
             <div className="border-b border-slate-100 bg-indigo-50/40 px-6 py-3">
               <p className="text-sm font-semibold text-indigo-800">
-                Editing AI evaluation
+                Đang sửa đánh giá AI
               </p>
               <p className="mt-0.5 text-xs text-indigo-700/80">
                 Adjust any field below. On save the profile is flagged as
@@ -477,11 +477,11 @@ export default function CandidateModal({
 
               {/* Extracted profile */}
               <h3 className="text-xs font-bold uppercase tracking-wide text-slate-500">
-                Extracted Profile
+                Hồ sơ trích xuất
               </h3>
               <div className="mt-3 grid grid-cols-2 gap-3">
                 <div className="rounded-lg border border-slate-200 p-3">
-                  <p className="text-xs text-slate-400">Total Experience</p>
+                  <p className="text-xs text-slate-400">Tổng kinh nghiệm</p>
                   {editing ? (
                     <input
                       value={draft.totalExperience}
@@ -497,7 +497,7 @@ export default function CandidateModal({
                   )}
                 </div>
                 <div className="rounded-lg border border-slate-200 p-3">
-                  <p className="text-xs text-slate-400">Highest Education</p>
+                  <p className="text-xs text-slate-400">Trình độ cao nhất</p>
                   {editing ? (
                     <input
                       value={draft.highestEducation}
@@ -515,7 +515,7 @@ export default function CandidateModal({
               </div>
 
               {/* Verified skills */}
-              <p className="mt-4 text-xs text-slate-400">Verified Skills</p>
+              <p className="mt-4 text-xs text-slate-400">Kỹ năng đã xác minh</p>
               {editing ? (
                 <div className="mt-2 space-y-2">
                   {draft.verifiedSkills.map((s, i) => (
@@ -528,7 +528,7 @@ export default function CandidateModal({
                       <button
                         onClick={() => removeSkill(i)}
                         className="rounded-lg p-2 text-slate-400 hover:bg-red-50 hover:text-red-500"
-                        title="Remove skill"
+                        title="Xoá kỹ năng"
                       >
                         <X size={15} />
                       </button>
@@ -538,7 +538,7 @@ export default function CandidateModal({
                     onClick={addSkill}
                     className="inline-flex items-center gap-1.5 text-xs font-medium text-indigo-600 hover:text-indigo-700"
                   >
-                    <Plus size={14} /> Add skill
+                    <Plus size={14} /> Thêm kỹ năng
                   </button>
                 </div>
               ) : (
@@ -554,14 +554,14 @@ export default function CandidateModal({
               {/* AI deductions */}
               <div className="mt-6 flex items-center justify-between">
                 <h3 className="text-xs font-bold uppercase tracking-wide text-slate-500">
-                  AI Deductions &amp; Evidence
+                  Điểm trừ &amp; dẫn chứng của AI
                 </h3>
                 {editing && (
                   <button
                     onClick={addDeduction}
                     className="inline-flex items-center gap-1.5 text-xs font-medium text-indigo-600 hover:text-indigo-700"
                   >
-                    <Plus size={14} /> Add
+                    <Plus size={14} /> Thêm
                   </button>
                 )}
               </div>
@@ -578,13 +578,13 @@ export default function CandidateModal({
                             onChange={(e) =>
                               setDeduction(i, 'title', e.target.value)
                             }
-                            placeholder="Deduction title"
+                            placeholder="Tiêu đề điểm trừ"
                             className={`${inputCls} font-semibold`}
                           />
                           <button
                             onClick={() => removeDeduction(i)}
                             className="rounded-lg p-2 text-slate-400 hover:bg-red-50 hover:text-red-500"
-                            title="Remove deduction"
+                            title="Xoá điểm trừ"
                           >
                             <Trash2 size={15} />
                           </button>
@@ -626,14 +626,14 @@ export default function CandidateModal({
               {/* Flags */}
               <div className="mt-6 flex items-center justify-between">
                 <h3 className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-amber-600">
-                  <ShieldAlert size={14} /> Missing / Flagged
+                  <ShieldAlert size={14} /> Thiếu / Cần lưu ý
                 </h3>
                 {editing && (
                   <button
                     onClick={addFlag}
                     className="inline-flex items-center gap-1.5 text-xs font-medium text-amber-600 hover:text-amber-700"
                   >
-                    <Plus size={14} /> Add
+                    <Plus size={14} /> Thêm
                   </button>
                 )}
               </div>
@@ -648,13 +648,13 @@ export default function CandidateModal({
                           <input
                             value={f.title}
                             onChange={(e) => setFlag(i, 'title', e.target.value)}
-                            placeholder="Flag title"
+                            placeholder="Tiêu đề cảnh báo"
                             className={`${inputCls} border-amber-200 font-semibold`}
                           />
                           <button
                             onClick={() => removeFlag(i)}
                             className="rounded-lg p-2 text-amber-500 hover:bg-amber-100"
-                            title="Remove flag"
+                            title="Xoá cảnh báo"
                           >
                             <Trash2 size={15} />
                           </button>
@@ -692,7 +692,7 @@ export default function CandidateModal({
                       ))
                     : (
                         <p className="text-xs text-slate-400">
-                          No flags raised.
+                          Không có cảnh báo nào.
                         </p>
                       )}
               </div>
@@ -717,11 +717,11 @@ export default function CandidateModal({
 
               {/* Edit history audit trail */}
               <h3 className="mt-6 flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-slate-500">
-                <History size={14} /> Edit History
+                <History size={14} /> Lịch sử chỉnh sửa
               </h3>
               {candidate.editHistory.length === 0 ? (
                 <p className="mt-2 text-xs text-slate-400">
-                  No manual overrides yet.
+                  Chưa có chỉnh sửa thủ công nào.
                 </p>
               ) : (
                 <div className="mt-3 space-y-2">

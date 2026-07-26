@@ -6,8 +6,6 @@ import {
   ArrowLeft,
   Users,
   UploadCloud,
-  Link2,
-  Mail,
   Plus,
   X,
   RefreshCw,
@@ -31,7 +29,9 @@ import { listShortlists } from '../api/shortlists.js'
 import CandidateDetailModal from '../components/CandidateDetailModal.jsx'
 import { formatName } from '../utils/formatName.js'
 
-const METHOD_ICON = { upload: UploadCloud, link: Link2, email: Mail }
+// Chỉ còn một cách nạp hồ sơ (tải file .zip). Giữ map để các project cũ trong
+// state vẫn render được icon, nhưng mọi method lạ đều rơi về UploadCloud.
+const METHOD_ICON = { upload: UploadCloud }
 
 // Trạng thái xử lý CV thật (khớp models.Candidate.status ở backend).
 const STATUS_META = {
@@ -40,11 +40,7 @@ const STATUS_META = {
   FAILED: { icon: XCircle, cls: 'text-red-500', variant: 'error', label: 'Lỗi' },
 }
 
-const INGEST_TABS = [
-  { key: 'upload', label: 'Direct Upload', icon: UploadCloud },
-  { key: 'link', label: 'Link Sync', icon: Link2 },
-  { key: 'email', label: 'Email Listener', icon: Mail },
-]
+const UPLOAD_LABEL = 'Tải lên trực tiếp'
 
 // Minimal markdown renderer for the generated JD (headings, bullets, tables).
 // Render inline Markdown **bold** thành <strong>, giữ nguyên phần còn lại.
@@ -368,7 +364,7 @@ export default function ProjectDetail() {
       key: 'candidates',
       icon: Users,
       cls: 'bg-indigo-50 text-indigo-600',
-      label: 'Candidates',
+      label: 'Ứng viên',
       value: candidateCount == null ? '…' : String(candidateCount),
       footnote: 'Ranked for this role',
     },
@@ -376,17 +372,17 @@ export default function ProjectDetail() {
       key: 'shortlisted',
       icon: CheckCircle2,
       cls: 'bg-emerald-50 text-emerald-600',
-      label: 'Shortlisted',
+      label: 'Đã rút gọn',
       value: shortlistedCount == null ? '…' : String(shortlistedCount),
       footnote: 'Proceeded to next step',
     },
     {
       key: 'sources',
-      icon: Link2,
+      icon: UploadCloud,
       cls: 'bg-violet-50 text-violet-600',
-      label: 'Ingestion Sources',
+      label: 'Lượt tải lên',
       value: String(project.sources.length),
-      footnote: `${totalIngested} CVs ingested`,
+      footnote: `Đã nạp ${totalIngested} CV`,
     },
   ]
 
@@ -400,7 +396,7 @@ export default function ProjectDetail() {
             <button
               onClick={() => navigate('/')}
               className="rounded-md p-1.5 text-slate-500 hover:bg-slate-100"
-              title="Back to dashboard"
+              title="Quay lại bảng điều khiển"
             >
               <ArrowLeft size={18} />
             </button>
@@ -409,7 +405,7 @@ export default function ProjectDetail() {
                 {project.title}
               </h1>
               <p className="mt-1 text-sm text-slate-500">
-                Project overview & generated job description.
+                Tổng quan dự án & bản mô tả công việc do AI tạo.
               </p>
             </div>
           </div>
@@ -418,7 +414,7 @@ export default function ProjectDetail() {
               navigate('/shortlisting', { state: { projectId: project.id } })
             }
           >
-            <Users size={16} /> View Shortlist
+            <Users size={16} /> Xem danh sách rút gọn
           </PrimaryButton>
         </div>
 
@@ -444,7 +440,7 @@ export default function ProjectDetail() {
               <div className="flex items-center gap-2">
                 <Bot size={20} className="text-indigo-600" />
                 <h2 className="text-base font-semibold text-slate-900">
-                  Natural Language Job Description
+                  Mô tả công việc bằng ngôn ngữ tự nhiên
                 </h2>
                 <Badge variant="ai">AI Generated</Badge>
               </div>
@@ -464,17 +460,17 @@ export default function ProjectDetail() {
             <Card className="p-6">
               <div className="flex items-center justify-between">
                 <h2 className="text-base font-semibold text-slate-900">
-                  Ingestion Sources
+                  Hồ sơ đã tải lên
                 </h2>
                 <SecondaryButton
                   className="px-3 py-2"
                   onClick={() => setShowAddSource(true)}
                 >
-                  <Plus size={15} /> Add Source
+                  <Plus size={15} /> Tải thêm CV
                 </SecondaryButton>
               </div>
               <p className="mt-1 text-sm text-slate-500">
-                Every source feeding candidates into this project.
+                Mọi lượt tải đã đưa ứng viên vào dự án này.
               </p>
               <div className="mt-4 space-y-3">
                 {project.sources.map((s) => {
@@ -492,7 +488,7 @@ export default function ProjectDetail() {
                           {s.label}
                         </p>
                         <p className="truncate text-xs text-slate-400">
-                          {s.value || 'No source detail'}
+                          {s.value || 'Không có thông tin file'}
                         </p>
                       </div>
                       <Badge variant="neutral">
@@ -540,11 +536,10 @@ export default function ProjectDetail() {
   )
 }
 
-// Modal to add another ingestion source (more CVs / link / inbox) to a project.
+// Modal nạp thêm CV cho một dự án đã có (chỉ còn đường tải file .zip).
 function AddSourceModal({ projectId, onClose, onUploaded }) {
   const toast = useToast()
   const { addSource } = useProjects()
-  const [activeTab, setActiveTab] = useState('upload')
   const [value, setValue] = useState('')
   const [file, setFile] = useState(null) // File ZIP thật để upload lên backend
   const [submitting, setSubmitting] = useState(false)
@@ -561,44 +556,29 @@ function AddSourceModal({ projectId, onClose, onUploaded }) {
     setValue(f.name)
   }
 
+  // GỬI FILE ZIP THẬT lên backend -> mỗi CV được Celery chấm điểm nền.
   async function handleAdd() {
-    // Tab Upload: GỬI FILE ZIP THẬT lên backend -> mỗi CV được Celery chấm điểm nền.
-    // (Trước đây chỉ ghi 1 số CV ngẫu nhiên vào state, không upload gì cả -> lần 2
-    //  không hề có tiến độ xử lý.)
-    if (activeTab === 'upload') {
-      if (!file) {
-        toast('Chọn file .zip chứa CV trước.')
-        return
-      }
-      setSubmitting(true)
-      try {
-        const summary = await uploadCvs(projectId, file)
-        addSource(projectId, {
-          method: 'upload',
-          label: 'Direct Upload',
-          value: file.name,
-          count: summary.processing ?? 0,
-        })
-        toast(`Đã nhận ${summary.processing ?? 0} CV — đang xử lý nền.`)
-        onUploaded?.() // buộc LiveProcessing poll lại để thấy CV mới
-        onClose()
-      } catch (err) {
-        toast(err.message || 'Upload thất bại.')
-      } finally {
-        setSubmitting(false)
-      }
+    if (!file) {
+      toast('Chọn file .zip chứa CV trước.')
       return
     }
-
-    // Tab Link/Email: backend chưa có endpoint -> tạm chỉ ghi lại nguồn (chưa ingest).
-    if (!value.trim()) {
-      toast('Enter a URL / inbox first.')
-      return
+    setSubmitting(true)
+    try {
+      const summary = await uploadCvs(projectId, file)
+      addSource(projectId, {
+        method: 'upload',
+        label: UPLOAD_LABEL,
+        value: file.name,
+        count: summary.processing ?? 0,
+      })
+      toast(`Đã nhận ${summary.processing ?? 0} CV — đang xử lý nền.`)
+      onUploaded?.() // buộc LiveProcessing poll lại để thấy CV mới
+      onClose()
+    } catch (err) {
+      toast(err.message || 'Upload thất bại.')
+    } finally {
+      setSubmitting(false)
     }
-    const label = INGEST_TABS.find((t) => t.key === activeTab).label
-    addSource(projectId, { method: activeTab, label, value, count: 0 })
-    toast(`Added ${label} source.`)
-    onClose()
   }
 
   return (
@@ -609,11 +589,10 @@ function AddSourceModal({ projectId, onClose, onUploaded }) {
       />
       <div className="relative w-full max-w-lg overflow-hidden rounded-2xl bg-white shadow-2xl">
         <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
-          <h2 className="text-base font-bold text-slate-900">
-            Add Ingestion Source
-          </h2>
+          <h2 className="text-base font-bold text-slate-900">Tải thêm CV</h2>
           <button
             onClick={onClose}
+            aria-label="Đóng"
             className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
           >
             <X size={18} />
@@ -621,99 +600,44 @@ function AddSourceModal({ projectId, onClose, onUploaded }) {
         </div>
 
         <div className="px-6 py-5">
-          {/* Tabs */}
-          <div className="flex border-b border-slate-200">
-            {INGEST_TABS.map(({ key, label, icon: Icon }) => (
-              <button
-                key={key}
-                onClick={() => {
-                  setActiveTab(key)
-                  setValue('')
-                }}
-                className={`-mb-px flex items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-medium transition-colors ${
-                  activeTab === key
-                    ? 'border-indigo-600 text-indigo-600'
-                    : 'border-transparent text-slate-500 hover:text-slate-700'
-                }`}
-              >
-                <Icon size={16} /> {label}
-              </button>
-            ))}
-          </div>
-
-          <div className="mt-5">
-            {activeTab === 'upload' && (
-              <div
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={(e) => {
-                  e.preventDefault()
-                  if (e.dataTransfer.files?.length)
-                    pickFile(e.dataTransfer.files[0])
-                }}
-                className="flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-slate-200 bg-slate-50/50 px-6 py-8 text-center"
-              >
-                <div className="flex h-12 w-12 items-center justify-center rounded-full bg-indigo-50 text-indigo-600">
-                  <UploadCloud size={22} />
-                </div>
-                <p className="mt-3 text-sm font-semibold text-slate-700">
-                  {value || 'Drop ZIP file of CVs here'}
-                </p>
-                <p className="mt-1 text-xs text-slate-400">
-                  File .zip chứa nhiều CV PDF
-                </p>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".zip"
-                  className="hidden"
-                  onChange={(e) => {
-                    if (e.target.files?.length) pickFile(e.target.files[0])
-                  }}
-                />
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  className="mt-4 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
-                >
-                  Browse Files
-                </button>
-              </div>
-            )}
-
-            {activeTab === 'link' && (
-              <div className="rounded-xl border border-slate-200 bg-slate-50/50 p-5">
-                <label className="block text-sm font-medium text-slate-700">
-                  Google Forms / sheet URL
-                </label>
-                <input
-                  type="url"
-                  value={value}
-                  onChange={(e) => setValue(e.target.value)}
-                  placeholder="https://forms.gle/…"
-                  className="mt-2 w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2.5 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
-                />
-              </div>
-            )}
-
-            {activeTab === 'email' && (
-              <div className="rounded-xl border border-slate-200 bg-slate-50/50 p-5">
-                <label className="block text-sm font-medium text-slate-700">
-                  Shared inbox to listen on
-                </label>
-                <input
-                  type="email"
-                  value={value}
-                  onChange={(e) => setValue(e.target.value)}
-                  placeholder="careers@company.com"
-                  className="mt-2 w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2.5 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
-                />
-              </div>
-            )}
+          <div
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => {
+              e.preventDefault()
+              if (e.dataTransfer.files?.length) pickFile(e.dataTransfer.files[0])
+            }}
+            className="flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-slate-200 bg-slate-50/50 px-6 py-8 text-center"
+          >
+            <div className="flex h-12 w-12 items-center justify-center rounded-full bg-indigo-50 text-indigo-600">
+              <UploadCloud size={22} />
+            </div>
+            <p className="mt-3 text-sm font-semibold text-slate-700">
+              {value || 'Kéo thả tệp .zip chứa CV vào đây'}
+            </p>
+            <p className="mt-1 text-xs text-slate-400">
+              File .zip chứa nhiều CV PDF
+            </p>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".zip"
+              className="hidden"
+              onChange={(e) => {
+                if (e.target.files?.length) pickFile(e.target.files[0])
+              }}
+            />
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="mt-4 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+            >
+              Chọn tệp
+            </button>
           </div>
         </div>
 
         <div className="flex justify-end gap-2 border-t border-slate-200 px-6 py-4">
           <SecondaryButton onClick={onClose} disabled={submitting}>
-            Cancel
+            Huỷ
           </SecondaryButton>
           <PrimaryButton onClick={handleAdd} disabled={submitting}>
             {submitting ? (
@@ -722,7 +646,7 @@ function AddSourceModal({ projectId, onClose, onUploaded }) {
               </>
             ) : (
               <>
-                <Plus size={16} /> Add Source
+                <Plus size={16} /> Tải lên
               </>
             )}
           </PrimaryButton>

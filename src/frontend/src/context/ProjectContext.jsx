@@ -30,7 +30,11 @@ function mapJdToProject(jd) {
 // logic. Frontend-only: state lives here, no backend calls. Replace the bodies
 // with fetch() when the API exists.
 export function ProjectProvider({ children }) {
-  const { isAuthenticated, loading: authLoading } = useAuth()
+  const { user, isAuthenticated, loading: authLoading } = useAuth()
+  // GET /jds là endpoint của HR; backend trả 403 cho admin. Provider này bọc toàn
+  // bộ App nên nếu chỉ xét "đã đăng nhập", MỌI phiên admin đều bắn một request
+  // chắc chắn 403 rồi nuốt lỗi — nhiễu console và che mất lỗi thật về sau.
+  const canLoadProjects = isAuthenticated && user?.role === 'hr_staff'
   const [projects, setProjects] = useState([])
   // true trong lúc xác thực token / nạp danh sách JD từ backend (để trang chi tiết
   // không vội redirect). Bắt đầu = true: khi F5 một deep-link, `isAuthenticated`
@@ -61,7 +65,7 @@ export function ProjectProvider({ children }) {
       setLoading(true)
       return
     }
-    if (!isAuthenticated) {
+    if (!canLoadProjects) {
       setProjects([])
       setLoading(false)
       return
@@ -81,7 +85,7 @@ export function ProjectProvider({ children }) {
     return () => {
       cancelled = true
     }
-  }, [isAuthenticated, authLoading])
+  }, [canLoadProjects, authLoading])
 
   // Create a project from the natural-language brief + chosen ingestion source.
   // REAL backend calls: (1) POST /jds -> Gemini structures the JD, (2) if a ZIP
@@ -104,7 +108,7 @@ export function ProjectProvider({ children }) {
     const firstSource = {
       id: `src-${Date.now()}`,
       method: ingestion?.method || 'upload',
-      label: ingestion?.label || 'Direct Upload',
+      label: ingestion?.label || 'Tải lên trực tiếp',
       value: file?.name || ingestion?.source || '',
       // Số CV đã stage (đang được worker chấm điểm nền).
       count: uploadSummary?.processing ?? ingestion?.count ?? 0,
@@ -126,8 +130,8 @@ export function ProjectProvider({ children }) {
     return jd.id
   }, [])
 
-  // Add another ingestion source (more CVs / another link / another inbox) to an
-  // existing project, so the detail view can list every source that fed it.
+  // Ghi nhận thêm một lượt tải CV vào dự án đã có, để trang chi tiết liệt kê được
+  // mọi lần nạp hồ sơ.
   const addSource = useCallback((projectId, source) => {
     setProjects((list) =>
       list.map((p) =>
@@ -140,7 +144,7 @@ export function ProjectProvider({ children }) {
                 {
                   id: `src-${Date.now()}`,
                   method: source.method || 'upload',
-                  label: source.label || 'Direct Upload',
+                  label: source.label || 'Tải lên trực tiếp',
                   value: source.value || '',
                   count: source.count ?? 0,
                   addedAt: new Date().toISOString(),

@@ -34,6 +34,11 @@ class UserLogin(BaseModel):
     email: EmailStr
     password: str
 
+class ResendCode(BaseModel):
+    """Xin cấp lại mã OTP khi mã cũ đã hết hạn (15 phút) hoặc email chưa tới."""
+    email: EmailStr
+
+
 class VerifyEmail(BaseModel):
     """Xác minh bằng mã OTP 6 chữ số gửi qua email (không còn là JWT).
     Vì mã chỉ có 6 chữ số nên phải kèm email để biết đối chiếu với tài khoản nào."""

@@ -241,21 +241,21 @@ export default function Shortlisting() {
         <Topbar />
         <main className="flex-1 overflow-y-auto px-8 py-7">
           <h1 className="text-2xl font-bold text-slate-900">
-            Candidate Shortlisting
+            Rút gọn danh sách ứng viên
           </h1>
           <div className="mt-10 flex flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-200 bg-white/60 px-6 py-20 text-center">
             <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600">
               <FolderPlus size={30} />
             </div>
             <h2 className="mt-5 text-lg font-semibold text-slate-900">
-              No projects yet
+              Chưa có dự án nào
             </h2>
             <p className="mt-1.5 max-w-md text-sm text-slate-500">
-              Create a project (job description) first — then candidates can be
+              Tạo dự án (job description) first — then candidates can be
               ranked and shortlisted against it.
             </p>
             <PrimaryButton className="mt-6" onClick={() => navigate('/projects/new')}>
-              <Plus size={16} /> Create a project
+              <Plus size={16} /> Tạo dự án
             </PrimaryButton>
           </div>
         </main>
@@ -273,10 +273,10 @@ export default function Shortlisting() {
         <main className="flex-1 overflow-y-auto px-8 py-7">
           <div>
             <h1 className="text-2xl font-bold text-slate-900">
-              Candidate Shortlisting
+              Rút gọn danh sách ứng viên
             </h1>
             <p className="mt-1 text-sm text-slate-500">
-              Select a project to shortlist candidates against.
+              Chọn một dự án để rút gọn danh sách ứng viên.
             </p>
           </div>
           <div className="mt-6 grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
@@ -298,11 +298,11 @@ export default function Shortlisting() {
                     </div>
                   </div>
                   <p className="mt-3 line-clamp-2 flex-1 text-sm leading-relaxed text-slate-500">
-                    {p.jdInput || 'No description provided.'}
+                    {p.jdInput || 'Chưa có mô tả.'}
                   </p>
                   <div className="mt-4 flex items-center justify-end border-t border-slate-100 pt-3 text-xs">
                     <span className="inline-flex items-center gap-1 font-medium text-indigo-600 group-hover:gap-1.5">
-                      Shortlist <ArrowRight size={14} />
+                      Rút gọn <ArrowRight size={14} />
                     </span>
                   </div>
                 </Card>
@@ -365,14 +365,14 @@ export default function Shortlisting() {
                   setCompareMode(false)
                 }}
                 className="rounded-md p-1.5 text-slate-500 hover:bg-slate-100"
-                title="Change project"
+                title="Đổi dự án"
               >
                 <ArrowLeft size={18} />
               </button>
             )}
             <div>
               <h1 className="text-2xl font-bold text-slate-900">
-                Candidate Shortlisting
+                Rút gọn danh sách ứng viên
               </h1>
               <p className="mt-1 text-sm text-slate-500">
                 AI-ranked leaderboard for{' '}
@@ -413,7 +413,7 @@ export default function Shortlisting() {
         <Card className="mt-6 flex flex-wrap items-center gap-3 p-3">
           <div className="flex items-center gap-2">
             <ListChecks size={18} className="text-indigo-600" />
-            <span className="text-sm font-semibold text-slate-700">Shortlist</span>
+            <span className="text-sm font-semibold text-slate-700">Danh sách rút gọn</span>
           </div>
 
           {shortlists && shortlists.length > 0 ? (
@@ -465,7 +465,7 @@ export default function Shortlisting() {
             </div>
           ) : (
             <SecondaryButton className="px-3 py-2" onClick={() => setCreating(true)}>
-              <Plus size={15} /> New shortlist
+              <Plus size={15} /> Danh sách rút gọn mới
             </SecondaryButton>
           )}
 
@@ -474,7 +474,7 @@ export default function Shortlisting() {
               className="border-red-200 px-3 py-2 text-red-600 hover:bg-red-50"
               onClick={handleDeleteShortlist}
             >
-              <Trash2 size={15} /> Delete
+              <Trash2 size={15} /> Xoá
             </SecondaryButton>
           )}
         </Card>
@@ -506,7 +506,7 @@ export default function Shortlisting() {
               setSelected([])
             }}
           >
-            <GitCompare size={15} /> Compare
+            <GitCompare size={15} /> So sánh
           </SecondaryButton>
         </Card>
 
@@ -521,7 +521,7 @@ export default function Shortlisting() {
               disabled={selected.length < 2}
               onClick={() => setShowCompare(true)}
             >
-              <GitCompare size={15} /> Compare {selected.length || ''}
+              <GitCompare size={15} /> So sánh {selected.length || ''}
             </PrimaryButton>
           </div>
         )}
@@ -530,7 +530,7 @@ export default function Shortlisting() {
         <Card className="mt-5 overflow-hidden">
           <div className="flex items-center gap-2 border-b border-slate-200 px-6 py-3">
             <Trophy size={16} className="text-amber-500" />
-            <h2 className="text-sm font-semibold text-slate-800">Leaderboard</h2>
+            <h2 className="text-sm font-semibold text-slate-800">Bảng xếp hạng</h2>
           </div>
 
           {/* Trạng thái tải */}
@@ -555,12 +555,12 @@ export default function Shortlisting() {
                 <table className="w-full min-w-[760px] text-left">
                   <thead>
                     <tr className="border-b border-slate-200 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                      {compareMode && <th className="px-6 py-3">Pick</th>}
-                      <th className="px-6 py-3">Rank</th>
-                      <th className="px-6 py-3">Candidate</th>
-                      <th className="px-6 py-3 text-center">Suitability</th>
-                      <th className="px-6 py-3">Key Skills</th>
-                      <th className="px-6 py-3 text-right">Actions</th>
+                      {compareMode && <th className="px-6 py-3">Chọn</th>}
+                      <th className="px-6 py-3">Hạng</th>
+                      <th className="px-6 py-3">Ứng viên</th>
+                      <th className="px-6 py-3 text-center">Độ phù hợp</th>
+                      <th className="px-6 py-3">Kỹ năng chính</th>
+                      <th className="px-6 py-3 text-right">Thao tác</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -593,7 +593,7 @@ export default function Shortlisting() {
                                   </span>
                                   {c.is_overridden && (
                                     <Badge variant="ai" upper={false}>
-                                      Overridden
+                                      Đã ghi đè
                                     </Badge>
                                   )}
                                 </div>
@@ -704,7 +704,7 @@ export default function Shortlisting() {
 
             {!activeSlId && (
               <p className="px-6 py-10 text-sm text-slate-400">
-                Chưa có shortlist. Bấm “New shortlist” ở trên để tạo, rồi thêm ứng
+                Chưa có shortlist. Bấm “Danh sách rút gọn mới” ở trên để tạo, rồi thêm ứng
                 viên từ tab Leaderboard.
               </p>
             )}
@@ -724,11 +724,11 @@ export default function Shortlisting() {
                   <table className="w-full min-w-[760px] text-left">
                     <thead>
                       <tr className="border-b border-slate-200 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                        <th className="px-6 py-3">Rank</th>
-                        <th className="px-6 py-3">Candidate</th>
-                        <th className="px-6 py-3 text-center">Suitability</th>
-                        <th className="px-6 py-3">Decision</th>
-                        <th className="px-6 py-3 text-right">Actions</th>
+                        <th className="px-6 py-3">Hạng</th>
+                        <th className="px-6 py-3">Ứng viên</th>
+                        <th className="px-6 py-3 text-center">Độ phù hợp</th>
+                        <th className="px-6 py-3">Quyết định</th>
+                        <th className="px-6 py-3 text-right">Thao tác</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">

@@ -22,6 +22,16 @@ export function verifyEmail({ email, token }) {
   })
 }
 
+// POST /auth/resend-code -> { message }
+// Backend schema (ResendCode): { email }. Trả về cùng một message dù email có tồn
+// tại hay không, nên đừng suy ra trạng thái tài khoản từ phản hồi.
+export function resendCode(email) {
+  return apiFetch('/auth/resend-code', {
+    method: 'POST',
+    body: { email },
+  })
+}
+
 // POST /auth/login -> { access_token, token_type, user: { id, name, email } }
 // Backend schema (UserLogin): { email, password }
 export function login({ email, password }) {

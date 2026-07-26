@@ -43,7 +43,7 @@ function shortDate(iso) {
 
 // AI Copilot: cột phải. HR chat -> agent gọi tool qua MCP -> điều hướng/làm mới phần
 // giao diện bên trái qua `ui_actions`. Lịch sử hội thoại lưu ở backend (chat_sessions).
-export default function CopilotChat() {
+export default function CopilotChat({ open = false, onClose }) {
   const navigate = useNavigate()
   const { refreshProjects } = useProjects()
 
@@ -155,7 +155,17 @@ export default function CopilotChat() {
   }
 
   return (
-    <aside className="relative flex h-screen w-1/5 min-w-[280px] max-w-sm flex-shrink-0 flex-col border-l border-slate-200 bg-white">
+    <aside
+      className={[
+        'relative flex-col border-l border-slate-200 bg-white',
+        // Mobile: lớp phủ toàn màn hình, chỉ hiện khi bật từ thanh công cụ.
+        // min-w-[280px] cũ khiến panel chiếm gần hết bề ngang điện thoại và
+        // đẩy nội dung trang ra ngoài khung nhìn.
+        open ? 'fixed inset-0 z-40 flex' : 'hidden',
+        // lg trở lên: cột cố định ~1/5 bên phải như thiết kế gốc.
+        'lg:relative lg:flex lg:h-screen lg:w-1/5 lg:min-w-[280px] lg:max-w-sm lg:flex-shrink-0',
+      ].join(' ')}
+    >
       {/* Header */}
       <div className="flex items-center gap-2.5 border-b border-slate-100 px-4 py-4">
         <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-violet-500 to-indigo-600 text-white">
@@ -168,6 +178,7 @@ export default function CopilotChat() {
         <button
           onClick={newChat}
           title="Cuộc trò chuyện mới"
+          aria-label="Cuộc trò chuyện mới"
           className="rounded-md p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
         >
           <SquarePen size={17} />
@@ -175,11 +186,22 @@ export default function CopilotChat() {
         <button
           onClick={() => setHistoryOpen((v) => !v)}
           title="Lịch sử trò chuyện"
+          aria-label="Lịch sử trò chuyện"
+          aria-expanded={historyOpen}
           className={`rounded-md p-1.5 transition hover:bg-slate-100 ${
             historyOpen ? 'bg-slate-100 text-indigo-600' : 'text-slate-400 hover:text-slate-700'
           }`}
         >
           <History size={17} />
+        </button>
+        {/* Chỉ mobile: panel là lớp phủ nên phải có lối thoát. */}
+        <button
+          onClick={onClose}
+          title="Đóng AI Copilot"
+          aria-label="Đóng AI Copilot"
+          className="rounded-md p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 lg:hidden"
+        >
+          <X size={17} />
         </button>
       </div>
 
@@ -304,11 +326,14 @@ export default function CopilotChat() {
               }
             }}
             placeholder="Nhập yêu cầu…"
+            aria-label="Nội dung yêu cầu gửi cho AI Copilot"
             className="flex-1 resize-none bg-transparent text-sm leading-5 text-slate-800 outline-none placeholder:text-slate-400"
           />
           <button
             onClick={() => send()}
             disabled={loading || !input.trim()}
+            title="Gửi"
+            aria-label="Gửi yêu cầu"
             className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-indigo-600 text-white transition hover:bg-indigo-700 disabled:opacity-40"
           >
             <Send size={15} />
