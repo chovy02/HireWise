@@ -92,7 +92,6 @@ class Candidate(Base):
     evaluation = relationship("Evaluation", back_populates="cv", uselist=False)
     shortlist_items = relationship("ShortlistItem", back_populates="cv")
     interview = relationship("Interview", back_populates="cv", uselist=False)
-    projects = relationship("CandidateProject", back_populates="candidate", cascade="all, delete-orphan")
 
 class CandidateSkill(Base):
     __tablename__ = "candidate_skills"
@@ -104,23 +103,6 @@ class CandidateSkill(Base):
     evidence: Mapped[str] = mapped_column(Text, nullable=True)
 
     cv = relationship("Candidate", back_populates="skills")
-
-class CandidateProject(Base):
-    __tablename__ = "candidate_projects"
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    candidate_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("candidates.id"), nullable=False)
-    name: Mapped[str] = mapped_column(String(255), nullable=False)
-    description: Mapped[str] = mapped_column(Text, nullable=True)
-    github_url: Mapped[str] = mapped_column(String(500), nullable=True)
-    tech_stack: Mapped[dict] = mapped_column(JSONB, nullable=True)
-    # Ví dụ: ["Python", "FastAPI", "PostgreSQL"]
-    source: Mapped[str] = mapped_column(String(50), default="from_cv")
-    # from_cv: trích từ CV | from_github: fetch thêm từ GitHub API
-    created_at: Mapped[datetime] = mapped_column( DateTime, default=lambda: datetime.now(timezone.utc))
-
-    candidate = relationship("Candidate", back_populates="projects")
-    evaluation = relationship("ProjectEvaluation", back_populates="project", cascade="all, delete-orphan")
 
 
 class Evaluation(Base):
@@ -141,40 +123,6 @@ class Evaluation(Base):
     jd = relationship("JobDescription", back_populates="evaluations")
     overrides = relationship("EvaluationOverride", back_populates="evaluation")
     agent_logs = relationship("AgentToolLog", back_populates="evaluation") # Nối log tool vào evaluation
-    project_evaluations = relationship("ProjectEvaluation", back_populates="evaluation_result", cascade="all, delete-orphan")
-
-class ProjectEvaluation(Base):
-    __tablename__ = "project_evaluations"
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("candidate_projects.id"), nullable=False)
-    evaluation_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("evaluations.id"), nullable=True)
-    # Điểm từng tiêu chí (0-100)
-    relevance_score: Mapped[float] = mapped_column(Float, nullable=True)
-    # Mức độ liên quan tới JD
-    complexity_score: Mapped[float] = mapped_column(Float, nullable=True)
-    # Độ phức tạp kỹ thuật
-    overall_score: Mapped[float] = mapped_column(Float, nullable=True)
-    # Điểm tổng project này
-    analysis: Mapped[str] = mapped_column(Text, nullable=True)
-    # Claude giải thích tại sao chấm điểm vậy
-    github_stats: Mapped[dict] = mapped_column(JSONB, nullable=True)
-    # Dữ liệu thô từ GitHub API:
-    # {
-    #   "stars": 12,
-    #   "forks": 3,
-    #   "languages": {"Python": 80, "HTML": 20},
-    #   "last_commit": "2024-01-15",
-    #   "total_commits": 47,
-    #   "has_readme": true,
-    #   "repo_description": "..."
-    # }
-    evidence: Mapped[dict] = mapped_column(JSONB, nullable=True)
-    # Bằng chứng cụ thể: đoạn code, commit message...
-    evaluated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
-
-    project = relationship("CandidateProject", back_populates="evaluation")
-    evaluation_result = relationship("Evaluation", back_populates="project_evaluations")
 
 
 class EvaluationOverride(Base):
@@ -286,19 +234,6 @@ class AILog(Base):
     error_message = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
 
-class SystemSetting(Base):
-    __tablename__ = "system_settings"
-
-    # Dùng key làm primary key (vd: 'maintenance_mode', 'cv_max_size')
-    key: Mapped[str] = mapped_column(String(100), primary_key=True)
-    # Lưu dưới dạng JSONB để linh hoạt lưu boolean, số, hoặc text (VD: {"active": true})
-    value: Mapped[dict] = mapped_column(JSONB, nullable=False)
-    description: Mapped[str] = mapped_column(Text, nullable=True)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, 
-        default=lambda: datetime.now(timezone.utc), 
-        onupdate=lambda: datetime.now(timezone.utc)
-    )
 
 class AuditLog(Base):
     __tablename__ = "audit_logs"
