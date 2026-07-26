@@ -39,6 +39,80 @@ async def send_verification_email(email_to: EmailStr, token: str):
     await fm.send_message(message)
 
 
+def _support_address() -> str:
+    """Địa chỉ để người dùng khiếu nại — chính là hòm thư hệ thống đang gửi đi,
+    nhờ vậy họ chỉ cần bấm Reply."""
+    return os.getenv("MAIL_FROM", "") or "bộ phận quản trị"
+
+
+async def send_account_locked_email(email_to: EmailStr, name: str | None = None):
+    """Báo cho người dùng biết tài khoản vừa bị admin khóa, kèm đường khiếu nại.
+
+    Khóa tài khoản mà không báo thì người dùng chỉ thấy đăng nhập thất bại và không
+    hiểu vì sao — email này cho họ biết chuyện gì xảy ra và cách phản hồi lại.
+    """
+    greeting = name or email_to
+
+    html_content = f"""
+    <div style="font-family: Arial, sans-serif; padding: 20px;">
+        <h2 style="color: #c0392b;">Tài khoản của bạn đã bị khóa</h2>
+        <p>Kính gửi {greeting},</p>
+        <p>
+            Tài khoản <strong>{email_to}</strong> trên hệ thống HireWise đã được quản trị viên
+            tạm khóa. Kể từ lúc này bạn sẽ không thể đăng nhập vào hệ thống.
+        </p>
+        <div style="background-color: #fdf2f2; border-left: 4px solid #e74c3c; padding: 12px 15px; border-radius: 4px;">
+            <p style="margin: 0;">
+                Nếu bạn cho rằng đây là nhầm lẫn, vui lòng <strong>phản hồi lại email này</strong>
+                để gửi khiếu nại. Quản trị viên sẽ xem xét và mở khóa nếu hợp lệ.
+            </p>
+        </div>
+        <p style="color: #7f8c8d; margin-top: 20px; font-size: 13px;">
+            Email liên hệ: {_support_address()}
+        </p>
+    </div>
+    """
+
+    message = MessageSchema(
+        subject="[HireWise] Tài khoản của bạn đã bị khóa",
+        recipients=[email_to],
+        body=html_content,
+        subtype=MessageType.html,
+    )
+
+    fm = FastMail(conf)
+    await fm.send_message(message)
+
+
+async def send_account_unlocked_email(email_to: EmailStr, name: str | None = None):
+    """Báo cho người dùng biết tài khoản đã được mở khóa và dùng lại được."""
+    greeting = name or email_to
+
+    html_content = f"""
+    <div style="font-family: Arial, sans-serif; padding: 20px;">
+        <h2 style="color: #27ae60;">Tài khoản của bạn đã được mở khóa</h2>
+        <p>Kính gửi {greeting},</p>
+        <p>
+            Tài khoản <strong>{email_to}</strong> trên hệ thống HireWise đã được quản trị viên
+            mở khóa. Bạn có thể đăng nhập và sử dụng lại bình thường.
+        </p>
+        <p style="color: #7f8c8d; margin-top: 20px; font-size: 13px;">
+            Nếu cần hỗ trợ thêm, vui lòng phản hồi email này. Email liên hệ: {_support_address()}
+        </p>
+    </div>
+    """
+
+    message = MessageSchema(
+        subject="[HireWise] Tài khoản của bạn đã được mở khóa",
+        recipients=[email_to],
+        body=html_content,
+        subtype=MessageType.html,
+    )
+
+    fm = FastMail(conf)
+    await fm.send_message(message)
+
+
 async def send_interview_email(email_to: EmailStr, name: str, when: str, location: str):
     """Soạn và gửi email MỜI PHỎNG VẤN cho ứng viên (dùng bởi AI Agent tool)."""
 

@@ -478,29 +478,31 @@ def create_notification(
     )
     return new_noti
 
-@router.put("/notifications/{noti_id}/toggle", response_model=NotificationResponse)
-def toggle_notification(
+@router.delete("/notifications/{noti_id}", status_code=204)
+def delete_notification(
     noti_id: uuid.UUID,
     db: Session = Depends(get_db),
     current_admin: models.User = Depends(get_current_user),
 ):
-    """Admin bật/tắt (ẩn/hiện) một thông báo."""
+    """Admin xóa hẳn một thông báo khỏi hệ thống.
+
+    Thay cho cơ chế ẩn/hiện cũ: thông báo đã phát thì luôn hiển thị với người dùng,
+    admin chỉ có thể gỡ bỏ hoàn toàn (vd phát nhầm) chứ không giấu đi.
+    """
     noti = db.query(models.Notification).filter(models.Notification.id == noti_id).first()
     if not noti:
         raise HTTPException(status_code=404, detail="Không tìm thấy thông báo")
 
-    was_active = noti.is_active
-    noti.is_active = not noti.is_active
+    removed = {"title": noti.title, "message": noti.message, "type": noti.type}
+    db.delete(noti)
     db.commit()
-    db.refresh(noti)
 
     write_audit_log(
-        db, user_id=current_admin.id, action="TOGGLE_NOTIFICATION",
-        entity_type="notification", entity_id=noti.id,
-        old_data={"is_active": was_active, "title": noti.title},
-        new_data={"is_active": noti.is_active, "title": noti.title},
+        db, user_id=current_admin.id, action="DELETE_NOTIFICATION",
+        entity_type="notification", entity_id=noti_id,
+        old_data=removed,
+        new_data=None,  # đã xóa -> không có trạng thái "sau"
     )
-    return noti
 
 # ==========================================
 # VII. ROUTES: TRUNG TÂM TRÍCH XUẤT (EXPORT CENTER)

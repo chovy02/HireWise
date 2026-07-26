@@ -81,10 +81,12 @@ export function createNotification(payload) {
   })
 }
 
-// PUT /admin/notifications/{id}/toggle -> NotificationResponse
-export function toggleNotification(id) {
-  return apiFetch(`/admin/notifications/${id}/toggle`, {
-    method: 'PUT',
+// DELETE /admin/notifications/{id} -> 204
+// Thông báo đã phát thì luôn hiển thị với người dùng; admin chỉ gỡ hẳn được
+// (vd phát nhầm), không có cơ chế ẩn đi.
+export function deleteNotification(id) {
+  return apiFetch(`/admin/notifications/${id}`, {
+    method: 'DELETE',
     auth: true,
   })
 }

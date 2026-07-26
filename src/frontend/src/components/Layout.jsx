@@ -8,6 +8,10 @@ import { useAuth } from '../context/AuthContext.jsx'
 // phải ~1/5. Chat bên phải điều khiển/điều hướng phần app bên trái, nhưng HR vẫn
 // thao tác trực tiếp bên trái như thường.
 //
+// Copilot CHỈ dành cho HR: mọi tool của nó đều là nghiệp vụ tuyển dụng (tạo JD, tra
+// ứng viên, mở shortlist) — những việc admin không làm (SRS 2.4). Ở trang Admin nó
+// chỉ chiếm 1/5 màn hình mà không dùng được việc gì, nên không render.
+//
 // Buộc đăng nhập: mọi trang trong shell đều yêu cầu đã đăng nhập. Chưa đăng nhập
 // -> đẩy về /login (nhớ đường đang vào để quay lại sau khi đăng nhập).
 export default function Layout() {
@@ -35,7 +39,7 @@ export default function Layout() {
           <Outlet />
         </div>
       </div>
-      <CopilotChat />
+      {user.role !== 'admin' && <CopilotChat />}
     </div>
   )
 }

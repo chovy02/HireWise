@@ -11,16 +11,32 @@ services:
       - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    # Không có healthcheck thì `depends_on` chỉ đợi container CHẠY, chứ không đợi
+    # Postgres nhận kết nối — lần `up` đầu tiên còn phải initdb cả chục giây.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
 
   api:
     build: ./src/backend
     container_name: hirewise_api
     restart: always
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    # `prestart` đợi Postgres + đồng bộ schema (create_all & alembic) TRƯỚC khi
+    # uvicorn nhận request. Thiếu bước này, máy nào có volume DB cũ sẽ crash ngay
+    # lúc startup vì thiếu cột, và frontend chỉ hiện "Backend not reachable".
+    # Chỉ service `api` chạy migration — worker/mcp dùng chung image nhưng để cả 3
+    # cùng migrate sẽ đua nhau trên một DB.
+    command: sh -c "python -m app.prestart && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
     depends_on:
-      - db
-      - redis
-      - mcp
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      mcp:
+        condition: service_started
     ports:
       - "8000:8000"
     volumes:
@@ -47,8 +63,10 @@ services:
     # Worker Celery: lấy task từ Redis và chấm điểm CV nền. Dùng chung image với api.
     command: celery -A app.core.celery_app worker --loglevel=info --concurrency=2
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
     volumes:
       - ./src/backend:/app
     env_file:
@@ -66,8 +84,10 @@ services:
     env_file:
       - .env
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
     ports:
       - "8001:8001"
     volumes:

@@ -24,11 +24,10 @@ import {
   BarChart3,
   Briefcase,
   MessagesSquare,
-  Eye,
-  EyeOff,
   ChevronRight,
   FileSpreadsheet,
   Wrench,
+  Trash2,
 } from 'lucide-react'
 import Topbar from '../components/Topbar.jsx'
 import {
@@ -58,7 +57,7 @@ import {
   getBusinessMetrics,
   getNotifications,
   createNotification,
-  toggleNotification,
+  deleteNotification,
   downloadExport,
 } from '../api/admin.js'
 
@@ -104,6 +103,8 @@ const AUDIT_ACTION_LABEL = {
   DELETE_SHORTLIST: 'Xóa shortlist',
   UPDATE_CANDIDATE_STATUS: 'Đổi trạng thái ứng viên',
   CREATE_NOTIFICATION: 'Phát thông báo',
+  DELETE_NOTIFICATION: 'Xóa thông báo',
+  // Cơ chế ẩn/hiện đã bỏ; giữ nhãn để các bản ghi kiểm toán CŨ vẫn đọc được.
   TOGGLE_NOTIFICATION: 'Bật/tắt thông báo',
 }
 const AUDIT_ACTION_VARIANT = {
@@ -114,6 +115,7 @@ const AUDIT_ACTION_VARIANT = {
   CREATE_USER: 'success',
   CREATE_JD: 'info',
   CREATE_NOTIFICATION: 'info',
+  DELETE_NOTIFICATION: 'error',
   TOGGLE_NOTIFICATION: 'neutral',
   UPDATE_CANDIDATE_STATUS: 'processing',
 }
@@ -411,7 +413,8 @@ function UserManagement() {
                   <span className="font-semibold text-slate-900">{confirmBan.email}</span>?
                 </p>
                 <p className="mt-1.5 text-sm text-slate-500">
-                  Người dùng sẽ không thể đăng nhập cho tới khi được mở khóa. Bạn có thể mở khóa lại bất cứ lúc nào.
+                  Người dùng sẽ không thể đăng nhập cho tới khi được mở khóa. Hệ thống gửi email
+                  báo cho họ biết kèm hướng dẫn khiếu nại. Bạn có thể mở khóa lại bất cứ lúc nào.
                 </p>
               </div>
             </div>
@@ -1270,6 +1273,9 @@ function BroadcastNotifications() {
   const [message, setMessage] = useState('')
   const [type, setType] = useState('info')
   const [sending, setSending] = useState(false)
+  // Thông báo đang chờ xác nhận xóa. Xóa là không hoàn tác được nên phải hỏi lại.
+  const [confirmDelete, setConfirmDelete] = useState(null)
+  const [deleting, setDeleting] = useState(false)
 
   function load() {
     setErr('')
@@ -1299,16 +1305,23 @@ function BroadcastNotifications() {
     }
   }
 
-  async function toggle(n) {
+  async function remove() {
+    if (!confirmDelete) return
+    setDeleting(true)
     try {
-      await toggleNotification(n.id)
+      await deleteNotification(confirmDelete.id)
+      toast('Đã xóa thông báo.')
+      setConfirmDelete(null)
       load()
     } catch (e) {
-      toast(e.message)
+      toast(e.message || 'Xóa thất bại.')
+    } finally {
+      setDeleting(false)
     }
   }
 
   return (
+    <>
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-5">
       {/* Composer */}
       <Card className="p-6 lg:col-span-2">
@@ -1386,15 +1399,11 @@ function BroadcastNotifications() {
                   </p>
                 </div>
                 <button
-                  onClick={() => toggle(n)}
-                  className={`flex-shrink-0 rounded-lg border p-2 transition ${
-                    n.is_active
-                      ? 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50'
-                      : 'border-emerald-200 bg-white text-emerald-600 hover:bg-emerald-50'
-                  }`}
-                  title={n.is_active ? 'Ẩn thông báo' : 'Hiện thông báo'}
+                  onClick={() => setConfirmDelete(n)}
+                  className="flex-shrink-0 rounded-lg border border-slate-200 bg-white p-2 text-slate-400 transition hover:border-red-200 hover:bg-red-50 hover:text-red-600"
+                  title="Xóa thông báo"
                 >
-                  {n.is_active ? <EyeOff size={16} /> : <Eye size={16} />}
+                  <Trash2 size={16} />
                 </button>
               </div>
             ))}
@@ -1402,6 +1411,49 @@ function BroadcastNotifications() {
         )}
       </Card>
     </div>
+
+    {confirmDelete && (
+      <Modal title="Xác nhận xóa thông báo" onClose={() => (deleting ? null : setConfirmDelete(null))}>
+        <div className="px-6 py-5">
+          <div className="flex items-start gap-3">
+            <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-red-50 text-red-600">
+              <Trash2 size={18} />
+            </div>
+            <div className="min-w-0">
+              <p className="text-sm text-slate-700">
+                Xóa thông báo{' '}
+                <span className="font-semibold text-slate-900">{confirmDelete.title}</span>?
+              </p>
+              <p className="mt-1.5 text-sm text-slate-500">
+                Thông báo sẽ bị gỡ khỏi hệ thống và biến mất khỏi chuông thông báo của mọi
+                người dùng. Thao tác này không hoàn tác được.
+              </p>
+            </div>
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 border-t border-slate-200 px-6 py-4">
+          <SecondaryButton className="px-3 py-2" onClick={() => setConfirmDelete(null)} disabled={deleting}>
+            Hủy
+          </SecondaryButton>
+          <button
+            onClick={remove}
+            disabled={deleting}
+            className="inline-flex items-center justify-center gap-2 rounded-lg bg-red-600 px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {deleting ? (
+              <>
+                <Loader2 size={15} className="animate-spin" /> Đang xóa…
+              </>
+            ) : (
+              <>
+                <Trash2 size={15} /> Xóa thông báo
+              </>
+            )}
+          </button>
+        </div>
+      </Modal>
+    )}
+    </>
   )
 }
 

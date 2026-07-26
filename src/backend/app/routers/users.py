@@ -1,11 +1,12 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from uuid import UUID
 
 from app import models, schemas
 from app.core.dependencies import get_current_user, require_role
-from app.database import get_db
+from app.database import SessionLocal, get_db
 from app.utils import security
+from app.services.email import send_account_locked_email, send_account_unlocked_email
 from app.services.logging import write_system_log, write_audit_log, snapshot_diff
 
 # Toàn bộ router này chỉ dành cho Admin (RBAC - FR-1: quản lý tài khoản người dùng).
@@ -29,6 +30,35 @@ def _user_snapshot(u: models.User) -> dict:
         "is_active": u.is_active,
         "is_banned": u.is_banned,
     }
+
+
+async def _send_ban_email(email: str, name: str | None, locked: bool) -> None:
+    """Gửi email báo khóa/mở khóa. Chạy trong BackgroundTasks nên KHÔNG được ném lỗi.
+
+    SMTP chậm hoặc sai cấu hình không được phép làm hỏng thao tác quản trị đã commit
+    thành công — nhưng cũng không được im lặng, nên thất bại thì ghi vào system_logs
+    để admin biết người dùng chưa nhận được thư.
+    """
+    try:
+        if locked:
+            await send_account_locked_email(email_to=email, name=name)
+        else:
+            await send_account_unlocked_email(email_to=email, name=name)
+        return
+    except Exception as e:  # noqa: BLE001 - lỗi gửi thư không được phá luồng chính
+        err = str(e)
+
+    db = SessionLocal()
+    try:
+        write_system_log(
+            db, module="users", level="ERROR",
+            message=(
+                f"Không gửi được email thông báo "
+                f"{'khóa' if locked else 'mở khóa'} tài khoản {email}: {err}"
+            ),
+        )
+    finally:
+        db.close()
 
 
 @router.get("", response_model=list[schemas.UserResponse])
@@ -81,6 +111,7 @@ def create_user(
 def update_user(
     user_id: UUID,
     payload: schemas.UserUpdateByAdmin,
+    background: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
@@ -118,6 +149,11 @@ def update_user(
         message=f"Admin {current_user.email} cập nhật tài khoản {user.email} (role={user.role}, active={user.is_active}, banned={user.is_banned})",
     )
 
+    # Chỉ báo khi trạng thái khóa THỰC SỰ đổi — admin sửa tên/role mà gửi kèm
+    # is_banned giữ nguyên thì không nên bắn thư làm người dùng hoang mang.
+    if before["is_banned"] != user.is_banned:
+        background.add_task(_send_ban_email, user.email, user.name, user.is_banned)
+
     old_data, new_data = snapshot_diff(before, _user_snapshot(user))
     if payload.password is not None:
         # Chỉ ghi NHẬN đã đổi mật khẩu, tuyệt đối không ghi giá trị/hash.
@@ -134,6 +170,7 @@ def update_user(
 @router.patch("/{user_id}/deactivate", response_model=schemas.UserResponse)
 def deactivate_user(
     user_id: UUID,
+    background: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
@@ -160,4 +197,7 @@ def deactivate_user(
         old_data={"is_banned": was_banned, "email": user.email},
         new_data={"is_banned": True, "email": user.email},
     )
+
+    if not was_banned:  # đã bị khóa từ trước thì không gửi lại thư
+        background.add_task(_send_ban_email, user.email, user.name, True)
     return user
