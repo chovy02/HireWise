@@ -51,3 +51,8 @@ from .interview import (
 )
 
 from .log import SystemLogResponse
+
+from .emailtemplate import (
+    EmailTemplateUpsert,
+    EmailTemplateResponse
+)

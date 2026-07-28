@@ -1,12 +1,14 @@
+from datetime import datetime, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app import models, schemas
 from app.core.dependencies import get_current_user, require_role
 from app.core.ownership import get_owned_candidate, get_owned_jd, get_owned_shortlist
-from app.database import get_db
+from app.database import SessionLocal, get_db
+from app.services.email_notification import send_shortlist_email
 from app.services.logging import write_audit_log
 
 
@@ -44,6 +46,47 @@ def _get_shortlist_or_404(
     """Bắt buộc truyền `user`: shortlist chỉ thấy được nếu JD chứa nó là của người này."""
     return get_owned_shortlist(db, shortlist_id, user)
 
+def _background_send_notifications(
+    items_to_notify: list[tuple[UUID, str, str, str, str]],
+    hr_user_id: UUID,  # [MỚI] Truyền thêm ID của HR để query template
+    hr_email: str,
+    hr_name: str,
+):
+    db = SessionLocal()
+    try:
+        # [MỚI] Lấy các template tùy chỉnh của HR từ DB lên (nếu có)
+        templates = db.query(models.EmailTemplate).filter(
+            models.EmailTemplate.user_id == hr_user_id,
+            models.EmailTemplate.is_active == True
+        ).all()
+        
+        # Gom vào Dict để tra cứu nhanh theo type: {"accepted": obj, "rejected": obj}
+        template_map = {t.template_type: t for t in templates}
+
+        for item_id, cand_email, cand_name, jd_title, cand_status in items_to_notify:
+            # Lấy template tương ứng với status ("accepted" / "rejected")
+            custom_tpl = template_map.get(cand_status)
+
+            success = send_shortlist_email(
+                to_email=cand_email,
+                hr_email=hr_email,
+                hr_name=hr_name,
+                candidate_name=cand_name or "Ứng viên",
+                jd_title=jd_title,
+                status=cand_status,
+                custom_template=custom_tpl # [MỚI] Truyền template vào đây
+            )
+            if success:
+                item = db.query(models.ShortlistItem).filter(models.ShortlistItem.id == item_id).first()
+                if item:
+                    item.notified_at = datetime.now(timezone.utc)
+                    item.notified_status = cand_status
+        db.commit()
+    except Exception as e:
+        print(f"[ERROR] Lỗi tiến trình chạy nền gửi mail Shortlist: {e}")
+        db.rollback()
+    finally:
+        db.close()
 
 # ────────────────────────────────────────────────────────────
 # Router 1: shortlists lồng dưới một JD (tạo / liệt kê)
@@ -291,3 +334,72 @@ def remove_item(
 
     db.delete(item)
     db.commit()
+
+@shortlist_router.post(
+    "/{shortlist_id}/send-notifications",
+    status_code=status.HTTP_200_OK,
+)
+def send_shortlist_notifications(
+    shortlist_id: UUID,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """
+    Quét danh sách ứng viên trong shortlist, tự động gửi mail kết quả (accepted/rejected)
+    trong chế độ nền (background task) và chống gửi lặp lại.
+    """
+    shortlist = _get_shortlist_or_404(db, shortlist_id, current_user)
+    jd_title = shortlist.jd.title if shortlist.jd else "Vị trí tuyển dụng"
+
+    # Lọc các ứng viên đã chốt (accepted/rejected) và CHƯA được gửi mail lần nào
+    # (hoặc trạng thái vừa thay đổi so với lần gửi trước).
+    valid_items = []
+    for item in shortlist.items:
+        if item.candidate_status in ["accepted", "rejected"]:
+            # Kiểm tra xem có cột notified_at chưa (nếu đã migrate model)
+            notified_at = getattr(item, "notified_at", None)
+            notified_status = getattr(item, "notified_status", None)
+
+            if not notified_at or notified_status != item.candidate_status:
+                if item.cv and item.cv.email:
+                    valid_items.append(
+                        (
+                            item.id,
+                            item.cv.email,
+                            item.cv.name,
+                            jd_title,
+                            item.candidate_status,
+                        )
+                    )
+
+    if not valid_items:
+        return {
+            "message": "Không có ứng viên nào cần gửi mail thông báo mới.",
+            "total_queued": 0,
+        }
+
+    # Đẩy tác vụ vào BackgroundTasks để API trả kết quả về UI ngay lập tức
+    background_tasks.add_task(
+        _background_send_notifications,
+        items_to_notify=valid_items,
+        hr_user_id=current_user.id,
+        hr_email=current_user.email,
+        hr_name=current_user.name or "HR Staff",
+    )
+
+    # Ghi log kiểm toán cho hành động gửi email hàng loạt
+    write_audit_log(
+        db,
+        user_id=current_user.id,
+        action="SEND_SHORTLIST_EMAILS",
+        entity_type="shortlist",
+        entity_id=shortlist.id,
+        old_data=None,
+        new_data={"total_queued": len(valid_items)},
+    )
+
+    return {
+        "message": f"Đang tiến hành gửi email tới {len(valid_items)} ứng viên trong chế độ nền.",
+        "total_queued": len(valid_items),
+    }

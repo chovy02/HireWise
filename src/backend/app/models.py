@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, Integer, Text, ForeignKey, Float, DateTime, Boolean, Column
+from sqlalchemy import String, Integer, Text, ForeignKey, Float, DateTime, Boolean, Column, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
@@ -33,6 +33,25 @@ class User(Base):
     shortlists = relationship("Shortlist", back_populates="creator")
     chat_sessions = relationship("ChatSession", back_populates="user")
     agent_logs = relationship("AgentToolLog", back_populates="user")
+
+class EmailTemplate(Base):
+    __tablename__ = "email_templates"
+    __table_args__ = (
+        UniqueConstraint("user_id", "template_type", name="uq_user_template_type"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    # Loại template: "accepted" hoặc "rejected"
+    template_type: Mapped[str] = mapped_column(String(50), nullable=False) 
+    subject: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Nội dung chứa các biến động: {candidate_name}, {jd_title}, {hr_name}
+    body_template: Mapped[str] = mapped_column(Text, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True) # Cho phép tắt để dùng lại mail mặc định
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    user = relationship("User", backref="email_templates")
 
 class ChatSession(Base):
     __tablename__ = "chat_sessions"
@@ -192,6 +211,8 @@ class ShortlistItem(Base):
     cv_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("candidates.id"), nullable=False)
     candidate_status: Mapped[str] = mapped_column(String(50), default="pending") # pending, accepted, rejected
     added_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    notified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    notified_status: Mapped[str] = mapped_column(String(50), nullable=True)
 
     shortlist = relationship("Shortlist", back_populates="items")
     cv = relationship("Candidate", back_populates="shortlist_items")
