@@ -3,14 +3,24 @@ from email.message import EmailMessage
 import os
 from typing import List, Optional
 
-# Các biến môi trường SMTP hệ thống HireWise
-SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
-SMTP_PORT = int(os.getenv("SMTP_PORT", 587))
-SMTP_USER = os.getenv("SMTP_USER")
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
+# Cấu hình SMTP.
+#
+# Ưu tiên SMTP_*, nhưng LÙI VỀ MAIL_* nếu không có: cả dự án (app/services/email.py,
+# file .env) vốn đã dùng bộ tên MAIL_*. Bắt khai báo thêm một bộ tên thứ hai cho
+# CÙNG một tài khoản Gmail chỉ tạo ra hai chỗ phải sửa mỗi lần đổi mật khẩu ứng dụng.
+SMTP_HOST = os.getenv("SMTP_HOST") or os.getenv("MAIL_SERVER") or "smtp.gmail.com"
+SMTP_PORT = int(os.getenv("SMTP_PORT") or os.getenv("MAIL_PORT") or 587)
+SMTP_USER = os.getenv("SMTP_USER") or os.getenv("MAIL_USERNAME")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD") or os.getenv("MAIL_PASSWORD")
 
-if not SMTP_USER or not SMTP_PASSWORD:
-    raise ValueError("Lỗi cấu hình: Chưa khai báo SMTP_USER hoặc SMTP_PASSWORD trong file .env")
+# CỐ Ý KHÔNG raise ở tầng module.
+#
+# Trước đây thiếu cấu hình mail là ném ValueError ngay lúc import, mà module này nằm
+# trong chuỗi import của app -> uvicorn chết ở bước khởi động, container restart vô
+# hạn, và người dùng chỉ thấy "Backend not reachable" ở màn đăng nhập. Một tính năng
+# phụ (gửi mail báo kết quả) chưa cấu hình KHÔNG được phép làm sập đăng nhập, upload
+# CV và bảng xếp hạng. Thiếu cấu hình thì báo lỗi đúng lúc gửi, ở dưới.
+SMTP_CONFIGURED = bool(SMTP_USER and SMTP_PASSWORD)
 
 DEFAULT_EMAIL_TEMPLATES = {
     "accepted": {
@@ -78,20 +88,37 @@ def send_shortlist_email(
     custom_template: Optional[object] = None # Thêm tham số nhận template
 ):
     """Gửi email qua SMTP hệ thống, set Reply-To về mail HR và dùng custom template."""
+    # Kiểm tra cấu hình TẠI ĐÂY chứ không phải lúc import: chưa cấu hình thì chỉ
+    # riêng việc gửi mail hỏng, phần còn lại của hệ thống vẫn chạy bình thường.
+    if not SMTP_CONFIGURED:
+        print(
+            "[ERROR] Chưa cấu hình SMTP (cần SMTP_USER/SMTP_PASSWORD hoặc "
+            f"MAIL_USERNAME/MAIL_PASSWORD trong .env) — không gửi được mail tới {to_email}."
+        )
+        return False
+
     subject, body = get_email_content(status, candidate_name, jd_title, hr_name, custom_template)
-    
+
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = f"HireWise ATS <{SMTP_USER}>"
     msg["To"] = to_email
-    msg["Reply-To"] = f"{hr_name} <{hr_email}>" 
+    msg["Reply-To"] = f"{hr_name} <{hr_email}>"
     msg.set_content(body)
 
     try:
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
-            server.starttls()
-            server.login(SMTP_USER, SMTP_PASSWORD)
-            server.send_message(msg)
+        # Cổng 465 dùng SSL ngay từ đầu kết nối; 587 mới là kết nối thường rồi nâng
+        # cấp bằng STARTTLS. Bản cũ mặc định mọi cổng đều STARTTLS, nên với
+        # MAIL_PORT=465 trong .env thì kết nối treo/lỗi giao thức.
+        if SMTP_PORT == 465:
+            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=20) as server:
+                server.login(SMTP_USER, SMTP_PASSWORD)
+                server.send_message(msg)
+        else:
+            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
+                server.starttls()
+                server.login(SMTP_USER, SMTP_PASSWORD)
+                server.send_message(msg)
         return True
     except Exception as e:
         print(f"[ERROR] Lỗi gửi mail tới {to_email}: {str(e)}")
