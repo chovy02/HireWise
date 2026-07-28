@@ -31,15 +31,30 @@ INTERVIEW_NOT_FOUND = "Không tìm thấy buổi phỏng vấn."
 QUESTION_NOT_FOUND = "Không tìm thấy câu hỏi."
 
 
-def owned_jds(db: Session, user: models.User):
-    """Query JD đã lọc theo chủ sở hữu. Dùng làm gốc cho mọi truy vấn danh sách."""
-    return db.query(models.JobDescription).filter(
+def owned_jds(db: Session, user: models.User, include_deleted: bool = False):
+    """Query JD đã lọc theo chủ sở hữu. Dùng làm gốc cho mọi truy vấn danh sách.
+
+    MẶC ĐỊNH BỎ QUA JD trong thùng rác. Lọc ở đây thay vì ở từng endpoint là có chủ
+    đích: mọi đường vào JD đều đi qua hàm này, nên một JD đã xoá không thể lọt ra ở
+    một endpoint nào đó do lập trình viên quên lọc. Chỉ trang thùng rác mới truyền
+    include_deleted=True.
+    """
+    q = db.query(models.JobDescription).filter(
         models.JobDescription.created_by == user.id
     )
+    if not include_deleted:
+        q = q.filter(models.JobDescription.deleted_at.is_(None))
+    return q
 
 
-def get_owned_jd(db: Session, jd_id: UUID, user: models.User) -> models.JobDescription:
-    jd = owned_jds(db, user).filter(models.JobDescription.id == jd_id).first()
+def get_owned_jd(
+    db: Session, jd_id: UUID, user: models.User, include_deleted: bool = False
+) -> models.JobDescription:
+    jd = (
+        owned_jds(db, user, include_deleted=include_deleted)
+        .filter(models.JobDescription.id == jd_id)
+        .first()
+    )
     if not jd:
         raise HTTPException(status_code=404, detail=JD_NOT_FOUND)
     return jd
@@ -48,13 +63,18 @@ def get_owned_jd(db: Session, jd_id: UUID, user: models.User) -> models.JobDescr
 def get_owned_candidate(
     db: Session, candidate_id: UUID, user: models.User
 ) -> models.Candidate:
-    """Ứng viên không có chủ sở hữu riêng — thừa hưởng từ JD chứa nó."""
+    """Ứng viên không có chủ sở hữu riêng — thừa hưởng từ JD chứa nó.
+
+    JD đã vào thùng rác thì ứng viên bên trong cũng coi như không tồn tại: dự án đã
+    biến mất khỏi giao diện mà link cũ tới ứng viên vẫn mở được thì rất khó hiểu.
+    """
     candidate = (
         db.query(models.Candidate)
         .join(models.JobDescription, models.Candidate.jd_id == models.JobDescription.id)
         .filter(
             models.Candidate.id == candidate_id,
             models.JobDescription.created_by == user.id,
+            models.JobDescription.deleted_at.is_(None),
         )
         .first()
     )
@@ -72,6 +92,7 @@ def get_owned_evaluation(
         .filter(
             models.Evaluation.id == evaluation_id,
             models.JobDescription.created_by == user.id,
+            models.JobDescription.deleted_at.is_(None),
         )
         .first()
     )
@@ -90,6 +111,7 @@ def get_owned_interview(
         .filter(
             models.Interview.id == interview_id,
             models.JobDescription.created_by == user.id,
+            models.JobDescription.deleted_at.is_(None),
         )
         .first()
     )
@@ -112,6 +134,7 @@ def get_owned_question(
         .filter(
             models.InterviewQuestion.id == question_id,
             models.JobDescription.created_by == user.id,
+            models.JobDescription.deleted_at.is_(None),
         )
         .first()
     )
@@ -131,6 +154,7 @@ def get_owned_shortlist(
         .filter(
             models.Shortlist.id == shortlist_id,
             models.JobDescription.created_by == user.id,
+            models.JobDescription.deleted_at.is_(None),
         )
         .first()
     )

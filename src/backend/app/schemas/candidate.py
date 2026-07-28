@@ -79,6 +79,20 @@ class UploadBatchResponse(BaseModel):
     results: list[UploadResultItem]
 
 
+class UploadHistoryItem(BaseModel):
+    """Một lượt tải ZIP đã lưu (GET /jds/{id}/uploads) — dựng lại được sau khi F5."""
+    id: UUID
+    filename: Optional[str] = None
+    total: int = 0
+    staged: int = 0
+    duplicated: int = 0
+    failed: int = 0
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 class EvaluationOverrideRequest(BaseModel):
     """UC U005 - Override AI Evaluation."""
     new_score: float = Field(..., ge=0, le=100)

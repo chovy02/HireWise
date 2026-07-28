@@ -1,5 +1,13 @@
 import { createContext, useContext, useState, useCallback, useEffect } from 'react'
-import { createJd, uploadCvs, listJds } from '../api/jds.js'
+import {
+  createJd,
+  uploadCvs,
+  listJds,
+  deleteJd,
+  listTrashedJds,
+  restoreJd,
+  purgeJd,
+} from '../api/jds.js'
 import { useAuth } from './AuthContext.jsx'
 
 const ProjectContext = createContext(null)
@@ -23,6 +31,7 @@ function mapJdToProject(jd) {
     createdAt: jd.created_at,
     candidates: [],
     candidateCount: jd.candidate_count ?? 0,
+    deletedAt: jd.deleted_at || null,
   }
 }
 
@@ -155,6 +164,37 @@ export function ProjectProvider({ children }) {
     )
   }, [])
 
+  // ---- Thùng rác ----
+  // Chỉ `projects` (dự án đang hoạt động) nằm trong state. Danh sách thùng rác được
+  // trang Trash tự fetch mỗi lần mở: nó hiếm khi được xem, mà giữ trong state thì
+  // phải đồng bộ thêm một nguồn dữ liệu nữa ở mọi thao tác xoá/khôi phục.
+
+  // Chuyển 1 dự án vào thùng rác rồi bỏ khỏi danh sách đang hiển thị.
+  const trashProject = useCallback(async (projectId) => {
+    const res = await deleteJd(projectId)
+    setProjects((list) => list.filter((p) => p.id !== projectId))
+    return res
+  }, [])
+
+  const fetchTrash = useCallback(async () => {
+    const jds = await listTrashedJds()
+    return jds.map(mapJdToProject)
+  }, [])
+
+  // Khôi phục: nạp lại danh sách từ backend thay vì tự chèn vào state, để thứ tự
+  // sắp xếp (theo created_at) khớp đúng với những gì backend trả về.
+  const restoreProject = useCallback(
+    async (projectId) => {
+      const res = await restoreJd(projectId)
+      await refreshProjects()
+      return res
+    },
+    [refreshProjects]
+  )
+
+  // Xoá vĩnh viễn — chỉ tác động tới thùng rác nên state `projects` không đổi.
+  const purgeProject = useCallback((projectId) => purgeJd(projectId), [])
+
   const getProject = useCallback(
     (id) => projects.find((p) => p.id === id) || null,
     [projects]
@@ -227,6 +267,10 @@ export function ProjectProvider({ children }) {
         refreshProjects,
         addProject,
         addSource,
+        trashProject,
+        fetchTrash,
+        restoreProject,
+        purgeProject,
         getProject,
         setProjectDetail,
         overrideCandidate,
