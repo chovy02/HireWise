@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import {
   X,
+  ArrowLeft,
   MessageSquareText,
   Sparkles,
   Loader2,
@@ -42,7 +43,8 @@ function sortQuestions(list) {
 // Luồng: AI sinh câu hỏi -> HR gõ tóm tắt câu trả lời -> AI chấm + đào sâu ->
 // HR bấm kết thúc -> AI tổng kết năng lực.
 // - onClose: nếu có -> hiện nút đóng (chế độ popup). Bỏ trống -> chế độ tab.
-export function InterviewPanel({ candidateId, candidateName, onClose }) {
+// - onBack: nếu có -> hiện nút "Quay lại" (chế độ tab, trả HR về tab Shortlist).
+export function InterviewPanel({ candidateId, candidateName, onClose, onBack }) {
   const toast = useToast()
   const [interview, setInterview] = useState(null) // buổi phỏng vấn hiện tại
   const [loading, setLoading] = useState(true) // đang fetch lần đầu
@@ -134,6 +136,15 @@ export function InterviewPanel({ candidateId, candidateName, onClose }) {
       {/* Header */}
       <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
         <div className="flex items-center gap-3">
+          {onBack && (
+            <button
+              onClick={onBack}
+              className="rounded-md p-1.5 text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
+              title="Quay lại danh sách rút gọn"
+            >
+              <ArrowLeft size={18} />
+            </button>
+          )}
           <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600">
             <MessageSquareText size={20} />
           </div>

@@ -32,6 +32,9 @@ class ShortlistCandidate(BaseModel):
     score: Optional[float] = None   # điểm phù hợp (None nếu chưa chấm xong)
     skills: list[str] = []
     is_overridden: bool = False
+    # Trạng thái buổi phỏng vấn: pending/in_progress/completed, None nếu chưa tạo.
+    # Frontend dựa vào đây để biết ứng viên nào có tóm tắt phỏng vấn để mở xem.
+    interview_status: Optional[str] = None
 
 
 class ShortlistItemResponse(BaseModel):
