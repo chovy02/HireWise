@@ -18,7 +18,6 @@ from .jd import (
 
 from .candidate import (
     CandidateSkillResponse,
-    CandidateProjectResponse,
     EvaluationResponse,
     CandidateListItem,
     CandidateDetailResponse,

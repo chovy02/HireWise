@@ -14,17 +14,6 @@ class CandidateSkillResponse(BaseModel):
         from_attributes = True
 
 
-class CandidateProjectResponse(BaseModel):
-    id: UUID
-    name: str
-    description: Optional[str] = None
-    github_url: Optional[str] = None
-    tech_stack: Optional[list] = None
-
-    class Config:
-        from_attributes = True
-
-
 class EvaluationResponse(BaseModel):
     id: UUID
     score: float
@@ -65,7 +54,6 @@ class CandidateDetailResponse(BaseModel):
     raw_text: Optional[str] = None   # text CV gốc, để đối chiếu/highlight bằng chứng
     created_at: datetime
     skills: list[CandidateSkillResponse] = []
-    projects: list[CandidateProjectResponse] = []
     evaluation: Optional[EvaluationResponse] = None
 
     class Config:
