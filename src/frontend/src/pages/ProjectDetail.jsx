@@ -26,14 +26,21 @@ import {
 } from '../components/ui.jsx'
 import { useToast } from '../context/ToastContext.jsx'
 import { useProjects } from '../context/ProjectContext.jsx'
-import { getCandidates, getJd, uploadCvs, retryCandidate } from '../api/jds.js'
+import { getCandidates, getJd, uploadCvs, retryCandidate, listUploads } from '../api/jds.js'
 import { listShortlists } from '../api/shortlists.js'
 import CandidateDetailModal from '../components/CandidateDetailModal.jsx'
 import { formatName } from '../utils/formatName.js'
 
-// Chỉ còn một cách nạp hồ sơ (tải file .zip). Giữ map để các project cũ trong
-// state vẫn render được icon, nhưng mọi method lạ đều rơi về UploadCloud.
-const METHOD_ICON = { upload: UploadCloud }
+// "2026-07-28T10:26:27" -> "28/07/2026 10:26"
+function formatUploadedAt(iso) {
+  if (!iso) return 'Không rõ thời điểm'
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return 'Không rõ thời điểm'
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(
+    d.getHours()
+  )}:${pad(d.getMinutes())}`
+}
 
 // Trạng thái xử lý CV thật (khớp models.Candidate.status ở backend).
 const STATUS_META = {
@@ -391,7 +398,11 @@ export default function ProjectDetail() {
   const [liveKey, setLiveKey] = useState(0)
   // Số liệu THẬT cho stat cards (null = đang tải).
   const [candidateCount, setCandidateCount] = useState(null)
+  const [completedCount, setCompletedCount] = useState(null)
   const [shortlistedCount, setShortlistedCount] = useState(null)
+  // Lịch sử tải lên lấy TỪ BACKEND (bảng upload_batches), không dùng project.sources
+  // nữa: state đó chỉ sống trong RAM trình duyệt nên F5 là về 0.
+  const [uploads, setUploads] = useState(null)
   // Ứng viên đang mở popup chi tiết đánh giá (ngay trên trang này).
   const [openCandidateId, setOpenCandidateId] = useState(null)
   const project = getProject(id)
@@ -427,7 +438,11 @@ export default function ProjectDetail() {
     if (!id) return
     let cancelled = false
     getCandidates(id)
-      .then((data) => !cancelled && setCandidateCount(data.length))
+      .then((data) => {
+        if (cancelled) return
+        setCandidateCount(data.length)
+        setCompletedCount(data.filter((c) => c.status === 'COMPLETED').length)
+      })
       .catch(() => {})
     listShortlists(id)
       .then((sls) =>
@@ -435,6 +450,9 @@ export default function ProjectDetail() {
         setShortlistedCount(sls.reduce((n, s) => n + (s.item_count || 0), 0))
       )
       .catch(() => {})
+    listUploads(id)
+      .then((data) => !cancelled && setUploads(data))
+      .catch(() => !cancelled && setUploads([]))
     return () => {
       cancelled = true
     }
@@ -456,8 +474,13 @@ export default function ProjectDetail() {
     return <Navigate to="/" replace />
   }
 
-  const totalIngested = project.sources.reduce((n, s) => n + (s.count || 0), 0)
+  const uploadList = uploads || []
+  const totalIngested = uploadList.reduce((n, u) => n + (u.staged || 0), 0)
+  const pct = (part, whole) => (whole > 0 ? Math.round((part / whole) * 100) : 0)
 
+  // Footnote viết bằng tiếng Việt và nêu ĐÚNG cái người đọc cần biết tiếp theo, thay
+  // cho mấy câu tiếng Anh chung chung cũ ("Ranked for this role" / "Proceeded to next
+  // step") vốn chỉ nhắc lại nhãn thẻ mà không thêm thông tin gì.
   const stats = [
     {
       key: 'candidates',
@@ -465,7 +488,17 @@ export default function ProjectDetail() {
       cls: 'bg-indigo-50 text-indigo-600',
       label: 'Ứng viên',
       value: candidateCount == null ? '…' : String(candidateCount),
-      footnote: 'Ranked for this role',
+      progress:
+        candidateCount == null || completedCount == null
+          ? undefined
+          : pct(completedCount, candidateCount),
+      progressColor: 'indigo',
+      footnote:
+        candidateCount == null || completedCount == null
+          ? 'Đang tải…'
+          : completedCount === candidateCount
+            ? 'Đã chấm điểm xong toàn bộ'
+            : `${completedCount}/${candidateCount} đã chấm điểm`,
     },
     {
       key: 'shortlisted',
@@ -473,15 +506,36 @@ export default function ProjectDetail() {
       cls: 'bg-emerald-50 text-emerald-600',
       label: 'Đã rút gọn',
       value: shortlistedCount == null ? '…' : String(shortlistedCount),
-      footnote: 'Proceeded to next step',
+      // Mẫu số ngay cạnh con số: "4 /15 ứng viên" đọc ra tỉ lệ nhanh hơn nhiều so
+      // với một số 4 đứng trơ trọi.
+      suffix:
+        shortlistedCount == null || !candidateCount
+          ? undefined
+          : `/${candidateCount} ứng viên`,
+      progress:
+        shortlistedCount == null || candidateCount == null
+          ? undefined
+          : pct(shortlistedCount, candidateCount),
+      progressColor: 'green',
+      footnote:
+        shortlistedCount == null
+          ? 'Đang tải…'
+          : shortlistedCount === 0
+            ? 'Chưa đưa ai vào danh sách rút gọn'
+            : `Chiếm ${pct(shortlistedCount, candidateCount)}% tổng ứng viên`,
     },
     {
-      key: 'sources',
+      key: 'uploads',
       icon: UploadCloud,
       cls: 'bg-violet-50 text-violet-600',
       label: 'Lượt tải lên',
-      value: String(project.sources.length),
-      footnote: `Đã nạp ${totalIngested} CV`,
+      value: uploads == null ? '…' : String(uploadList.length),
+      footnote:
+        uploads == null
+          ? 'Đang tải…'
+          : uploadList.length === 0
+            ? 'Chưa có lượt tải nào'
+            : `Đã nạp ${totalIngested} CV`,
     },
   ]
 
@@ -526,6 +580,9 @@ export default function ProjectDetail() {
               iconClass={s.cls}
               label={s.label}
               value={s.value}
+              suffix={s.suffix}
+              progress={s.progress}
+              progressColor={s.progressColor}
               footnote={s.footnote}
             />
           ))}
@@ -572,30 +629,39 @@ export default function ProjectDetail() {
                 Mọi lượt tải đã đưa ứng viên vào dự án này.
               </p>
               <div className="mt-4 space-y-3">
-                {project.sources.map((s) => {
-                  const Icon = METHOD_ICON[s.method] || UploadCloud
-                  return (
-                    <div
-                      key={s.id}
-                      className="flex items-start gap-3 rounded-xl border border-slate-200 p-4"
-                    >
-                      <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600">
-                        <Icon size={16} />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm font-semibold text-slate-800">
-                          {s.label}
-                        </p>
-                        <p className="truncate text-xs text-slate-400">
-                          {s.value || 'Không có thông tin file'}
-                        </p>
-                      </div>
-                      <Badge variant="neutral">
-                        <FileText size={11} /> {s.count || 0} CVs
-                      </Badge>
+                {uploads === null && (
+                  <p className="text-sm text-slate-400">Đang tải lịch sử…</p>
+                )}
+                {uploads !== null && uploadList.length === 0 && (
+                  <p className="text-sm text-slate-400">
+                    Chưa có lượt tải nào. Bấm “Tải thêm CV” để nạp file .zip.
+                  </p>
+                )}
+                {uploadList.map((u) => (
+                  <div
+                    key={u.id}
+                    className="flex items-start gap-3 rounded-xl border border-slate-200 p-4"
+                  >
+                    <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600">
+                      <UploadCloud size={16} />
                     </div>
-                  )
-                })}
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-semibold text-slate-800">
+                        {u.filename || UPLOAD_LABEL}
+                      </p>
+                      <p className="mt-0.5 text-xs text-slate-400">
+                        {formatUploadedAt(u.created_at)}
+                        {/* Chỉ nêu CV bị bỏ qua khi thực sự có — thêm "0 trùng, 0 lỗi"
+                            vào mọi dòng chỉ làm rối chỗ cần đọc. */}
+                        {u.duplicated > 0 && ` • ${u.duplicated} trùng`}
+                        {u.failed > 0 && ` • ${u.failed} lỗi đọc`}
+                      </p>
+                    </div>
+                    <Badge variant="neutral">
+                      <FileText size={11} /> {u.staged || 0} CV
+                    </Badge>
+                  </div>
+                ))}
               </div>
             </Card>
 
@@ -641,7 +707,6 @@ export default function ProjectDetail() {
 // Modal nạp thêm CV cho một dự án đã có (chỉ còn đường tải file .zip).
 function AddSourceModal({ projectId, onClose, onUploaded }) {
   const toast = useToast()
-  const { addSource } = useProjects()
   const [value, setValue] = useState('')
   const [file, setFile] = useState(null) // File ZIP thật để upload lên backend
   const [submitting, setSubmitting] = useState(false)
@@ -667,14 +732,11 @@ function AddSourceModal({ projectId, onClose, onUploaded }) {
     setSubmitting(true)
     try {
       const summary = await uploadCvs(projectId, file)
-      addSource(projectId, {
-        method: 'upload',
-        label: UPLOAD_LABEL,
-        value: file.name,
-        count: summary.processing ?? 0,
-      })
       toast(`Đã nhận ${summary.processing ?? 0} CV — đang xử lý nền.`)
-      onUploaded?.() // buộc LiveProcessing poll lại để thấy CV mới
+      // Backend đã ghi lượt tải vào upload_batches; trang cha nạp lại từ đó. Trước
+      // đây chỗ này còn gọi addSource() để nhét thêm vào state React, nhưng giờ state
+      // đó không ai đọc nữa — giữ lại chỉ tạo ra hai nguồn sự thật lệch nhau.
+      onUploaded?.() // buộc LiveProcessing + danh sách lượt tải nạp lại
       onClose()
     } catch (err) {
       toast(err.message || 'Upload thất bại.')

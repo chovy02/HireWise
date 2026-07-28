@@ -1,16 +1,18 @@
-import { Fragment, useEffect, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import {
   Search,
-  ArrowUpDown,
+  ArrowDownWideNarrow,
+  ArrowUpNarrowWide,
+  ArrowDownAZ,
+  ArrowUpAZ,
+  ListFilter,
   ExternalLink,
   Lightbulb,
   Trophy,
   GitCompare,
   FolderPlus,
   Plus,
-  Briefcase,
-  ArrowRight,
   ArrowLeft,
   RefreshCw,
   X,
@@ -37,6 +39,7 @@ import {
   SecondaryButton,
   PrimaryButton,
 } from '../components/ui.jsx'
+import ProjectCard from '../components/ProjectCard.jsx'
 import CandidateDetailModal from '../components/CandidateDetailModal.jsx'
 import { InterviewPanel } from '../components/InterviewModal.jsx'
 import InterviewSummary from '../components/InterviewSummary.jsx'
@@ -76,6 +79,66 @@ function sortRows(rows) {
   )
 }
 
+// So tên tiếng Việt theo bảng chữ cái tiếng Việt, KHÔNG theo mã ký tự: 'Đ' là
+// U+0110, lớn hơn cả 'Z', nên sort mặc định đẩy mọi cái tên "Đỗ/Đặng" xuống tận cuối
+// thay vì nằm ngay sau D. localeCompare('vi') xử lý đúng chuyện đó.
+//
+// `dir` chỉ đảo chiều PHẦN SO TÊN. Ứng viên chưa trích được tên luôn nằm cuối bảng
+// dù sắp A→Z hay Z→A — đảo dấu cả hàm thì nhóm không tên bị hất lên đầu, mà đó là
+// nhóm ít giá trị nhất với HR.
+function compareName(a, b, dir = 1) {
+  const na = (formatName(a.name) || '').trim()
+  const nb = (formatName(b.name) || '').trim()
+  if (!na || !nb) return (!na) - (!nb)
+  return dir * na.localeCompare(nb, 'vi', { sensitivity: 'base' })
+}
+
+// Các kiểu sắp xếp cho bảng xếp hạng.
+//
+// LƯU Ý: đổi kiểu sắp xếp chỉ đổi THỨ TỰ HIỂN THỊ, không đổi cột "Hạng" — hạng luôn
+// là vị trí theo điểm AI trên toàn bộ danh sách. Nhờ vậy sắp theo tên thì vẫn thấy
+// ngay ai đang đứng thứ mấy.
+const SORT_MODES = {
+  score_desc: {
+    label: 'Điểm AI: cao → thấp',
+    icon: ArrowDownWideNarrow,
+    fn: sortRows,
+  },
+  score_asc: {
+    label: 'Điểm AI: thấp → cao',
+    icon: ArrowUpNarrowWide,
+    // Ứng viên chưa có điểm vẫn nằm cuối, không nhảy lên đầu chỉ vì score = null.
+    fn: (rows) =>
+      [...rows].sort(
+        (a, b) => (a.score == null) - (b.score == null) || (a.score ?? 0) - (b.score ?? 0)
+      ),
+  },
+  name_asc: {
+    label: 'Tên: A → Z',
+    icon: ArrowDownAZ,
+    fn: (rows) => [...rows].sort(compareName),
+  },
+  name_desc: {
+    label: 'Tên: Z → A',
+    icon: ArrowUpAZ,
+    fn: (rows) => [...rows].sort((a, b) => compareName(a, b, -1)),
+  },
+  status: {
+    label: 'Trạng thái xử lý',
+    icon: ListFilter,
+    // Lỗi lên đầu: đây là thứ HR cần xử lý ngay (bấm "Thử lại"), còn CV đã xong thì
+    // để yên cũng được.
+    fn: (rows) => {
+      const order = { FAILED: 0, PENDING: 1, COMPLETED: 2 }
+      return [...rows].sort(
+        (a, b) =>
+          (order[a.status] ?? 3) - (order[b.status] ?? 3) ||
+          (b.score ?? 0) - (a.score ?? 0)
+      )
+    },
+  },
+}
+
 export default function Shortlisting() {
   const navigate = useNavigate()
   const location = useLocation()
@@ -92,6 +155,7 @@ export default function Shortlisting() {
   const [projectId, setProjectId] = useState(initialId)
 
   const [query, setQuery] = useState('')
+  const [sortBy, setSortBy] = useState('score_desc')
   const [openId, setOpenId] = useState(null)
   const [interviewFor, setInterviewFor] = useState(null) // { id, name } ứng viên đang phỏng vấn
   const [openSummaryId, setOpenSummaryId] = useState(null) // item shortlist đang mở tóm tắt phỏng vấn
@@ -164,6 +228,36 @@ export default function Shortlisting() {
     }
   }, [activeSlId])
 
+  // ---- Danh sách hiển thị ----
+  // PHẢI đặt trên các nhánh `return` sớm bên dưới: hook chạy sau một câu return có
+  // điều kiện sẽ khiến số hook mỗi lần render khác nhau và React ném lỗi
+  // "Rendered fewer hooks than expected".
+  const list = rows || []
+
+  // THỨ HẠNG CỐ ĐỊNH: tính một lần trên TOÀN BỘ danh sách theo điểm AI.
+  //
+  // Trước đây cột "Hạng" lấy chỉ số của vòng lặp render, tức là vị trí trong mảng ĐÃ
+  // LỌC — nên tìm "ngọc" thì ứng viên hạng 3 nhảy lên "#1", trông như thứ hạng bị đổi.
+  // Hạng phải là thuộc tính của ứng viên trong cả bảng xếp hạng, không phải vị trí
+  // dòng trên màn hình; tách ra thì lọc hay đổi kiểu sắp xếp đều không ảnh hưởng.
+  const rankById = useMemo(() => {
+    const map = new Map()
+    sortRows(list).forEach((c, i) => map.set(c.id, i + 1))
+    return map
+  }, [list])
+
+  const visible = useMemo(() => {
+    const needle = query.trim().toLowerCase()
+    const filtered = needle
+      ? list.filter((c) =>
+          `${c.name || ''} ${(c.skills || []).join(' ')}`
+            .toLowerCase()
+            .includes(needle)
+        )
+      : list
+    return (SORT_MODES[sortBy] || SORT_MODES.score_desc).fn(filtered)
+  }, [list, query, sortBy])
+
   // Nạp lại cả danh sách (item_count) lẫn chi tiết sau mỗi thay đổi.
   async function refreshShortlist() {
     if (projectId) {
@@ -228,8 +322,14 @@ export default function Shortlisting() {
 
   async function handleItemStatus(itemId, statusValue) {
     try {
-      await updateShortlistItemStatus(activeSlId, itemId, statusValue)
-      await refreshShortlist()
+      const updated = await updateShortlistItemStatus(activeSlId, itemId, statusValue)
+      // Chỉ thay đúng hàng vừa đổi, KHÔNG nạp lại cả shortlist: giữ nguyên thứ tự
+      // đang hiển thị để bảng không nhảy hàng dưới tay HR.
+      setSlDetail((prev) =>
+        prev
+          ? { ...prev, items: prev.items.map((i) => (i.id === itemId ? updated : i)) }
+          : prev
+      )
     } catch (e) {
       toast(e.message)
     }
@@ -291,32 +391,17 @@ export default function Shortlisting() {
           </div>
           <div className="mt-6 grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
             {projects.map((p) => (
-              <button
+              // Màu emerald + nhãn "Rút gọn" để phân biệt với thẻ y hệt ở Bảng điều
+              // khiển (indigo + "Mở dự án"): cùng một dự án, nhưng bấm vào đây là đi
+              // rút gọn danh sách chứ không phải xem tổng quan.
+              <ProjectCard
                 key={p.id}
-                onClick={() => setProjectId(p.id)}
-                className="group flex flex-col text-left"
-              >
-                <Card className="flex h-full flex-col p-5 transition hover:border-indigo-300 hover:shadow-md">
-                  <div className="flex items-start gap-3">
-                    <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600">
-                      <Briefcase size={18} />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <h3 className="truncate text-base font-semibold text-slate-900">
-                        {p.title}
-                      </h3>
-                    </div>
-                  </div>
-                  <p className="mt-3 line-clamp-2 flex-1 text-sm leading-relaxed text-slate-500">
-                    {p.jdInput || 'Chưa có mô tả.'}
-                  </p>
-                  <div className="mt-4 flex items-center justify-end border-t border-slate-100 pt-3 text-xs">
-                    <span className="inline-flex items-center gap-1 font-medium text-indigo-600 group-hover:gap-1.5">
-                      Rút gọn <ArrowRight size={14} />
-                    </span>
-                  </div>
-                </Card>
-              </button>
+                project={p}
+                accent="emerald"
+                actionLabel="Rút gọn"
+                actionIcon={ListChecks}
+                onOpen={() => setProjectId(p.id)}
+              />
             ))}
           </div>
         </main>
@@ -324,14 +409,6 @@ export default function Shortlisting() {
     )
   }
 
-  const list = rows || []
-  const visible = list.filter((c) =>
-    query.trim()
-      ? (`${c.name || ''} ${(c.skills || []).join(' ')}`)
-          .toLowerCase()
-          .includes(query.trim().toLowerCase())
-      : true
-  )
   const compareList = list.filter((c) => selected.includes(c.id))
   const completedCount = list.filter((c) => c.status === 'COMPLETED').length
   // id ứng viên đã nằm trong shortlist đang chọn (để đổi nút "thêm" thành "đã thêm").
@@ -375,29 +452,20 @@ export default function Shortlisting() {
         {/* Header */}
         <div className="flex items-start justify-between">
           <div className="flex items-center gap-3">
-            {/* Trong lúc phỏng vấn, mũi tên này quay về tab Shortlist (không đổi dự án). */}
-            {view === 'interview' ? (
+            {/* Ẩn khi đang phỏng vấn: lúc đó nút quay lại duy nhất nằm trong khung
+                phỏng vấn (mũi tên này nghĩa là "đổi dự án", dễ gây nhầm). */}
+            {view !== 'interview' && projects.length > 1 && (
               <button
-                onClick={backToShortlist}
+                onClick={() => {
+                  setProjectId(null)
+                  setSelected([])
+                  setCompareMode(false)
+                }}
                 className="rounded-md p-1.5 text-slate-500 hover:bg-slate-100"
-                title="Quay lại danh sách rút gọn"
+                title="Đổi dự án"
               >
                 <ArrowLeft size={18} />
               </button>
-            ) : (
-              projects.length > 1 && (
-                <button
-                  onClick={() => {
-                    setProjectId(null)
-                    setSelected([])
-                    setCompareMode(false)
-                  }}
-                  className="rounded-md p-1.5 text-slate-500 hover:bg-slate-100"
-                  title="Đổi dự án"
-                >
-                  <ArrowLeft size={18} />
-                </button>
-              )
             )}
             <div>
               <h1 className="text-2xl font-bold text-slate-900">
@@ -525,9 +593,20 @@ export default function Shortlisting() {
             />
           </div>
           <div className="h-7 w-px bg-slate-200" />
-          <SecondaryButton onClick={() => toast('Đang sắp theo điểm AI giảm dần.')}>
-            <ArrowUpDown size={15} /> Sort: AI Rank
-          </SecondaryButton>
+          {/* Trước đây đây là nút giả: bấm chỉ hiện toast "đang sắp theo điểm AI",
+              không đổi được gì. Giờ là dropdown thật. */}
+          <Dropdown
+            align="right"
+            className="min-w-[210px] flex-shrink-0"
+            buttonClassName="py-2"
+            value={sortBy}
+            onChange={setSortBy}
+            options={Object.entries(SORT_MODES).map(([value, m]) => ({
+              value,
+              label: m.label,
+              icon: m.icon,
+            }))}
+          />
           <SecondaryButton
             className={
               compareMode ? 'border-indigo-300 bg-indigo-50 text-indigo-600' : ''
@@ -595,7 +674,7 @@ export default function Shortlisting() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {visible.map((c, i) => {
+                    {visible.map((c) => {
                       const meta = STATUS_BADGE[c.status] || STATUS_BADGE.PENDING
                       return (
                         <tr key={c.id} className="hover:bg-slate-50/60">
@@ -609,8 +688,10 @@ export default function Shortlisting() {
                               />
                             </td>
                           )}
+                          {/* Hạng theo điểm AI trên toàn bảng — KHÔNG phải số thứ tự
+                              dòng, nên tìm kiếm/đổi sắp xếp không làm nó nhảy. */}
                           <td className="px-6 py-4 text-sm font-semibold text-slate-400">
-                            #{i + 1}
+                            #{rankById.get(c.id) ?? '—'}
                           </td>
                           <td className="px-6 py-4">
                             <div className="flex items-center gap-3">

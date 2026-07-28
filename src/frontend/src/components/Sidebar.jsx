@@ -3,6 +3,7 @@ import { useState } from 'react'
 import {
   LayoutDashboard,
   Users,
+  Trash2,
   ShieldCheck,
   Settings,
   LogOut,
@@ -17,6 +18,7 @@ import { useAuth } from '../context/AuthContext.jsx'
 const NAV_ITEMS = [
   { to: '/', label: 'Bảng điều khiển', icon: LayoutDashboard, end: true, roles: ['hr_staff'] },
   { to: '/shortlisting', label: 'Danh sách rút gọn', icon: Users, roles: ['hr_staff'] },
+  { to: '/trash', label: 'Thùng rác', icon: Trash2, roles: ['hr_staff'] },
   { to: '/admin', label: 'Cổng quản trị', icon: ShieldCheck, roles: ['admin'] },
 ]
 

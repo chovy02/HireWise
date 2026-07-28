@@ -15,6 +15,7 @@ from app.core.ownership import (
     owned_jds,
 )
 from app.database import get_db
+from app.services import jd_deletion
 from app.services.ai_agent import pipeline
 from app.services.ai_agent.exceptions import AIServiceError
 from app.services.ai_agent.tasks import evaluate_candidate_task
@@ -64,13 +65,17 @@ def list_jds(
 ):
     # CHỈ JD do chính người dùng này tạo. Trước đây trả về cả bảng nên hai tài
     # khoản HR khác nhau thấy y hệt danh sách project của nhau.
+    # owned_jds() tự loại JD đang nằm trong thùng rác.
     jds = (
         owned_jds(db, current_user)
         .order_by(models.JobDescription.created_at.desc())
         .all()
     )
-    # Đếm số ứng viên theo từng JD trong 1 query (tránh N+1) để trả kèm dashboard.
-    # Giới hạn theo đúng các JD vừa lấy, không đếm tràn sang JD người khác.
+    return _jd_list_items(db, jds)
+
+
+def _jd_list_items(db: Session, jds: list[models.JobDescription]) -> list[schemas.JDListItem]:
+    """Gắn số ứng viên cho từng JD bằng 1 query gộp (tránh N+1)."""
     jd_ids = [jd.id for jd in jds]
     counts = (
         dict(
@@ -90,9 +95,27 @@ def list_jds(
             status=jd.status,
             created_at=jd.created_at,
             candidate_count=counts.get(jd.id, 0),
+            deleted_at=jd.deleted_at,
         )
         for jd in jds
     ]
+
+
+# PHẢI khai báo TRƯỚC "/{jd_id}": FastAPI khớp route theo thứ tự đăng ký, để sau thì
+# "trash" bị nuốt vào {jd_id} và lỗi 422 vì không parse được thành UUID.
+@jd_router.get("/trash", response_model=list[schemas.JDListItem])
+def list_trashed_jds(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Danh sách dự án đang nằm trong thùng rác, mới xoá xếp trước."""
+    jds = (
+        owned_jds(db, current_user, include_deleted=True)
+        .filter(models.JobDescription.deleted_at.isnot(None))
+        .order_by(models.JobDescription.deleted_at.desc())
+        .all()
+    )
+    return _jd_list_items(db, jds)
 
 
 @jd_router.get("/{jd_id}", response_model=schemas.JDResponse)
@@ -102,6 +125,96 @@ def get_jd(
     current_user: models.User = Depends(get_current_user),
 ):
     return get_owned_jd(db, jd_id, current_user)
+
+
+@jd_router.delete("/{jd_id}", status_code=status.HTTP_200_OK)
+def delete_jd(
+    jd_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Xoá dự án vào THÙNG RÁC (xoá mềm). Ứng viên và điểm đã chấm giữ nguyên,
+    khôi phục lại là có đủ — không tốn thêm lượt gọi AI nào."""
+    jd = get_owned_jd(db, jd_id, current_user)
+    candidate_count = (
+        db.query(func.count(models.Candidate.id))
+        .filter(models.Candidate.jd_id == jd.id)
+        .scalar()
+    )
+
+    jd_deletion.soft_delete_jd(db, jd)
+
+    write_audit_log(
+        db, user_id=current_user.id, action="DELETE_JD", entity_type="job_description",
+        entity_id=jd.id,
+        old_data={"title": jd.title, "deleted_at": None},
+        new_data={"title": jd.title, "deleted_at": jd.deleted_at.isoformat()},
+    )
+    return {
+        "jd_id": jd.id,
+        "deleted_at": jd.deleted_at,
+        "candidate_count": candidate_count,
+        "detail": "Đã chuyển dự án vào thùng rác.",
+    }
+
+
+@jd_router.post("/{jd_id}/restore", status_code=status.HTTP_200_OK)
+def restore_jd(
+    jd_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Khôi phục dự án từ thùng rác về bảng điều khiển."""
+    jd = get_owned_jd(db, jd_id, current_user, include_deleted=True)
+    if jd.deleted_at is None:
+        raise HTTPException(status_code=400, detail="Dự án này không nằm trong thùng rác.")
+
+    old_deleted_at = jd.deleted_at.isoformat()
+    jd_deletion.restore_jd(db, jd)
+
+    write_audit_log(
+        db, user_id=current_user.id, action="RESTORE_JD", entity_type="job_description",
+        entity_id=jd.id,
+        old_data={"title": jd.title, "deleted_at": old_deleted_at},
+        new_data={"title": jd.title, "deleted_at": None},
+    )
+    return {"jd_id": jd.id, "detail": "Đã khôi phục dự án."}
+
+
+@jd_router.delete("/{jd_id}/permanent", status_code=status.HTTP_200_OK)
+def purge_jd(
+    jd_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """
+    Xoá VĨNH VIỄN dự án cùng toàn bộ ứng viên, điểm đánh giá và file CV gốc.
+    KHÔNG THỂ HOÀN TÁC.
+
+    Chỉ chấp nhận dự án ĐANG Ở TRONG THÙNG RÁC — bắt buộc phải qua hai bước (xoá
+    mềm rồi mới xoá hẳn) nên không thể mất dữ liệu chỉ vì một cú bấm nhầm.
+    """
+    jd = get_owned_jd(db, jd_id, current_user, include_deleted=True)
+    if jd.deleted_at is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Chỉ xoá vĩnh viễn được dự án đang nằm trong thùng rác.",
+        )
+
+    title = jd.title
+    # Ghi nhật ký TRƯỚC khi xoá: sau khi purge thì jd.id không còn tham chiếu được.
+    write_audit_log(
+        db, user_id=current_user.id, action="PURGE_JD", entity_type="job_description",
+        entity_id=jd.id,
+        old_data={"title": title, "deleted_at": jd.deleted_at.isoformat()},
+        new_data=None,
+    )
+    stats = jd_deletion.purge_jd(db, jd)
+
+    return {
+        "detail": f"Đã xoá vĩnh viễn dự án “{title}”.",
+        "deleted": stats,
+    }
 
 
 @jd_router.post(
@@ -141,6 +254,19 @@ async def upload_cvs(
     failed = sum(1 for r in staged if r["status"] == "failed")
     duplicated = sum(1 for r in staged if r["status"] == "duplicated")
 
+    # Lưu lượt tải này lại. Không lưu thì sau khi F5, giao diện không còn cách nào
+    # biết các ứng viên đã có đến từ file nào — ô "Lượt tải lên" luôn hiện 0.
+    db.add(models.UploadBatch(
+        jd_id=jd.id,
+        filename=file.filename,
+        total=len(staged),
+        staged=processing,
+        duplicated=duplicated,
+        failed=failed,
+        uploaded_by=current_user.id,
+    ))
+    db.commit()
+
     return schemas.UploadBatchResponse(
         jd_id=jd.id,
         total=len(staged),
@@ -149,6 +275,22 @@ async def upload_cvs(
         failed=failed,
         duplicated=duplicated,
         results=staged,
+    )
+
+
+@jd_router.get("/{jd_id}/uploads", response_model=list[schemas.UploadHistoryItem])
+def list_uploads(
+    jd_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Lịch sử các lượt tải ZIP CV của vị trí này, mới nhất xếp trước."""
+    jd = get_owned_jd(db, jd_id, current_user)
+    return (
+        db.query(models.UploadBatch)
+        .filter(models.UploadBatch.jd_id == jd.id)
+        .order_by(models.UploadBatch.created_at.desc())
+        .all()
     )
 
 

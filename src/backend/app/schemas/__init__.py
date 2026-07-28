@@ -23,6 +23,7 @@ from .candidate import (
     CandidateDetailResponse,
     UploadResultItem,
     UploadBatchResponse,
+    UploadHistoryItem,
     EvaluationOverrideRequest,
 )
 

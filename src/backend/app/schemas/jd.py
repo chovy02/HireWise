@@ -31,6 +31,8 @@ class JDListItem(BaseModel):
     status: str
     created_at: datetime
     candidate_count: int = 0   # số ứng viên thật của JD (để hiển thị trên dashboard)
+    # Chỉ có giá trị với JD nằm trong thùng rác; trang thùng rác hiển thị "đã xoá lúc…".
+    deleted_at: datetime | None = None
 
     class Config:
         from_attributes = True

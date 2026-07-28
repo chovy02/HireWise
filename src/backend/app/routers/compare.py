@@ -29,6 +29,9 @@ def compare_candidates(
         .filter(
             models.Candidate.id.in_(payload.candidate_ids),
             models.JobDescription.created_by == current_user.id,
+            # Dự án đã vào thùng rác thì ứng viên của nó cũng không so sánh được nữa,
+            # đồng bộ với get_owned_candidate().
+            models.JobDescription.deleted_at.is_(None),
         )
         .all()
     )

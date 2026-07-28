@@ -8,6 +8,10 @@ import {
 } from 'lucide-react'
 import { Badge } from './ui.jsx'
 import { getCandidateInterview } from '../api/interviews.js'
+import {
+  numberInterviewQuestions,
+  sortInterviewQuestions,
+} from '../utils/interviewQuestions.js'
 
 const STATUS_META = {
   pending: { variant: 'processing', label: 'Chưa chấm câu nào' },
@@ -62,9 +66,7 @@ export default function InterviewSummary({ candidateId }) {
     )
   }
 
-  const questions = [...(interview.questions || [])].sort(
-    (a, b) => a.order_index - b.order_index
-  )
+  const questions = sortInterviewQuestions(interview.questions)
   const scored = questions.filter((q) => q.score != null)
   const avg = scored.length
     ? Math.round((scored.reduce((s, q) => s + q.score, 0) / scored.length) * 10) / 10
@@ -109,30 +111,38 @@ export default function InterviewSummary({ candidateId }) {
         <p className="text-sm text-slate-400">Buổi phỏng vấn chưa có câu hỏi nào.</p>
       ) : (
         <ol className="space-y-2.5">
-          {questions.map((q, idx) => {
-            const isFollowUp = q.category?.toLowerCase().includes('follow')
+          {numberInterviewQuestions(questions).map(({ question: q, label, isFollowUp }) => {
             return (
               <li
                 key={q.id}
                 className={`rounded-xl border p-3.5 ${
                   isFollowUp
-                    ? 'border-indigo-200 bg-indigo-50/40'
+                    ? 'ml-8 border-indigo-200 border-l-4 border-l-indigo-400 bg-indigo-50/50'
                     : 'border-slate-200 bg-white'
                 }`}
               >
                 <div className="flex items-start gap-2.5">
-                  <span className="mt-0.5 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-slate-100 text-[11px] font-bold text-slate-600">
-                    {idx + 1}
+                  <span
+                    className={`mt-0.5 flex h-5 flex-shrink-0 items-center justify-center rounded-full text-[11px] font-bold ${
+                      isFollowUp
+                        ? 'w-8 bg-indigo-100 text-indigo-700'
+                        : 'w-5 bg-slate-100 text-slate-600'
+                    }`}
+                  >
+                    {label}
                   </span>
                   <div className="min-w-0 flex-1">
                     <div className="mb-1 flex flex-wrap items-center gap-2">
-                      {isFollowUp && (
-                        <CornerDownRight size={13} className="text-indigo-500" />
-                      )}
-                      {q.category && (
-                        <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                          {q.category}
-                        </span>
+                      {isFollowUp ? (
+                        <Badge variant="ai" upper={false}>
+                          <CornerDownRight size={12} /> Câu đào sâu
+                        </Badge>
+                      ) : (
+                        q.category && (
+                          <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                            {q.category}
+                          </span>
+                        )
                       )}
                       <span className={`text-sm font-bold ${scoreColor(q.score)}`}>
                         {q.score != null ? `${q.score}/10` : 'Chưa chấm'}
