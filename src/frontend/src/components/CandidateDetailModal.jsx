@@ -20,7 +20,6 @@ import { Tag, Badge, ProgressBar, PrimaryButton, SecondaryButton } from './ui.js
 import { useToast } from '../context/ToastContext.jsx'
 import { formatName } from '../utils/formatName.js'
 import { humanizeExtractionError } from '../utils/errorMessage.js'
-import InterviewModal from './InterviewModal.jsx'
 import {
   getCandidate,
   overrideEvaluation,
@@ -95,11 +94,14 @@ function CvPdf({ candidateId }) {
 
 // Modal chi tiết ứng viên — dữ liệu THẬT từ backend. Cột phải nhúng file PDF gốc;
 // bằng chứng điểm mạnh/yếu hiển thị nguyên văn (trích dẫn) ở cột trái.
+// - onInterview: chỉ truyền khi ứng viên ĐÃ nằm trong shortlist. Không có prop này
+//   thì nút "Phỏng vấn" không hiện — phỏng vấn chỉ mở được từ tab Shortlist.
 export default function CandidateDetailModal({
   candidateId,
   onClose,
   onOverridden,
   onRetried,
+  onInterview,
 }) {
   const toast = useToast()
   const [detail, setDetail] = useState(null)
@@ -109,7 +111,6 @@ export default function CandidateDetailModal({
   const [reason, setReason] = useState('')
   const [saving, setSaving] = useState(false)
   const [retrying, setRetrying] = useState(false)
-  const [showInterview, setShowInterview] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -244,10 +245,10 @@ export default function CandidateDetailModal({
             </div>
           </div>
           <div className="flex items-center gap-2">
-            {evaluation && (
+            {evaluation && onInterview && (
               <SecondaryButton
                 className="px-3 py-2"
-                onClick={() => setShowInterview(true)}
+                onClick={() => onInterview(detail)}
                 title="Phỏng vấn ứng viên (AI)"
               >
                 <MessageSquareText size={16} /> Phỏng vấn
@@ -589,14 +590,6 @@ export default function CandidateDetailModal({
         </div>
       </div>
 
-      {/* Phỏng vấn AI cho ứng viên này */}
-      {showInterview && (
-        <InterviewModal
-          candidateId={candidateId}
-          candidateName={detail?.name}
-          onClose={() => setShowInterview(false)}
-        />
-      )}
     </div>
   )
 }

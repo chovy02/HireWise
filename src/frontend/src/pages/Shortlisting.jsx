@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import {
   Search,
@@ -25,6 +25,7 @@ import {
   Loader2,
   Sparkles,
   Award,
+  ChevronRight,
 } from 'lucide-react'
 import Topbar from '../components/Topbar.jsx'
 import {
@@ -38,6 +39,7 @@ import {
 } from '../components/ui.jsx'
 import CandidateDetailModal from '../components/CandidateDetailModal.jsx'
 import { InterviewPanel } from '../components/InterviewModal.jsx'
+import InterviewSummary from '../components/InterviewSummary.jsx'
 import Markdown from '../components/Markdown.jsx'
 import { formatName } from '../utils/formatName.js'
 import { useToast } from '../context/ToastContext.jsx'
@@ -58,6 +60,13 @@ const STATUS_BADGE = {
   COMPLETED: { variant: 'completed', label: 'Hoàn tất' },
   PENDING: { variant: 'processing', label: 'Đang xử lý' },
   FAILED: { variant: 'error', label: 'Lỗi' },
+}
+
+// Nhãn trạng thái buổi phỏng vấn của ứng viên trong shortlist.
+const INTERVIEW_BADGE = {
+  pending: { variant: 'neutral', label: 'Đã có câu hỏi' },
+  in_progress: { variant: 'ai', label: 'Đang phỏng vấn' },
+  completed: { variant: 'completed', label: 'Đã phỏng vấn' },
 }
 
 // COMPLETED (có điểm) xếp trước theo điểm giảm dần; PENDING/FAILED (không điểm) xếp cuối.
@@ -85,6 +94,7 @@ export default function Shortlisting() {
   const [query, setQuery] = useState('')
   const [openId, setOpenId] = useState(null)
   const [interviewFor, setInterviewFor] = useState(null) // { id, name } ứng viên đang phỏng vấn
+  const [openSummaryId, setOpenSummaryId] = useState(null) // item shortlist đang mở tóm tắt phỏng vấn
   const [compareMode, setCompareMode] = useState(false)
   const [selected, setSelected] = useState([])
   const [showCompare, setShowCompare] = useState(false)
@@ -331,10 +341,18 @@ export default function Shortlisting() {
     setSelected((l) => (l.includes(id) ? l.filter((x) => x !== id) : [...l, id]))
   }
 
-  // Mở phỏng vấn: chọn ứng viên rồi chuyển sang tab "Phỏng vấn" (thay cho popup cũ).
+  // Mở phỏng vấn: chỉ gọi được từ tab Shortlist (ứng viên phải đã được rút gọn).
   function openInterview(c) {
     setInterviewFor({ id: c.id, name: c.name })
     setView('interview')
+  }
+
+  // Thoát phỏng vấn -> luôn trả HR về tab Shortlist, đồng thời nạp lại shortlist để
+  // trạng thái phỏng vấn (interview_status) hiện đúng ngay.
+  function backToShortlist() {
+    setView('shortlist')
+    setInterviewFor(null)
+    refreshShortlist()
   }
 
   // Sau khi override: cập nhật điểm + cờ trong row rồi xếp lại hạng, và làm mới
@@ -357,18 +375,29 @@ export default function Shortlisting() {
         {/* Header */}
         <div className="flex items-start justify-between">
           <div className="flex items-center gap-3">
-            {projects.length > 1 && (
+            {/* Trong lúc phỏng vấn, mũi tên này quay về tab Shortlist (không đổi dự án). */}
+            {view === 'interview' ? (
               <button
-                onClick={() => {
-                  setProjectId(null)
-                  setSelected([])
-                  setCompareMode(false)
-                }}
+                onClick={backToShortlist}
                 className="rounded-md p-1.5 text-slate-500 hover:bg-slate-100"
-                title="Đổi dự án"
+                title="Quay lại danh sách rút gọn"
               >
                 <ArrowLeft size={18} />
               </button>
+            ) : (
+              projects.length > 1 && (
+                <button
+                  onClick={() => {
+                    setProjectId(null)
+                    setSelected([])
+                    setCompareMode(false)
+                  }}
+                  className="rounded-md p-1.5 text-slate-500 hover:bg-slate-100"
+                  title="Đổi dự án"
+                >
+                  <ArrowLeft size={18} />
+                </button>
+              )
             )}
             <div>
               <h1 className="text-2xl font-bold text-slate-900">
@@ -384,28 +413,30 @@ export default function Shortlisting() {
             </div>
           </div>
 
-          {/* Chuyển chế độ xem bằng dropdown (thay cho thanh tab cũ) */}
-          <div className="flex items-center gap-2.5">
-            <span className="hidden text-sm font-medium text-slate-500 sm:inline">
-              Chế độ xem
-            </span>
-            <Dropdown
-              align="right"
-              className="min-w-[190px]"
-              value={view}
-              onChange={setView}
-              options={[
-                { value: 'leaderboard', label: 'Leaderboard', icon: Trophy },
-                {
-                  value: 'shortlist',
-                  label: 'Shortlist',
-                  icon: ListChecks,
-                  badge: slDetail?.items ? slDetail.items.length : undefined,
-                },
-                { value: 'interview', label: 'Phỏng vấn', icon: MessageSquareText },
-              ]}
-            />
-          </div>
+          {/* Chuyển chế độ xem bằng dropdown. Ẩn khi đang phỏng vấn: lúc đó đường ra
+              duy nhất là nút quay lại (mũi tên) -> tránh nhảy tab lung tung. */}
+          {view !== 'interview' && (
+            <div className="flex items-center gap-2.5">
+              <span className="hidden text-sm font-medium text-slate-500 sm:inline">
+                Chế độ xem
+              </span>
+              <Dropdown
+                align="right"
+                className="min-w-[190px]"
+                value={view}
+                onChange={setView}
+                options={[
+                  { value: 'leaderboard', label: 'Leaderboard', icon: Trophy },
+                  {
+                    value: 'shortlist',
+                    label: 'Shortlist',
+                    icon: ListChecks,
+                    badge: slDetail?.items ? slDetail.items.length : undefined,
+                  },
+                ]}
+              />
+            </div>
+          )}
         </div>
 
         {/* Shortlist selector (chỉ hiện ở Leaderboard & Shortlist) */}
@@ -653,18 +684,8 @@ export default function Shortlisting() {
                                   <ListPlus size={16} />
                                 )}
                               </button>
-                              <button
-                                onClick={() => openInterview(c)}
-                                disabled={c.status !== 'COMPLETED'}
-                                className="rounded-lg border border-slate-200 bg-white p-2 text-slate-600 transition hover:bg-slate-50 disabled:opacity-50 disabled:hover:bg-white"
-                                title={
-                                  c.status === 'COMPLETED'
-                                    ? 'Phỏng vấn ứng viên (AI)'
-                                    : 'Ứng viên cần được chấm điểm trước khi phỏng vấn'
-                                }
-                              >
-                                <MessageSquareText size={16} />
-                              </button>
+                              {/* Không phỏng vấn từ leaderboard: chỉ ứng viên đã vào
+                                  shortlist mới được phỏng vấn (xem tab Shortlist). */}
                               <button
                                 onClick={() => setOpenId(c.id)}
                                 className="rounded-lg border border-indigo-200 bg-indigo-50 p-2 text-indigo-600 transition hover:bg-indigo-100"
@@ -724,6 +745,7 @@ export default function Shortlisting() {
                   <table className="w-full min-w-[760px] text-left">
                     <thead>
                       <tr className="border-b border-slate-200 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                        <th className="w-10 py-3 pl-4 pr-0" />
                         <th className="px-6 py-3">Hạng</th>
                         <th className="px-6 py-3">Ứng viên</th>
                         <th className="px-6 py-3 text-center">Độ phù hợp</th>
@@ -734,8 +756,37 @@ export default function Shortlisting() {
                     <tbody className="divide-y divide-slate-100">
                       {slDetail.items.map((it, i) => {
                         const c = it.candidate
+                        const interviewMeta = INTERVIEW_BADGE[c.interview_status]
+                        const summaryOpen = openSummaryId === it.id
                         return (
-                          <tr key={it.id} className="hover:bg-slate-50/60">
+                          <Fragment key={it.id}>
+                          <tr className="hover:bg-slate-50/60">
+                            {/* Mũi tên mở tóm tắt phỏng vấn (chỉ ứng viên đã phỏng vấn). */}
+                            <td className="py-4 pl-4 pr-0">
+                              {interviewMeta ? (
+                                <button
+                                  onClick={() =>
+                                    setOpenSummaryId(summaryOpen ? null : it.id)
+                                  }
+                                  className="rounded-md p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
+                                  title={
+                                    summaryOpen
+                                      ? 'Ẩn tóm tắt phỏng vấn'
+                                      : 'Xem tóm tắt phỏng vấn'
+                                  }
+                                  aria-expanded={summaryOpen}
+                                >
+                                  <ChevronRight
+                                    size={17}
+                                    className={`transition-transform duration-200 ${
+                                      summaryOpen ? 'rotate-90' : ''
+                                    }`}
+                                  />
+                                </button>
+                              ) : (
+                                <span className="block w-[25px]" />
+                              )}
+                            </td>
                             <td className="px-6 py-4 text-sm font-semibold text-slate-400">
                               #{i + 1}
                             </td>
@@ -745,9 +796,19 @@ export default function Shortlisting() {
                                   {(formatName(c.name) || '?')[0]}
                                 </div>
                                 <div className="min-w-0">
-                                  <span className="block truncate text-sm font-semibold text-slate-900">
-                                    {formatName(c.name) || 'Đang trích xuất…'}
-                                  </span>
+                                  <div className="flex items-center gap-2">
+                                    <span className="truncate text-sm font-semibold text-slate-900">
+                                      {formatName(c.name) || 'Đang trích xuất…'}
+                                    </span>
+                                    {interviewMeta && (
+                                      <Badge
+                                        variant={interviewMeta.variant}
+                                        upper={false}
+                                      >
+                                        {interviewMeta.label}
+                                      </Badge>
+                                    )}
+                                  </div>
                                   <p className="truncate text-xs text-slate-400">
                                     {c.email || '—'}
                                   </p>
@@ -807,9 +868,11 @@ export default function Shortlisting() {
                                   disabled={c.status !== 'COMPLETED'}
                                   className="rounded-lg border border-slate-200 bg-white p-2 text-slate-600 transition hover:bg-slate-50 disabled:opacity-50 disabled:hover:bg-white"
                                   title={
-                                    c.status === 'COMPLETED'
-                                      ? 'Phỏng vấn ứng viên (AI)'
-                                      : 'Ứng viên cần được chấm điểm trước khi phỏng vấn'
+                                    c.status !== 'COMPLETED'
+                                      ? 'Ứng viên cần được chấm điểm trước khi phỏng vấn'
+                                      : interviewMeta
+                                        ? 'Mở lại buổi phỏng vấn (AI)'
+                                        : 'Phỏng vấn ứng viên (AI)'
                                   }
                                 >
                                   <MessageSquareText size={16} />
@@ -831,6 +894,17 @@ export default function Shortlisting() {
                               </div>
                             </td>
                           </tr>
+
+                          {/* Hàng mở rộng: tóm tắt buổi phỏng vấn (đánh giá của AI,
+                              điểm từng câu hỏi) — chỉ nạp khi HR bấm mũi tên. */}
+                          {summaryOpen && (
+                            <tr className="bg-slate-50/70">
+                              <td colSpan={6} className="px-6 py-4">
+                                <InterviewSummary candidateId={c.id} />
+                              </td>
+                            </tr>
+                          )}
+                          </Fragment>
                         )
                       })}
                     </tbody>
@@ -858,6 +932,7 @@ export default function Shortlisting() {
                 key={interviewFor.id}
                 candidateId={interviewFor.id}
                 candidateName={interviewFor.name}
+                onBack={backToShortlist}
               />
             </Card>
           ) : (
@@ -869,10 +944,13 @@ export default function Shortlisting() {
                 Chưa chọn ứng viên
               </h2>
               <p className="mt-1.5 max-w-md text-sm text-slate-500">
-                Sang tab Leaderboard hoặc Shortlist và bấm nút phỏng vấn{' '}
+                Sang tab Shortlist và bấm nút phỏng vấn{' '}
                 <MessageSquareText size={14} className="inline align-text-bottom" /> ở
-                một ứng viên đã được chấm điểm để bắt đầu buổi phỏng vấn.
+                một ứng viên trong danh sách rút gọn để bắt đầu buổi phỏng vấn.
               </p>
+              <SecondaryButton className="mt-5" onClick={backToShortlist}>
+                <ArrowLeft size={15} /> Về tab Shortlist
+              </SecondaryButton>
             </Card>
           )
         )}
@@ -884,6 +962,16 @@ export default function Shortlisting() {
           candidateId={openId}
           onClose={() => setOpenId(null)}
           onOverridden={handleOverridden}
+          // Nút "Phỏng vấn" trong popup chỉ hiện khi ứng viên đã ở trong shortlist
+          // đang chọn — mở ra là chuyển hẳn sang màn hình phỏng vấn.
+          onInterview={
+            shortlistedIds.has(openId)
+              ? (detail) => {
+                  setOpenId(null)
+                  openInterview({ id: openId, name: detail?.name })
+                }
+              : undefined
+          }
         />
       )}
 
