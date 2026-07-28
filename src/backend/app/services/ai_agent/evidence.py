@@ -1,6 +1,13 @@
 import json
 
+from app.services.ai_agent.exceptions import LLMBudgetExhausted
 from app.services.ai_agent.gemini_client import generate_text
+from app.services.ai_agent.prompt_utils import clean_json_response
+
+# KHÔNG CÒN NẰM TRONG LUỒNG UPLOAD. Việc tìm bằng chứng đã được gộp vào scorer.py
+# để bớt 1 lượt gọi API và bớt 1 lần gửi full text CV cho mỗi ứng viên — đó là thay
+# đổi then chốt giúp upload ZIP nhiều CV không đụng rate limit của Groq free tier.
+# Giữ lại module này cho các script/test gọi trực tiếp.
 
 EVIDENCE_MODEL = "gemini-2.5-flash"
 
@@ -32,16 +39,6 @@ Quy tắc:
 - Giữ nguyên key là tên nhận định gốc."""
 
 
-def _clean_json_response(text: str) -> str:
-    text = text.strip()
-    if text.startswith("```"):
-        text = text.split("```")[1]
-        if text.startswith("json"):
-            text = text[4:]
-        text = text.strip()
-    return text
-
-
 def generate_evidence(cv_text: str, score_result: dict) -> dict:
     if not cv_text or not cv_text.strip():
         return {"evidence_error": "CV rỗng, không có text để tìm bằng chứng."}
@@ -57,8 +54,12 @@ def generate_evidence(cv_text: str, score_result: dict) -> dict:
         ).replace(
             "{weaknesses}", json.dumps(weaknesses, ensure_ascii=False)
         )
-        response_text = _clean_json_response(generate_text(EVIDENCE_MODEL, prompt, agent_name="evidence"))
+        response_text = clean_json_response(
+            generate_text(EVIDENCE_MODEL, prompt, agent_name="evidence")
+        )
         return json.loads(response_text)
+    except LLMBudgetExhausted:
+        raise
     except json.JSONDecodeError as e:
         return {"evidence_error": f"Không parse được JSON từ response: {e}"}
     except Exception as e:

@@ -1,6 +1,8 @@
 import json
 
+from app.services.ai_agent.exceptions import LLMBudgetExhausted
 from app.services.ai_agent.gemini_client import generate_text
+from app.services.ai_agent.prompt_utils import clean_json_response
 
 PARSER_MODEL = "gemini-2.5-flash"
 
@@ -84,23 +86,25 @@ Nội dung CV:
 ---"""
 
 
-def _clean_json_response(text: str) -> str:
-    text = text.strip()
-    if text.startswith("```"):
-        text = text.split("```")[1]
-        if text.startswith("json"):
-            text = text[4:]
-        text = text.strip()
-    return text
-
-
 def parse_cv(raw_text: str) -> dict:
+    """
+    Trích thông tin có cấu trúc từ text CV.
+
+    Raises:
+        LLMBudgetExhausted: hết quota Groq. CỐ Ý ném ra thay vì trả `parse_error` —
+        CV hoàn toàn bình thường, chỉ là chưa tới lượt gọi API, nên phải để Celery
+        hẹn giờ chấm lại chứ không đánh CV thành FAILED.
+    """
     if not raw_text or not raw_text.strip():
         return {"parse_error": "CV rỗng, không có text để parse."}
     try:
         prompt = PARSE_PROMPT.replace("{cv_text}", raw_text)
-        response_text = _clean_json_response(generate_text(PARSER_MODEL, prompt, agent_name="cv_parser"))
+        response_text = clean_json_response(
+            generate_text(PARSER_MODEL, prompt, agent_name="cv_parser")
+        )
         return json.loads(response_text)
+    except LLMBudgetExhausted:
+        raise
     except json.JSONDecodeError as e:
         return {"parse_error": f"Không parse được JSON từ response: {e}"}
     except Exception as e:
