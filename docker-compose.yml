@@ -48,6 +48,9 @@ services:
       - CV_STORAGE_DIR=/data/cv_storage
       # Agent loop của web gọi tool QUA MCP server (service `mcp` cùng network).
       - MCP_SERVER_URL=http://mcp:8001/sse
+      # Ngân sách token Groq đếm CHUNG cho mọi container, nên api/worker/mcp phải
+      # trỏ về cùng một Redis — mỗi tiến trình đếm riêng thì cộng lại vẫn vượt trần.
+      - RATE_LIMIT_REDIS_URL=redis://redis:6379/2
 
   redis:
     image: redis:7-alpine
@@ -61,7 +64,11 @@ services:
     container_name: hirewise_worker
     restart: always
     # Worker Celery: lấy task từ Redis và chấm điểm CV nền. Dùng chung image với api.
-    command: celery -A app.core.celery_app worker --loglevel=info --concurrency=2
+    #
+    # concurrency=4 khớp với số "ngăn" ngân sách độc lập: 2 tài khoản Groq × 2 model.
+    # Không sợ bắn dồn dập như trước vì rate_limiter (Redis) mới là thứ quyết định khi
+    # nào được gọi API — worker nào chưa tới lượt thì nằm chờ, không đâm vào 429.
+    command: celery -A app.core.celery_app worker --loglevel=info --concurrency=4
     depends_on:
       db:
         condition: service_healthy
@@ -71,6 +78,9 @@ services:
       - ./src/backend:/app
     env_file:
       - .env
+    environment:
+      # Sổ sách rate limit để ở DB 2, tách khỏi broker (DB 0) và result backend (DB 1).
+      - RATE_LIMIT_REDIS_URL=redis://redis:6379/2
 
   mcp:
     # DÙNG CHUNG image backend (đã có sẵn mcp + mọi deps). Mount code backend vào
@@ -81,6 +91,7 @@ services:
     command: python /mcpsrv/server.py
     environment:
       - PYTHONPATH=/app
+      - RATE_LIMIT_REDIS_URL=redis://redis:6379/2
     env_file:
       - .env
     depends_on:

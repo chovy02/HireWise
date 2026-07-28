@@ -7,9 +7,9 @@ from app import models
 from app.services.cv_processing.extractor import extract_text_from_pdf
 from app.services.cv_processing.storage import save_cv_pdf
 from app.services.data_ingestion.ingestion import ingest_zip
+from app.services.ai_agent.exceptions import LLMBudgetExhausted
 from app.services.ai_agent.parser import parse_cv
 from app.services.ai_agent.scorer import score_cv
-from app.services.ai_agent.evidence import generate_evidence
 from app.services.ai_agent.jd_processor import process_jd
 
 
@@ -51,8 +51,8 @@ def process_cv_from_text(raw_text: str, jd_requirements: dict) -> dict:
         result["error"] = parsed_cv["parse_error"]
         return result
 
-    # Bước 2: Chấm điểm
-    score_result = score_cv(parsed_cv, jd_requirements)
+    # Bước 2: Chấm điểm + sinh bằng chứng (gộp chung 1 lượt gọi AI để tiết kiệm quota)
+    score_result = score_cv(parsed_cv, jd_requirements, raw_text)
     if score_result.get("score_error"):
         result["status"] = "failed"
         result["error"] = score_result["score_error"]
@@ -63,9 +63,7 @@ def process_cv_from_text(raw_text: str, jd_requirements: dict) -> dict:
     result["strengths"] = score_result.get("strengths")
     result["weaknesses"] = score_result.get("weaknesses")
     result["score_breakdown"] = score_result.get("score_breakdown")
-
-    # Bước 3: Sinh bằng chứng (lỗi evidence không làm mất điểm số)
-    result["evidence"] = generate_evidence(raw_text, score_result)
+    result["evidence"] = score_result.get("evidence") or {}
 
     result["status"] = "completed"
     return result
@@ -343,8 +341,9 @@ def evaluate_candidate(db: Session, candidate_id) -> dict:
                 source="from_cv",
             ))
 
-        # Chấm điểm (UC U003 - Score Suitability)
-        score_result = score_cv(parsed, jd.requirements)
+        # Chấm điểm + sinh bằng chứng trong CÙNG một lượt gọi AI
+        # (UC U003 - Score Suitability & Generate Evaluation Evidence).
+        score_result = score_cv(parsed, jd.requirements, candidate.raw_text)
         if score_result.get("score_error"):
             candidate.status = "FAILED"
             candidate.error_message = score_result["score_error"]
@@ -353,8 +352,7 @@ def evaluate_candidate(db: Session, candidate_id) -> dict:
             item["error"] = score_result["score_error"]
             return item
 
-        # Sinh bằng chứng (UC U003 - Generate Evaluation Evidence)
-        evidence = generate_evidence(candidate.raw_text, score_result)
+        evidence = score_result.get("evidence") or {}
 
         evaluation = models.Evaluation(
             cv_id=candidate.id,
@@ -373,6 +371,17 @@ def evaluate_candidate(db: Session, candidate_id) -> dict:
         item["status"] = "completed"
         item["score"] = evaluation.score
         return item
+
+    except LLMBudgetExhausted:
+        # HẾT QUOTA ≠ CV LỖI. CV hoàn toàn bình thường, chỉ là chưa tới lượt gọi API.
+        # Đánh FAILED ở đây chính là lý do upload 15 CV thì 5-6 CV báo lỗi và HR phải
+        # bấm "Thử lại" từng cái. Trả về PENDING rồi ném lên cho Celery hẹn giờ chạy
+        # lại khi cửa sổ rate limit mở ra.
+        db.rollback()
+        candidate.status = "PENDING"
+        candidate.error_message = None
+        db.commit()
+        raise
 
     except Exception as e:
         db.rollback()
