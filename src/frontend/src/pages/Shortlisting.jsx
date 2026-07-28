@@ -228,8 +228,14 @@ export default function Shortlisting() {
 
   async function handleItemStatus(itemId, statusValue) {
     try {
-      await updateShortlistItemStatus(activeSlId, itemId, statusValue)
-      await refreshShortlist()
+      const updated = await updateShortlistItemStatus(activeSlId, itemId, statusValue)
+      // Chỉ thay đúng hàng vừa đổi, KHÔNG nạp lại cả shortlist: giữ nguyên thứ tự
+      // đang hiển thị để bảng không nhảy hàng dưới tay HR.
+      setSlDetail((prev) =>
+        prev
+          ? { ...prev, items: prev.items.map((i) => (i.id === itemId ? updated : i)) }
+          : prev
+      )
     } catch (e) {
       toast(e.message)
     }
@@ -375,29 +381,20 @@ export default function Shortlisting() {
         {/* Header */}
         <div className="flex items-start justify-between">
           <div className="flex items-center gap-3">
-            {/* Trong lúc phỏng vấn, mũi tên này quay về tab Shortlist (không đổi dự án). */}
-            {view === 'interview' ? (
+            {/* Ẩn khi đang phỏng vấn: lúc đó nút quay lại duy nhất nằm trong khung
+                phỏng vấn (mũi tên này nghĩa là "đổi dự án", dễ gây nhầm). */}
+            {view !== 'interview' && projects.length > 1 && (
               <button
-                onClick={backToShortlist}
+                onClick={() => {
+                  setProjectId(null)
+                  setSelected([])
+                  setCompareMode(false)
+                }}
                 className="rounded-md p-1.5 text-slate-500 hover:bg-slate-100"
-                title="Quay lại danh sách rút gọn"
+                title="Đổi dự án"
               >
                 <ArrowLeft size={18} />
               </button>
-            ) : (
-              projects.length > 1 && (
-                <button
-                  onClick={() => {
-                    setProjectId(null)
-                    setSelected([])
-                    setCompareMode(false)
-                  }}
-                  className="rounded-md p-1.5 text-slate-500 hover:bg-slate-100"
-                  title="Đổi dự án"
-                >
-                  <ArrowLeft size={18} />
-                </button>
-              )
             )}
             <div>
               <h1 className="text-2xl font-bold text-slate-900">

@@ -15,6 +15,10 @@ import { Badge, PrimaryButton, SecondaryButton } from './ui.jsx'
 import { useToast } from '../context/ToastContext.jsx'
 import { formatName } from '../utils/formatName.js'
 import {
+  numberInterviewQuestions,
+  sortInterviewQuestions,
+} from '../utils/interviewQuestions.js'
+import {
   getCandidateInterview,
   generateInterview,
   evaluateAnswer,
@@ -35,9 +39,7 @@ function scoreColor(score) {
   return 'text-red-500'
 }
 
-function sortQuestions(list) {
-  return [...(list || [])].sort((a, b) => a.order_index - b.order_index)
-}
+const sortQuestions = sortInterviewQuestions
 
 // Nội dung phỏng vấn (dùng chung cho cả popup lẫn tab trong Shortlisting).
 // Luồng: AI sinh câu hỏi -> HR gõ tóm tắt câu trả lời -> AI chấm + đào sâu ->
@@ -258,15 +260,18 @@ export function InterviewPanel({ candidateId, candidateName, onClose, onBack }) 
               </p>
             )}
 
-            {interview.questions.map((q, idx) => (
-              <QuestionCard
-                key={q.id}
-                index={idx + 1}
-                question={q}
-                locked={completed}
-                onEvaluated={applyEvaluation}
-              />
-            ))}
+            {numberInterviewQuestions(interview.questions).map(
+              ({ question, label, isFollowUp }) => (
+                <QuestionCard
+                  key={question.id}
+                  label={label}
+                  isFollowUp={isFollowUp}
+                  question={question}
+                  locked={completed}
+                  onEvaluated={applyEvaluation}
+                />
+              )
+            )}
           </div>
         )}
       </div>
@@ -315,13 +320,13 @@ export default function InterviewModal({ candidateId, candidateName, onClose }) 
 }
 
 // 1 câu hỏi: ô nhập câu trả lời, nút chấm điểm, và nhận xét AI sau khi chấm.
-function QuestionCard({ index, question, locked, onEvaluated }) {
+// Câu đào sâu (follow-up) được thụt vào + viền trái đậm để tách khỏi câu chính.
+function QuestionCard({ label, isFollowUp, question, locked, onEvaluated }) {
   const toast = useToast()
   const [draft, setDraft] = useState(question.answer_text || '')
   const [evaluating, setEvaluating] = useState(false)
 
   const answered = !!question.answer_text
-  const isFollowUp = question.category?.toLowerCase().includes('follow')
 
   async function handleEvaluate() {
     if (!draft.trim()) {
@@ -343,19 +348,29 @@ function QuestionCard({ index, question, locked, onEvaluated }) {
   return (
     <div
       className={`rounded-xl border p-4 ${
-        isFollowUp ? 'border-indigo-200 bg-indigo-50/40' : 'border-slate-200'
+        isFollowUp
+          ? 'ml-8 border-indigo-200 border-l-4 border-l-indigo-400 bg-indigo-50/50'
+          : 'border-slate-200'
       }`}
     >
       {/* Đề bài */}
       <div className="flex items-start gap-3">
-        <div className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-slate-100 text-xs font-bold text-slate-600">
-          {index}
+        <div
+          className={`flex h-6 flex-shrink-0 items-center justify-center rounded-full text-xs font-bold ${
+            isFollowUp
+              ? 'w-9 bg-indigo-100 text-indigo-700'
+              : 'w-6 bg-slate-100 text-slate-600'
+          }`}
+        >
+          {label}
         </div>
         <div className="min-w-0 flex-1">
           {(isFollowUp || question.score != null) && (
             <div className="mb-1 flex flex-wrap items-center gap-2">
               {isFollowUp && (
-                <CornerDownRight size={14} className="text-indigo-500" />
+                <Badge variant="ai" upper={false}>
+                  <CornerDownRight size={12} /> Câu đào sâu
+                </Badge>
               )}
               {question.score != null && (
                 <span className={`text-sm font-bold ${scoreColor(question.score)}`}>
@@ -368,8 +383,8 @@ function QuestionCard({ index, question, locked, onEvaluated }) {
         </div>
       </div>
 
-      {/* Ô nhập câu trả lời */}
-      <div className="mt-3 pl-9">
+      {/* Ô nhập câu trả lời (thẳng hàng với đề bài, chip số câu đào sâu rộng hơn) */}
+      <div className={`mt-3 ${isFollowUp ? 'pl-12' : 'pl-9'}`}>
         <textarea
           value={draft}
           onChange={(e) => setDraft(e.target.value)}

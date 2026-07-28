@@ -182,7 +182,15 @@ class Shortlist(Base):
 
     jd = relationship("JobDescription", back_populates="shortlists")
     creator = relationship("User", back_populates="shortlists")
-    items = relationship("ShortlistItem", back_populates="shortlist", cascade="all, delete-orphan")
+    # order_by là BẮT BUỘC: không có nó, Postgres trả các item theo thứ tự vật lý
+    # trong heap — chỉ cần UPDATE một item (HR bấm nhận/từ chối) là hàng đó đổi chỗ
+    # và cả bảng shortlist trên UI nhảy thứ tự.
+    items = relationship(
+        "ShortlistItem",
+        back_populates="shortlist",
+        cascade="all, delete-orphan",
+        order_by="ShortlistItem.added_at",
+    )
 
 class ShortlistItem(Base):
     __tablename__ = "shortlist_items"

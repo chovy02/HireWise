@@ -139,7 +139,16 @@ def get_shortlist(
 
     items = [_item_response(item) for item in shortlist.items]
     # Ứng viên có điểm xếp trước, điểm cao trước; chưa có điểm (None) xếp cuối.
-    items.sort(key=lambda i: (i.candidate.score is None, -(i.candidate.score or 0)))
+    # added_at + id là chốt phá hoà: hai ứng viên cùng điểm phải luôn ra cùng một
+    # thứ tự giữa các lần gọi, nếu không bảng sẽ nhảy hàng sau mỗi lần cập nhật.
+    items.sort(
+        key=lambda i: (
+            i.candidate.score is None,
+            -(i.candidate.score or 0),
+            i.added_at,
+            str(i.id),
+        )
+    )
 
     return schemas.ShortlistResponse(
         id=shortlist.id,
