@@ -4,7 +4,7 @@
 // ---------------------------------------------------------------------------
 
 import { useEffect, useRef, useState } from 'react'
-import { ChevronDown, Check } from 'lucide-react'
+import { ChevronDown, Check, AlertTriangle, X } from 'lucide-react'
 
 export function Card({ className = '', children, ...rest }) {
   return (
@@ -18,23 +18,58 @@ export function Card({ className = '', children, ...rest }) {
 }
 
 // Top-row metric tile: icon chip + label + big value + small footnote.
-export function StatCard({ icon: Icon, iconClass, label, value, footnote }) {
+//
+// `progress` (0-100) và `progressColor` là TUỲ CHỌN: khi có, thẻ hiện thêm một thanh
+// tiến độ mảnh dưới con số. Một con số trần ("4 đã rút gọn") không cho biết nhiều bằng
+// khi thấy nó nằm ở đâu so với tổng — mà đó mới là điều HR cần đọc ra trong một giây.
+// `suffix` in nhạt ngay sau số (vd: "/15") để nêu mẫu số mà không chiếm thêm dòng.
+// Bỏ trống các prop này thì thẻ trông y hệt bản cũ — 16 chỗ đang dùng không đổi gì.
+export function StatCard({
+  icon: Icon,
+  iconClass,
+  label,
+  value,
+  footnote,
+  suffix,
+  progress,
+  progressColor = 'indigo',
+}) {
+  const hasProgress = typeof progress === 'number' && Number.isFinite(progress)
   return (
-    <Card className="flex items-start gap-4 p-5">
-      <div
-        className={`flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-lg ${
-          iconClass || 'bg-indigo-50 text-indigo-600'
-        }`}
-      >
-        <Icon size={20} />
+    <Card className="p-5 transition hover:border-slate-300 hover:shadow-sm">
+      <div className="flex items-center gap-3">
+        <div
+          className={`flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg ${
+            iconClass || 'bg-indigo-50 text-indigo-600'
+          }`}
+        >
+          <Icon size={19} />
+        </div>
+        <p className="text-[13px] font-semibold uppercase tracking-wide text-slate-500">
+          {label}
+        </p>
       </div>
-      <div className="min-w-0">
-        <p className="text-sm font-medium text-slate-500">{label}</p>
-        <p className="mt-0.5 text-2xl font-bold text-slate-900">{value}</p>
-        {footnote && (
-          <p className="mt-0.5 text-xs text-slate-400">{footnote}</p>
+
+      <div className="mt-3 flex items-baseline gap-1.5">
+        <span className="text-3xl font-bold leading-none tracking-tight text-slate-900">
+          {value}
+        </span>
+        {suffix && (
+          <span className="text-sm font-medium text-slate-400">{suffix}</span>
         )}
       </div>
+
+      {hasProgress && (
+        <div className="mt-3">
+          <ProgressBar value={progress} color={progressColor} />
+        </div>
+      )}
+
+      {footnote && (
+        <p className={`text-xs text-slate-400 ${hasProgress ? 'mt-2' : 'mt-1.5'}`}>
+          {footnote}
+        </p>
+      )}
     </Card>
   )
 }
@@ -352,6 +387,111 @@ export function CardHeader({ icon: Icon, iconClass, title, children }) {
         {title}
       </h2>
       {children}
+    </div>
+  )
+}
+
+// Hộp thoại xác nhận cho hành động phá huỷ dữ liệu (xoá dự án, xoá vĩnh viễn).
+//
+// KHÔNG dùng window.confirm(): trình duyệt chặn nút, không hiện được tên dự án hay
+// số ứng viên sẽ mất, và không phân biệt được mức độ nguy hiểm giữa "vào thùng rác"
+// với "xoá hẳn". Ở đây nút xác nhận được autofocus và Escape luôn huỷ, nên bấm nhầm
+// vẫn thoát ra được.
+//
+// `busy` khoá cả hai nút trong lúc request đang chạy để không xoá hai lần.
+export function ConfirmDialog({
+  open,
+  title,
+  description,
+  confirmLabel = 'Xác nhận',
+  cancelLabel = 'Huỷ',
+  tone = 'danger',
+  busy = false,
+  onConfirm,
+  onCancel,
+}) {
+  const cancelRef = useRef(null)
+
+  useEffect(() => {
+    if (!open) return
+    // Focus vào nút HUỶ chứ không phải nút xoá: người dùng vừa bấm nhầm mà gõ tiếp
+    // Enter thì phải thoát ra, không được xoá luôn.
+    cancelRef.current?.focus()
+    function onKey(e) {
+      if (e.key === 'Escape' && !busy) onCancel?.()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [open, busy, onCancel])
+
+  if (!open) return null
+
+  const danger = tone === 'danger'
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-[2px]"
+      // Bấm ra ngoài = huỷ. Chặn khi đang xử lý để không bỏ dở giữa chừng.
+      onClick={() => !busy && onCancel?.()}
+      role="presentation"
+    >
+      <div
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="confirm-dialog-title"
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-2xl"
+      >
+        <div className="flex items-start gap-4 p-6">
+          <div
+            className={`flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-full ${
+              danger ? 'bg-red-50 text-red-600' : 'bg-amber-50 text-amber-600'
+            }`}
+          >
+            <AlertTriangle size={22} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <h2
+              id="confirm-dialog-title"
+              className="text-base font-semibold text-slate-900"
+            >
+              {title}
+            </h2>
+            <div className="mt-1.5 text-sm leading-relaxed text-slate-600">
+              {description}
+            </div>
+          </div>
+          <button
+            onClick={() => !busy && onCancel?.()}
+            disabled={busy}
+            aria-label="Đóng"
+            className="-mr-1 -mt-1 rounded-md p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 disabled:opacity-50"
+          >
+            <X size={18} />
+          </button>
+        </div>
+        <div className="flex justify-end gap-2.5 border-t border-slate-100 bg-slate-50 px-6 py-4">
+          <button
+            ref={cancelRef}
+            onClick={onCancel}
+            disabled={busy}
+            className="inline-flex items-center justify-center rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-60"
+          >
+            {cancelLabel}
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={busy}
+            className={`inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold text-white transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+              danger
+                ? 'bg-red-600 hover:bg-red-700'
+                : 'bg-amber-600 hover:bg-amber-700'
+            }`}
+          >
+            {busy ? 'Đang xử lý…' : confirmLabel}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

@@ -1,14 +1,37 @@
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, FolderPlus, Briefcase, Users, ArrowRight } from 'lucide-react'
+import { Plus, FolderPlus, ArrowRight } from 'lucide-react'
 import Topbar from '../components/Topbar.jsx'
-import { Card, PrimaryButton } from '../components/ui.jsx'
+import { PrimaryButton, ConfirmDialog } from '../components/ui.jsx'
+import ProjectCard from '../components/ProjectCard.jsx'
 import { useProjects } from '../context/ProjectContext.jsx'
+import { useToast } from '../context/ToastContext.jsx'
 
 export default function Dashboard() {
   const navigate = useNavigate()
-  const { projects } = useProjects()
+  const { projects, trashProject } = useProjects()
+  const toast = useToast()
+
+  // Dự án đang chờ xác nhận xoá (null = hộp thoại đóng). Giữ cả object chứ không chỉ
+  // id, để hộp thoại nêu đích danh tên dự án và số ứng viên sắp bị ảnh hưởng.
+  const [pendingDelete, setPendingDelete] = useState(null)
+  const [deleting, setDeleting] = useState(false)
 
   const hasProjects = projects.length > 0
+
+  async function confirmDelete() {
+    if (!pendingDelete) return
+    setDeleting(true)
+    try {
+      await trashProject(pendingDelete.id)
+      toast(`Đã chuyển “${pendingDelete.title}” vào thùng rác.`)
+      setPendingDelete(null)
+    } catch (err) {
+      toast(err.message || 'Không xoá được dự án. Thử lại sau.')
+    } finally {
+      setDeleting(false)
+    }
+  }
 
   return (
     <>
@@ -66,39 +89,37 @@ export default function Dashboard() {
         {hasProjects && (
           <div className="mt-6 grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
             {projects.map((p) => (
-              <button
+              <ProjectCard
                 key={p.id}
-                onClick={() => navigate(`/projects/${p.id}`)}
-                className="group flex flex-col text-left"
-              >
-                <Card className="flex h-full flex-col p-5 transition hover:border-indigo-300 hover:shadow-md">
-                  <div className="flex items-start gap-3">
-                    <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600">
-                      <Briefcase size={18} />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <h3 className="truncate text-base font-semibold text-slate-900">
-                        {p.title}
-                      </h3>
-                    </div>
-                  </div>
-                  <p className="mt-3 line-clamp-3 flex-1 text-sm leading-relaxed text-slate-500">
-                    {p.jdInput || 'Chưa có mô tả.'}
-                  </p>
-                  <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3 text-xs text-slate-500">
-                    <span className="inline-flex items-center gap-1.5">
-                      <Users size={14} /> {p.candidateCount ?? 0} ứng viên
-                    </span>
-                    <span className="inline-flex items-center gap-1 font-medium text-indigo-600 group-hover:gap-1.5">
-                      Mở <ArrowRight size={14} />
-                    </span>
-                  </div>
-                </Card>
-              </button>
+                project={p}
+                accent="indigo"
+                actionLabel="Mở dự án"
+                actionIcon={ArrowRight}
+                onOpen={() => navigate(`/projects/${p.id}`)}
+                onDelete={() => setPendingDelete(p)}
+              />
             ))}
           </div>
         )}
       </main>
+
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        busy={deleting}
+        title="Chuyển dự án vào thùng rác?"
+        description={
+          <>
+            Dự án <span className="font-semibold text-slate-900">“{pendingDelete?.title}”</span>
+            {pendingDelete?.candidateCount > 0 && (
+              <> cùng <span className="font-semibold text-slate-900">{pendingDelete.candidateCount} ứng viên</span> đã chấm điểm</>
+            )}{' '}
+            sẽ được chuyển vào thùng rác. Bạn có thể khôi phục lại bất cứ lúc nào.
+          </>
+        }
+        confirmLabel="Chuyển vào thùng rác"
+        onConfirm={confirmDelete}
+        onCancel={() => !deleting && setPendingDelete(null)}
+      />
     </>
   )
 }

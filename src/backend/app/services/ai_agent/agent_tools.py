@@ -34,12 +34,18 @@ def _uuid(value) -> uuid.UUID:
 
 
 def _owner_filter(q, owner_id):
-    """Giới hạn query JD về đúng người đang thao tác.
+    """Giới hạn query JD về đúng người đang thao tác, và bỏ JD trong thùng rác.
 
     `owner_id` do agent loop / MCP tiêm vào (chính là HR đang đăng nhập), LLM không
     điền được. Thiếu bộ lọc này thì Copilot đọc và thao tác được trên project của
     MỌI tài khoản — cùng lỗ hổng như REST API trước đây.
+
+    Lọc `deleted_at` ở ĐÂY vì đây là chỗ duy nhất mọi tool chạm tới JD đi qua. Không
+    có nó thì HR xoá dự án xong, giao diện sạch bong nhưng Copilot vẫn liệt kê và
+    thao tác được trên dự án đó — vô lý với người dùng. Lọc cả khi owner_id là None:
+    dự án đã xoá thì không ai được thấy, không phụ thuộc chuyện của ai.
     """
+    q = q.filter(models.JobDescription.deleted_at.is_(None))
     if owner_id is None:
         return q
     return q.filter(models.JobDescription.created_by == _uuid(owner_id))

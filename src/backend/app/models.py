@@ -68,6 +68,12 @@ class JobDescription(Base):
     jd_markdown: Mapped[str] = mapped_column(Text, nullable=False)
     requirements: Mapped[dict] = mapped_column(JSONB, nullable=False)
     status: Mapped[str] = mapped_column(String(50), default="active")
+    # Thùng rác (xoá mềm). NULL = đang hoạt động, có giá trị = đã bị xoá vào thùng rác.
+    #
+    # Cố ý KHÔNG xoá thẳng khỏi DB: mỗi JD gắn với hàng chục CV đã tốn quota AI để
+    # chấm, bấm nhầm một cái là mất trắng và phải chạy lại từ đầu. Xoá mềm cho phép
+    # khôi phục nguyên vẹn; muốn xoá hẳn thì phải vào thùng rác xác nhận lần nữa.
+    deleted_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
 
@@ -75,6 +81,31 @@ class JobDescription(Base):
     cvs = relationship("Candidate", back_populates="jd")
     evaluations = relationship("Evaluation", back_populates="jd")
     shortlists = relationship("Shortlist", back_populates="jd")
+    upload_batches = relationship("UploadBatch", back_populates="jd")
+
+class UploadBatch(Base):
+    """Một lượt HR tải file ZIP CV lên cho một vị trí tuyển dụng.
+
+    VÌ SAO CẦN BẢNG NÀY: trước đây danh sách "Hồ sơ đã tải lên" chỉ nằm trong state
+    React của trình duyệt, nên F5 hoặc đăng nhập máy khác là mất sạch — dự án có 15
+    ứng viên mà ô "Lượt tải lên" vẫn hiện 0. Ứng viên thì lưu trong DB, còn thông tin
+    "chúng đến từ lượt tải nào, file tên gì" thì không, nên không thể dựng lại được.
+    """
+    __tablename__ = "upload_batches"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    jd_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("job_descriptions.id"), nullable=False)
+    filename: Mapped[str] = mapped_column(String(500), nullable=True)
+    # Tổng số CV trong file ZIP, và phân rã theo kết quả stage.
+    total: Mapped[int] = mapped_column(Integer, default=0)
+    staged: Mapped[int] = mapped_column(Integer, default=0)      # tạo mới, đưa vào hàng đợi chấm
+    duplicated: Mapped[int] = mapped_column(Integer, default=0)  # đã nộp trước đó cho JD này
+    failed: Mapped[int] = mapped_column(Integer, default=0)      # không đọc được text
+    uploaded_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    jd = relationship("JobDescription", back_populates="upload_batches")
+
 
 class Candidate(Base):
     __tablename__ = "candidates"

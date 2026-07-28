@@ -19,6 +19,29 @@ export function getJd(jdId) {
   return apiFetch(`/jds/${jdId}`, { auth: true })
 }
 
+// DELETE /jds/{id} -> { jd_id, deleted_at, candidate_count }
+// XOÁ MỀM: đưa dự án vào thùng rác. Ứng viên và điểm đã chấm được giữ nguyên nên
+// khôi phục lại là đủ, không phải chấm lại (đỡ tốn quota AI).
+export function deleteJd(jdId) {
+  return apiFetch(`/jds/${jdId}`, { method: 'DELETE', auth: true })
+}
+
+// GET /jds/trash -> [JDListItem]  (chỉ dự án đã xoá, kèm deleted_at)
+export function listTrashedJds() {
+  return apiFetch('/jds/trash', { auth: true })
+}
+
+// POST /jds/{id}/restore -> { jd_id }
+export function restoreJd(jdId) {
+  return apiFetch(`/jds/${jdId}/restore`, { method: 'POST', auth: true })
+}
+
+// DELETE /jds/{id}/permanent -> { detail, deleted }
+// XOÁ HẲN khỏi DB kèm file CV gốc. Backend chỉ nhận dự án ĐANG trong thùng rác.
+export function purgeJd(jdId) {
+  return apiFetch(`/jds/${jdId}/permanent`, { method: 'DELETE', auth: true })
+}
+
 // GET /jds/{id}/candidates -> [CandidateListItem]  (leaderboard, dùng để poll tiến độ)
 export function getCandidates(jdId) {
   return apiFetch(`/jds/${jdId}/candidates`, { auth: true })
@@ -30,6 +53,12 @@ export function uploadCvs(jdId, file) {
   const form = new FormData()
   form.append('file', file)
   return apiFetch(`/jds/${jdId}/cvs`, { method: 'POST', body: form, auth: true })
+}
+
+// GET /jds/{id}/uploads -> [UploadHistoryItem]
+// Lịch sử các lượt tải ZIP (lưu ở DB nên F5 / đổi máy vẫn còn).
+export function listUploads(jdId) {
+  return apiFetch(`/jds/${jdId}/uploads`, { auth: true })
 }
 
 // POST /candidates/{id}/retry -> 202 { candidate_id, status: 'PENDING' }

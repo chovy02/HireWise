@@ -7,6 +7,7 @@ import Dashboard from './pages/Dashboard.jsx'
 import CreateProject from './pages/CreateProject.jsx'
 import ProjectDetail from './pages/ProjectDetail.jsx'
 import Shortlisting from './pages/Shortlisting.jsx'
+import Trash from './pages/Trash.jsx'
 import AdminGateway from './pages/AdminGateway.jsx'
 import { useAuth } from './context/AuthContext.jsx'
 
@@ -35,6 +36,7 @@ export default function App() {
         <Route path="/projects/new" element={<RoleRoute allow={['hr_staff']}><CreateProject /></RoleRoute>} />
         <Route path="/projects/:id" element={<RoleRoute allow={['hr_staff']}><ProjectDetail /></RoleRoute>} />
         <Route path="/shortlisting" element={<RoleRoute allow={['hr_staff']}><Shortlisting /></RoleRoute>} />
+        <Route path="/trash" element={<RoleRoute allow={['hr_staff']}><Trash /></RoleRoute>} />
         <Route path="/admin" element={<RoleRoute allow={['admin']}><AdminGateway /></RoleRoute>} />
       </Route>
 
