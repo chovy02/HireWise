@@ -174,6 +174,7 @@ def get_leaderboard(
             # Kỹ năng đã trích (khử trùng, giữ thứ tự) để FE hiển thị chip trên bảng.
             skills=list(dict.fromkeys(s.skill_name for s in c.skills))[:15],
             is_overridden=c.evaluation.is_overridden if c.evaluation else False,
+            error_message=c.error_message,
         )
         for c in candidates
     ]
@@ -199,6 +200,46 @@ def get_candidate(
     current_user: models.User = Depends(get_current_user),
 ):
     return get_owned_candidate(db, candidate_id, current_user)
+
+
+@candidate_router.post("/{candidate_id}/retry", status_code=status.HTTP_202_ACCEPTED)
+def retry_candidate(
+    candidate_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Chấm lại 1 CV chưa xong: đưa về PENDING và đẩy lại vào hàng đợi Celery.
+
+    Phần lớn lỗi trích xuất là TẠM THỜI (AI quá tải, rate limit, timeout mạng) nên
+    thử lại là xong; trước đây HR phải upload lại cả file ZIP, mà CV cũ lại bị chặn
+    vì trùng file_hash.
+
+    NHẬN CẢ CV ĐANG PENDING — có chủ đích: Celery ack task ngay khi nhận, nên worker
+    bị restart giữa chừng là task biến mất trong khi CV vẫn nằm ở PENDING. Nếu chặn
+    PENDING thì những CV kẹt kiểu đó không còn đường cứu từ giao diện. Đổi lại, HR
+    bấm đúng lúc worker đang chạy thật thì CV bị chấm hai lần (tốn lượt gọi AI,
+    không hỏng dữ liệu vì evaluate_candidate tự dọn trước mỗi lần chạy).
+
+    COMPLETED thì từ chối: chấm lại sẽ xóa mất đánh giá đang dùng.
+    """
+    candidate = db.query(models.Candidate).filter(models.Candidate.id == candidate_id).first()
+    if not candidate:
+        raise HTTPException(status_code=404, detail="Không tìm thấy ứng viên.")
+
+    if candidate.status == "COMPLETED":
+        raise HTTPException(
+            status_code=400,
+            detail="CV này đã chấm xong, không cần chấm lại.",
+        )
+
+    candidate.status = "PENDING"
+    candidate.error_message = None
+    db.commit()
+
+    # Dữ liệu cũ (skills/projects) do evaluate_candidate tự dọn ở đầu mỗi lần chạy.
+    evaluate_candidate_task.delay(str(candidate.id))
+
+    return {"candidate_id": candidate.id, "status": "PENDING"}
 
 
 @candidate_router.get("/{candidate_id}/cv")

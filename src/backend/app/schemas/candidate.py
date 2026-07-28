@@ -47,6 +47,7 @@ class CandidateListItem(BaseModel):
     score: Optional[float] = None
     skills: list[str] = []          # tên kỹ năng để hiển thị chip trên bảng xếp hạng
     is_overridden: bool = False     # HR đã chỉnh điểm chưa
+    error_message: Optional[str] = None   # lý do khi status=FAILED (để HR bấm xem)
 
     class Config:
         from_attributes = True
@@ -59,6 +60,7 @@ class CandidateDetailResponse(BaseModel):
     email: Optional[str] = None
     phone: Optional[str] = None
     status: str
+    error_message: Optional[str] = None   # lý do khi status=FAILED
     file_hash: Optional[str] = None
     raw_text: Optional[str] = None   # text CV gốc, để đối chiếu/highlight bằng chứng
     created_at: datetime

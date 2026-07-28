@@ -32,6 +32,13 @@ export function uploadCvs(jdId, file) {
   return apiFetch(`/jds/${jdId}/cvs`, { method: 'POST', body: form, auth: true })
 }
 
+// POST /candidates/{id}/retry -> 202 { candidate_id, status: 'PENDING' }
+// Chấm lại 1 CV đang FAILED. Chỉ nhận CV ở trạng thái lỗi (backend trả 409 nếu CV
+// đang được worker xử lý, 400 nếu CV đã chấm xong).
+export function retryCandidate(candidateId) {
+  return apiFetch(`/candidates/${candidateId}/retry`, { method: 'POST', auth: true })
+}
+
 // GET /candidates/{id} -> CandidateDetailResponse
 // Chi tiết ứng viên: skills, projects, và evaluation (score_breakdown, explanation, evidence).
 export function getCandidate(candidateId) {

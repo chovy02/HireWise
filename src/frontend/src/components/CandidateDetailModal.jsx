@@ -13,12 +13,20 @@ import {
   FileText,
   Loader2,
   MessageSquareText,
+  RotateCcw,
+  User,
 } from 'lucide-react'
 import { Tag, Badge, ProgressBar, PrimaryButton, SecondaryButton } from './ui.jsx'
 import { useToast } from '../context/ToastContext.jsx'
 import { formatName } from '../utils/formatName.js'
+import { humanizeExtractionError } from '../utils/errorMessage.js'
 import InterviewModal from './InterviewModal.jsx'
-import { getCandidate, overrideEvaluation, getCandidateCv } from '../api/jds.js'
+import {
+  getCandidate,
+  overrideEvaluation,
+  getCandidateCv,
+  retryCandidate,
+} from '../api/jds.js'
 
 const STATUS_BADGE = {
   COMPLETED: { variant: 'completed', label: 'Hoàn tất' },
@@ -87,7 +95,12 @@ function CvPdf({ candidateId }) {
 
 // Modal chi tiết ứng viên — dữ liệu THẬT từ backend. Cột phải nhúng file PDF gốc;
 // bằng chứng điểm mạnh/yếu hiển thị nguyên văn (trích dẫn) ở cột trái.
-export default function CandidateDetailModal({ candidateId, onClose, onOverridden }) {
+export default function CandidateDetailModal({
+  candidateId,
+  onClose,
+  onOverridden,
+  onRetried,
+}) {
   const toast = useToast()
   const [detail, setDetail] = useState(null)
   const [error, setError] = useState('')
@@ -95,6 +108,7 @@ export default function CandidateDetailModal({ candidateId, onClose, onOverridde
   const [draftScore, setDraftScore] = useState('')
   const [reason, setReason] = useState('')
   const [saving, setSaving] = useState(false)
+  const [retrying, setRetrying] = useState(false)
   const [showInterview, setShowInterview] = useState(false)
 
   useEffect(() => {
@@ -140,8 +154,27 @@ export default function CandidateDetailModal({ candidateId, onClose, onOverridde
     }
   }
 
-  const name = formatName(detail?.name) || 'Ứng viên chưa rõ tên'
+  async function handleRetry() {
+    setRetrying(true)
+    try {
+      await retryCandidate(candidateId)
+      // Đổi ngay tại chỗ sang PENDING để HR thấy phản hồi, không phải đóng/mở lại.
+      setDetail((d) => (d ? { ...d, status: 'PENDING', error_message: null } : d))
+      onRetried?.(candidateId)
+      toast('Đã đưa CV vào hàng đợi chấm lại.')
+    } catch (e) {
+      toast(e.message || 'Không thử lại được.')
+    } finally {
+      setRetrying(false)
+    }
+  }
+
+  const realName = formatName(detail?.name)
+  const hasName = Boolean(realName)
+  const name = realName || 'Ứng viên chưa rõ tên'
   const statusMeta = STATUS_BADGE[detail?.status] || STATUS_BADGE.PENDING
+  const isFailed = detail?.status === 'FAILED'
+  const failureInfo = humanizeExtractionError(detail?.error_message)
   const evaluation = detail?.evaluation
   const evidence = evaluation?.evidence || {}
   const strengths = evidence.strengths_evidence || {}
@@ -187,8 +220,11 @@ export default function CandidateDetailModal({ candidateId, onClose, onOverridde
             >
               <ArrowLeft size={16} /> Quay lại
             </button>
-            <div className="flex h-11 w-11 items-center justify-center rounded-full bg-indigo-50 text-base font-semibold text-indigo-600">
-              {name[0]}
+            {/* Chưa trích được tên -> hiện icon người, KHÔNG lấy chữ cái đầu của
+                chuỗi thay thế (trước đây ra avatar chữ "Ứ" của "Ứng viên chưa rõ
+                tên", trông như tên thật). */}
+            <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-full bg-indigo-50 text-base font-semibold text-indigo-600">
+              {hasName ? name[0].toUpperCase() : <User size={20} />}
             </div>
             <div>
               <div className="flex items-center gap-2">
@@ -249,10 +285,88 @@ export default function CandidateDetailModal({ candidateId, onClose, onOverridde
             <p className="px-6 py-8 text-sm text-slate-400">Đang tải chi tiết…</p>
           )}
 
+          {/* CV chưa chấm được (FAILED/PENDING): vẫn phải cho HR ĐỌC CV gốc để tự
+              đánh giá — trước đây chỗ này chỉ hiện một dòng chữ, coi như CV biến
+              mất khỏi hệ thống chỉ vì AI chấm hỏng. */}
           {detail && !evaluation && (
-            <p className="px-6 py-8 text-sm text-slate-500">
-              Ứng viên này chưa được chấm điểm (trạng thái: {statusMeta.label}).
-            </p>
+            <div className="flex min-h-0 flex-1 flex-col px-6 py-5">
+              <div
+                className={`mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border p-4 ${
+                  isFailed
+                    ? 'border-red-200 bg-red-50/60'
+                    : 'border-slate-200 bg-slate-50/60'
+                }`}
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-slate-800">
+                    {isFailed ? failureInfo.title : 'CV đang được chấm điểm'}
+                  </p>
+                  <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                    {isFailed
+                      ? failureInfo.hint
+                      : 'Hệ thống đang xử lý nền, bạn có thể đọc CV gốc bên dưới trong lúc chờ. Nếu chờ quá lâu không xong, bấm "Chạy lại" để đẩy vào hàng đợi lần nữa.'}
+                  </p>
+                  {/* Nguyên văn lỗi kỹ thuật: gập lại mặc định. HR không cần đọc,
+                      nhưng khi báo lỗi cho dev thì phải copy được đầy đủ. */}
+                  {isFailed && failureInfo.raw && (
+                    <details className="mt-2 group">
+                      <summary className="cursor-pointer text-xs font-medium text-slate-400 transition hover:text-slate-600">
+                        Chi tiết kỹ thuật
+                      </summary>
+                      <pre className="mt-1.5 max-h-32 overflow-auto whitespace-pre-wrap break-all rounded-md border border-slate-200 bg-white/70 px-2.5 py-2 font-mono text-[11px] leading-relaxed text-slate-500">
+                        {failureInfo.raw}
+                      </pre>
+                    </details>
+                  )}
+                </div>
+                {/* PENDING cũng cho chạy lại: worker restart giữa chừng làm mất
+                    task trong khi CV vẫn ở PENDING, không có nút này thì CV kẹt
+                    vĩnh viễn.
+                    Lỗi nào thử lại chắc chắn vô ích (hết hạn mức AI, CV là ảnh
+                    scan) thì hạ nút xuống kiểu phụ — vẫn bấm được, nhưng không mời
+                    gọi HR bấm để rồi lại thất bại. */}
+                {isFailed && !failureInfo.retryUseful ? (
+                  <SecondaryButton
+                    className="flex-shrink-0 px-3 py-2"
+                    onClick={handleRetry}
+                    disabled={retrying}
+                  >
+                    {retrying ? (
+                      <>
+                        <Loader2 size={15} className="animate-spin" /> Đang gửi…
+                      </>
+                    ) : (
+                      <>
+                        <RotateCcw size={15} /> Vẫn thử lại
+                      </>
+                    )}
+                  </SecondaryButton>
+                ) : (
+                  <PrimaryButton
+                    className="flex-shrink-0 px-3 py-2"
+                    onClick={handleRetry}
+                    disabled={retrying}
+                  >
+                    {retrying ? (
+                      <>
+                        <Loader2 size={15} className="animate-spin" /> Đang gửi…
+                      </>
+                    ) : (
+                      <>
+                        <RotateCcw size={15} /> {isFailed ? 'Thử lại' : 'Chạy lại'}
+                      </>
+                    )}
+                  </PrimaryButton>
+                )}
+              </div>
+
+              <h3 className="mb-3 flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-slate-500">
+                <FileText size={14} /> CV gốc
+              </h3>
+              <div className="min-h-0 flex-1">
+                <CvPdf candidateId={candidateId} />
+              </div>
+            </div>
           )}
 
           {detail && evaluation && (

@@ -294,11 +294,24 @@ def evaluate_candidate(db: Session, candidate_id) -> dict:
         .first()
     )
 
+    # Dọn kết quả của lần chạy TRƯỚC để hàm này chạy lại được nhiều lần (nút "Thử
+    # lại" của HR). Lần lỗi trước có thể đã commit một phần skills/projects — không
+    # xóa thì mỗi lần thử lại sẽ nhân đôi chúng.
+    db.query(models.CandidateSkill).filter(
+        models.CandidateSkill.cv_id == candidate.id
+    ).delete(synchronize_session=False)
+    db.query(models.CandidateProject).filter(
+        models.CandidateProject.candidate_id == candidate.id
+    ).delete(synchronize_session=False)
+    candidate.error_message = None
+    db.commit()
+
     try:
         # Parse thông tin ứng viên (UC U003 - Extract Raw Text, Standardize & Parse Skills)
         parsed = parse_cv(candidate.raw_text)
         if parsed.get("parse_error"):
             candidate.status = "FAILED"
+            candidate.error_message = parsed["parse_error"]
             db.commit()
             item["status"] = "failed"
             item["error"] = parsed["parse_error"]
@@ -334,6 +347,7 @@ def evaluate_candidate(db: Session, candidate_id) -> dict:
         score_result = score_cv(parsed, jd.requirements)
         if score_result.get("score_error"):
             candidate.status = "FAILED"
+            candidate.error_message = score_result["score_error"]
             db.commit()
             item["status"] = "failed"
             item["error"] = score_result["score_error"]
@@ -353,6 +367,7 @@ def evaluate_candidate(db: Session, candidate_id) -> dict:
         db.add(evaluation)
 
         candidate.status = "COMPLETED"
+        candidate.error_message = None  # xóa dấu vết lần lỗi trước nếu đây là lần thử lại
         db.commit()
 
         item["status"] = "completed"
@@ -361,10 +376,12 @@ def evaluate_candidate(db: Session, candidate_id) -> dict:
 
     except Exception as e:
         db.rollback()
+        message = f"Lỗi xử lý không xác định: {type(e).__name__}: {e}"
         candidate.status = "FAILED"
+        candidate.error_message = message
         db.commit()
         item["status"] = "failed"
-        item["error"] = f"Lỗi xử lý không xác định: {e}"
+        item["error"] = message
         return item
 
 
