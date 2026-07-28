@@ -319,17 +319,6 @@ def evaluate_candidate(db: Session, candidate_id) -> dict:
                     normalized_name=skill_name.strip().lower(),
                 ))
 
-        # Lưu projects (kèm github_url để dùng cho ProjectEvaluation sau này)
-        for proj in parsed.get("projects", []) or []:
-            db.add(models.CandidateProject(
-                candidate_id=candidate.id,
-                name=proj.get("name") or "Untitled project",
-                description=proj.get("description"),
-                github_url=proj.get("github_url"),
-                tech_stack=proj.get("tech") or [],
-                source="from_cv",
-            ))
-
         # Chấm điểm (UC U003 - Score Suitability)
         score_result = score_cv(parsed, jd.requirements)
         if score_result.get("score_error"):
