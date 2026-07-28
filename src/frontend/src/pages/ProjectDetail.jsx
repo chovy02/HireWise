@@ -12,6 +12,8 @@ import {
   AlertTriangle,
   XCircle,
   FileText,
+  RotateCcw,
+  Loader2,
 } from 'lucide-react'
 import Topbar from '../components/Topbar.jsx'
 import {
@@ -24,7 +26,7 @@ import {
 } from '../components/ui.jsx'
 import { useToast } from '../context/ToastContext.jsx'
 import { useProjects } from '../context/ProjectContext.jsx'
-import { getCandidates, getJd, uploadCvs } from '../api/jds.js'
+import { getCandidates, getJd, uploadCvs, retryCandidate } from '../api/jds.js'
 import { listShortlists } from '../api/shortlists.js'
 import CandidateDetailModal from '../components/CandidateDetailModal.jsx'
 import { formatName } from '../utils/formatName.js'
@@ -148,8 +150,13 @@ function GeneratedJD({ markdown }) {
 // Poll GET /jds/{id}/candidates để hiển thị tiến độ chấm điểm CV thật (do Celery
 // worker xử lý nền). Tự dừng poll khi không còn CV nào ở trạng thái PENDING.
 function LiveProcessing({ jdId, refreshKey, onOpenCandidate, highlightIds }) {
+  const toast = useToast()
   const [rows, setRows] = useState(null) // null = đang tải lần đầu
   const [error, setError] = useState('')
+  // Các id đang gửi yêu cầu chấm lại (để khóa nút, tránh bấm hai lần).
+  const [retrying, setRetrying] = useState(() => new Set())
+  // Tăng sau khi thử lại: poll đã dừng vì hết PENDING, cần khởi động lại nó.
+  const [pollNonce, setPollNonce] = useState(0)
 
   useEffect(() => {
     let stopped = false
@@ -176,7 +183,54 @@ function LiveProcessing({ jdId, refreshKey, onOpenCandidate, highlightIds }) {
       stopped = true
       clearTimeout(timer)
     }
-  }, [jdId, refreshKey])
+  }, [jdId, refreshKey, pollNonce])
+
+  async function handleRetry(candidate) {
+    setRetrying((prev) => new Set(prev).add(candidate.id))
+    try {
+      await retryCandidate(candidate.id)
+      // Cập nhật ngay tại chỗ để hàng đổi sang "Đang xử lý" mà không phải đợi
+      // vòng poll kế tiếp.
+      setRows((prev) =>
+        (prev || []).map((c) =>
+          c.id === candidate.id ? { ...c, status: 'PENDING', error_message: null } : c
+        )
+      )
+      setPollNonce((n) => n + 1) // bật lại poll để theo dõi CV vừa đưa vào hàng đợi
+    } catch (e) {
+      toast(e.message || 'Không thử lại được.')
+    } finally {
+      setRetrying((prev) => {
+        const next = new Set(prev)
+        next.delete(candidate.id)
+        return next
+      })
+    }
+  }
+
+  async function handleRetryAll(failedRows) {
+    // Gửi lần lượt cho dễ đọc lỗi; số CV lỗi thường nhỏ nên không cần song song.
+    let ok = 0
+    for (const c of failedRows) {
+      try {
+        await retryCandidate(c.id)
+        ok += 1
+      } catch {
+        /* CV nào không thử lại được thì bỏ qua, báo tổng kết ở dưới */
+      }
+    }
+    setRows((prev) =>
+      (prev || []).map((c) =>
+        c.status === 'FAILED' ? { ...c, status: 'PENDING', error_message: null } : c
+      )
+    )
+    setPollNonce((n) => n + 1)
+    toast(
+      ok === failedRows.length
+        ? `Đã đưa ${ok} CV vào hàng đợi chấm lại.`
+        : `Đã đưa ${ok}/${failedRows.length} CV vào hàng đợi.`
+    )
+  }
 
   if (rows === null && !error) {
     return <p className="mt-4 text-sm text-slate-400">Đang tải trạng thái xử lý…</p>
@@ -186,7 +240,8 @@ function LiveProcessing({ jdId, refreshKey, onOpenCandidate, highlightIds }) {
   const total = list.length
   const completed = list.filter((c) => c.status === 'COMPLETED').length
   const pending = list.filter((c) => c.status === 'PENDING').length
-  const failed = list.filter((c) => c.status === 'FAILED').length
+  const failedRows = list.filter((c) => c.status === 'FAILED')
+  const failed = failedRows.length
   const pct = total ? Math.round((completed / total) * 100) : 0
 
   return (
@@ -201,13 +256,23 @@ function LiveProcessing({ jdId, refreshKey, onOpenCandidate, highlightIds }) {
         </p>
       ) : (
         <>
-          <div className="flex items-center justify-between text-xs text-slate-500">
+          <div className="flex items-center justify-between gap-3 text-xs text-slate-500">
             <span>
               {completed}/{total} xong
               {pending > 0 && ` • ${pending} đang xử lý`}
               {failed > 0 && ` • ${failed} lỗi`}
             </span>
-            <span className="font-semibold text-slate-700">{pct}%</span>
+            <div className="flex items-center gap-2">
+              {failed > 1 && (
+                <button
+                  onClick={() => handleRetryAll(failedRows)}
+                  className="inline-flex items-center gap-1 rounded-md border border-slate-200 px-2 py-1 font-medium text-slate-600 transition hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700"
+                >
+                  <RotateCcw size={12} /> Thử lại {failed} CV lỗi
+                </button>
+              )}
+              <span className="font-semibold text-slate-700">{pct}%</span>
+            </div>
           </div>
           <div className="mt-2">
             <ProgressBar value={pct} />
@@ -217,15 +282,19 @@ function LiveProcessing({ jdId, refreshKey, onOpenCandidate, highlightIds }) {
             {list.map((c) => {
               const meta = STATUS_META[c.status] || STATUS_META.PENDING
               const Icon = meta.icon
-              // Ứng viên đã chấm xong -> click để mở popup chi tiết đánh giá ngay
-              // tại trang này (không cần sang trang Shortlisting).
-              const clickable = c.status === 'COMPLETED'
+              const isFailed = c.status === 'FAILED'
+              // Cả COMPLETED lẫn FAILED đều mở chung modal chi tiết: CV lỗi vẫn có
+              // file gốc, HR cần ĐỌC được nó để tự đánh giá thay vì chỉ nhận một
+              // thông báo lỗi. Lý do lỗi hiển thị ngay trong modal đó.
+              const clickable = c.status === 'COMPLETED' || isFailed
+              const openRow = () => onOpenCandidate?.(c.id)
               // LC2: AI Copilot search -> tô sáng đúng những ứng viên khớp.
               const highlighted = highlightIds?.has(c.id)
+              const isRetrying = retrying.has(c.id)
               return (
                 <div
                   key={c.id}
-                  onClick={clickable ? () => onOpenCandidate?.(c.id) : undefined}
+                  onClick={clickable ? openRow : undefined}
                   role={clickable ? 'button' : undefined}
                   tabIndex={clickable ? 0 : undefined}
                   onKeyDown={
@@ -233,26 +302,36 @@ function LiveProcessing({ jdId, refreshKey, onOpenCandidate, highlightIds }) {
                       ? (e) => {
                           if (e.key === 'Enter' || e.key === ' ') {
                             e.preventDefault()
-                            onOpenCandidate?.(c.id)
+                            openRow()
                           }
                         }
                       : undefined
                   }
-                  title={clickable ? 'Xem chi tiết đánh giá' : undefined}
+                  title={
+                    isFailed
+                      ? 'Mở CV gốc để tự xem'
+                      : clickable
+                        ? 'Xem chi tiết đánh giá'
+                        : undefined
+                  }
                   className={`flex items-center justify-between rounded-lg border px-3 py-2 ${
                     highlighted
                       ? 'border-indigo-400 bg-indigo-50 ring-2 ring-indigo-300'
-                      : 'border-slate-200'
+                      : isFailed
+                        ? 'border-red-200 bg-red-50/40'
+                        : 'border-slate-200'
                   } ${
                     clickable
-                      ? 'cursor-pointer transition hover:border-indigo-300 hover:bg-indigo-50/40'
+                      ? isFailed
+                        ? 'cursor-pointer transition hover:border-red-300 hover:bg-red-50'
+                        : 'cursor-pointer transition hover:border-indigo-300 hover:bg-indigo-50/40'
                       : ''
                   }`}
                 >
                   <div className="flex min-w-0 items-center gap-2">
                     <Icon
                       size={14}
-                      className={`${meta.cls} ${c.status === 'PENDING' ? 'animate-spin' : ''}`}
+                      className={`${meta.cls} flex-shrink-0 ${c.status === 'PENDING' ? 'animate-spin' : ''}`}
                     />
                     <span className="truncate text-sm text-slate-700">
                       {formatName(c.name) || 'Đang trích xuất…'}
@@ -267,6 +346,26 @@ function LiveProcessing({ jdId, refreshKey, onOpenCandidate, highlightIds }) {
                     <Badge variant={meta.variant} upper={false}>
                       {meta.label}
                     </Badge>
+                    {isFailed && (
+                      <button
+                        // Nút nằm TRONG hàng bấm được -> phải chặn nổi bọt, nếu không
+                        // bấm "Thử lại" sẽ mở kèm cả hộp lý do lỗi.
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleRetry(c)
+                        }}
+                        disabled={isRetrying}
+                        title="Chấm lại CV này"
+                        className="inline-flex items-center gap-1 rounded-md border border-red-200 bg-white px-2 py-1 text-xs font-medium text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {isRetrying ? (
+                          <Loader2 size={12} className="animate-spin" />
+                        ) : (
+                          <RotateCcw size={12} />
+                        )}
+                        Thử lại
+                      </button>
+                    )}
                     {c.score != null && (
                       <span className="text-sm font-semibold text-slate-800">
                         {c.score}
@@ -530,6 +629,9 @@ export default function ProjectDetail() {
           candidateId={openCandidateId}
           onClose={() => setOpenCandidateId(null)}
           onOverridden={() => setLiveKey((k) => k + 1)}
+          // Thử lại từ trong modal -> buộc danh sách bên ngoài poll lại để hàng đó
+          // chuyển sang "Đang xử lý".
+          onRetried={() => setLiveKey((k) => k + 1)}
         />
       )}
     </>

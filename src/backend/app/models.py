@@ -89,10 +89,15 @@ class Candidate(Base):
     file_hash: Mapped[str] = mapped_column(String(255), nullable=True) # Check trùng lặp CV
     source: Mapped[str] = mapped_column(String(100), nullable=True)    # email, web_upload
     status: Mapped[str] = mapped_column(String(50), default="cho_xu_ly")
+    # Lý do khi status=FAILED. Không có cột này thì HR chỉ thấy chữ "Lỗi" mà không
+    # biết vì sao, và không phân biệt được lỗi tạm thời (AI quá tải -> thử lại được)
+    # với lỗi vĩnh viễn (CV là ảnh scan -> thử lại vô ích).
+    error_message: Mapped[str] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     jd = relationship("JobDescription", back_populates="cvs")
     skills = relationship("CandidateSkill", back_populates="cv", cascade="all, delete-orphan")
+    projects = relationship("CandidateProject", back_populates="candidate", cascade="all, delete-orphan")
     evaluation = relationship("Evaluation", back_populates="cv", uselist=False)
     shortlist_items = relationship("ShortlistItem", back_populates="cv")
     interview = relationship("Interview", back_populates="cv", uselist=False)
@@ -107,6 +112,29 @@ class CandidateSkill(Base):
     evidence: Mapped[str] = mapped_column(Text, nullable=True)
 
     cv = relationship("Candidate", back_populates="skills")
+
+
+class CandidateProject(Base):
+    """Dự án trích từ CV ứng viên.
+
+    Bảng candidate_projects đã tồn tại trong DB và pipeline vẫn ghi vào nó, nhưng
+    class ORM này từng bị xóa khỏi models.py — khiến MỌI CV mà parser trích được
+    mục projects đều chết với AttributeError rồi bị đánh dấu FAILED (CV không có
+    projects thì vẫn chạy, nên lỗi trông như ngẫu nhiên).
+    """
+    __tablename__ = "candidate_projects"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    candidate_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("candidates.id"), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=True)
+    github_url: Mapped[str] = mapped_column(String(500), nullable=True)
+    tech_stack: Mapped[dict] = mapped_column(JSONB, nullable=True)
+    # 'from_cv' (parser trích) hoặc nguồn khác nếu sau này HR tự thêm.
+    source: Mapped[str] = mapped_column(String(50), nullable=False, default="from_cv")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    candidate = relationship("Candidate", back_populates="projects")
 
 
 class Evaluation(Base):
