@@ -4,16 +4,19 @@ from app.services.ai_agent.gemini_client import generate_text
 INTERVIEW_MODEL = "gemini-2.5-flash"
 
 GENERATE_QUESTIONS_PROMPT = """Bạn là một Chuyên gia Phỏng vấn Kỹ thuật cấp cao.
-Nhiệm vụ của bạn là soạn ra một bộ gồm 5 câu hỏi phỏng vấn sắc bén dựa trên Yêu cầu công việc và toàn bộ nội dung hồ sơ của ứng viên.
+Nhiệm vụ của bạn là soạn ra một bộ câu hỏi phỏng vấn sắc bén dựa trên Yêu cầu công việc (JD) và toàn bộ nội dung hồ sơ của ứng viên.
 
 Trọng tâm HR yêu cầu (Nếu có): {aspect}
 Yêu cầu công việc (JD): {jd_requirements}
 Hồ sơ và các điểm yếu của ứng viên: {candidate_info}
 
-YÊU CẦU BẮT BUỘC:
-1. KHÔNG hỏi lý thuyết suông. Bắt buộc trích xuất trực tiếp tên các dự án ứng viên đã làm trong CV để đặt câu hỏi tình huống thực tế.
-2. Tạo ít nhất 1-2 câu hỏi xoáy thẳng vào điểm yếu hoặc những công nghệ ứng viên ghi chung chung để xác thực.
-3. Trả về DUY NHẤT một mảng JSON. Không bọc markdown.
+YÊU CẦU BẮT BUỘC VỀ SỐ LƯỢNG VÀ NỘI DUNG:
+1. SỐ LƯỢNG LINH HOẠT (Từ 5 đến 10 câu):
+   - Nếu CV ứng viên dày dặn kinh nghiệm, tham gia nhiều dự án phức tạp hoặc JD có nhiều tiêu chí khắt khe -> Hãy tạo từ 8 đến 10 câu hỏi để kiểm tra toàn diện.
+   - Nếu CV đơn giản, ít thực chiến (thực tập sinh, Fresher) hoặc ít dự án -> Chỉ tạo từ 5 đến 6 câu hỏi trọng tâm nhất.
+2. KHÔNG hỏi lý thuyết suông. Bắt buộc trích xuất trực tiếp tên các dự án ứng viên đã làm trong CV để đặt câu hỏi tình huống thực tế.
+3. Tạo ít nhất 1-2 câu hỏi xoáy thẳng vào điểm yếu hoặc những công nghệ ứng viên ghi chung chung để xác thực.
+4. Trả về DUY NHẤT một mảng JSON. Không bọc markdown.
 
 Schema JSON bắt buộc (Lưu ý: Phải trả về Object chứa mảng 'questions'):
 {
@@ -28,17 +31,20 @@ Schema JSON bắt buộc (Lưu ý: Phải trả về Object chứa mảng 'quest
 """
 
 EVALUATE_ANSWER_PROMPT = """Bạn là Chuyên gia Đánh giá Phỏng vấn.
-Phân tích câu trả lời của ứng viên so với đáp án kỳ vọng, chỉ ra lỗ hổng tư duy và đề xuất một câu hỏi phụ để đào sâu hơn nếu ứng viên trả lời quá hời hợt.
+Phân tích câu trả lời của ứng viên so với đáp án kỳ vọng, chỉ ra lỗ hổng tư duy và đánh giá điểm số.
 
 Câu hỏi đã hỏi: {question}
 Đáp án kỳ vọng của hệ thống: {expected_answer}
 Câu trả lời thực tế của ứng viên (do HR tóm tắt): {answer_text}
 
+QUY TẮC TẠO CÂU HỎI PHỤ (FOLLOW-UP QUESTION):
+{follow_up_guidance}
+
 Schema JSON bắt buộc (Không bọc markdown):
 {
   "evaluation": "Nhận xét ngắn gọn độ chính xác. Chỉ ra điểm ứng viên đang hiểu sai hoặc vòng vo.",
   "score": 8.0, // Điểm số thực từ 1 đến 10
-  "follow_up_question": "Một câu hỏi phụ sắc bén để truy vấn tiếp vào lỗ hổng. Nếu ứng viên trả lời quá hoàn hảo, để chuỗi rỗng ''."
+  "follow_up_question": "Câu hỏi phụ sắc bén để truy vấn tiếp vào lỗ hổng (hoặc để chuỗi rỗng '' nếu không cần thiết)."
 }
 """
 
@@ -72,10 +78,19 @@ def generate_interview_questions_ai(jd_reqs: dict, candidate_info: dict, aspect:
     except Exception as e:
         return []
 
-def evaluate_interview_answer_ai(question: str, expected: str, answer: str) -> dict:
+def evaluate_interview_answer_ai(question: str, expected: str, answer: str, allow_follow_up: bool = True) -> dict:
+    if not allow_follow_up:
+        guidance = "- LƯU Ý HỆ THỐNG: Đã đạt giới hạn tối đa số câu hỏi phụ cho chủ đề này. BẮT BUỘC để follow_up_question là chuỗi rỗng \"\"."
+    else:
+        guidance = (
+            "- CHỈ TẠO câu hỏi phụ khi câu trả lời của ứng viên chung chung, né tránh, thiếu ý nghiêm trọng hoặc lộ lỗ hổng kiến thức cần đào sâu.\n"
+            "- NẾU ứng viên trả lời đã rõ ràng, đúng trọng tâm, chấp nhận được hoặc đủ ý -> KHÔNG ĐƯỢC tạo câu hỏi phụ (BẮT BUỘC để follow_up_question là chuỗi rỗng \"\")."
+        )
+
     prompt = EVALUATE_ANSWER_PROMPT.replace("{question}", question)\
                                    .replace("{expected_answer}", expected or "")\
-                                   .replace("{answer_text}", answer)
+                                   .replace("{answer_text}", answer)\
+                                   .replace("{follow_up_guidance}", guidance)
     try:
         return json.loads(_clean_json(generate_text(INTERVIEW_MODEL, prompt, agent_name="interview_evaluate")))
     except Exception as e:

@@ -25,6 +25,7 @@ def _candidate_summary(candidate: models.Candidate) -> schemas.ShortlistCandidat
         # Kỹ năng đã khử trùng, giữ thứ tự, cắt bớt cho gọn (giống leaderboard).
         skills=list(dict.fromkeys(s.skill_name for s in candidate.skills))[:15],
         is_overridden=evaluation.is_overridden if evaluation else False,
+        interview_status=candidate.interview.status if candidate.interview else None,
     )
 
 
