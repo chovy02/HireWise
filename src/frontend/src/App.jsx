@@ -7,6 +7,7 @@ import Dashboard from './pages/Dashboard.jsx'
 import CreateProject from './pages/CreateProject.jsx'
 import ProjectDetail from './pages/ProjectDetail.jsx'
 import Shortlisting from './pages/Shortlisting.jsx'
+import EmailTemplates from './pages/EmailTemplates.jsx'
 import Trash from './pages/Trash.jsx'
 import AdminGateway from './pages/AdminGateway.jsx'
 import { useAuth } from './context/AuthContext.jsx'
@@ -36,6 +37,10 @@ export default function App() {
         <Route path="/projects/new" element={<RoleRoute allow={['hr_staff']}><CreateProject /></RoleRoute>} />
         <Route path="/projects/:id" element={<RoleRoute allow={['hr_staff']}><ProjectDetail /></RoleRoute>} />
         <Route path="/shortlisting" element={<RoleRoute allow={['hr_staff']}><Shortlisting /></RoleRoute>} />
+        {/* Đặt dưới /settings/ chứ KHÔNG phải '/email-templates': đường dẫn đó trùng
+            prefix router backend nên bị proxy của Vite nuốt, F5 sẽ trả JSON thay vì
+            ứng dụng (đúng cái bẫy đã ghi trong vite.config.js ở mục '/admin'). */}
+        <Route path="/settings/email-templates" element={<RoleRoute allow={['hr_staff']}><EmailTemplates /></RoleRoute>} />
         <Route path="/trash" element={<RoleRoute allow={['hr_staff']}><Trash /></RoleRoute>} />
         <Route path="/admin" element={<RoleRoute allow={['admin']}><AdminGateway /></RoleRoute>} />
       </Route>

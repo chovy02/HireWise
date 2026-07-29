@@ -37,6 +37,11 @@ def _item_response(item: models.ShortlistItem) -> schemas.ShortlistItemResponse:
         candidate_status=item.candidate_status,
         added_at=item.added_at,
         candidate=_candidate_summary(item.cv),
+        # getattr thay vì item.notified_at: hai cột này mới thêm ở migration
+        # 9e35c9fe2f0f, DB chưa nâng cấp thì đọc thẳng sẽ nổ 500 trên MỌI lần mở
+        # shortlist — không chỉ riêng tính năng gửi mail.
+        notified_at=getattr(item, "notified_at", None),
+        notified_status=getattr(item, "notified_status", None),
     )
 
 

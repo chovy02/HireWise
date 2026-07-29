@@ -42,6 +42,12 @@ class ShortlistItemResponse(BaseModel):
     candidate_status: ShortlistItemStatus
     added_at: datetime
     candidate: ShortlistCandidate
+    # Dấu vết gửi mail kết quả (POST /shortlists/{id}/send-notifications).
+    # Frontend cần cả hai để biết ứng viên nào ĐÃ gửi, và gửi ở trạng thái nào —
+    # backend chỉ gửi lại khi notified_status khác candidate_status hiện tại, nên
+    # thiếu hai field này thì UI không thể hiện đúng "còn bao nhiêu người cần gửi".
+    notified_at: Optional[datetime] = None
+    notified_status: Optional[str] = None
 
 
 class ShortlistListItem(BaseModel):

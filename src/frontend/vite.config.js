@@ -71,6 +71,15 @@ export default defineConfig({
       // Chuông thông báo của người dùng. Thiếu dòng này thì request rơi vào SPA
       // fallback của Vite (trả index.html kèm HTTP 200) và chuông im lặng rỗng.
       '/notifications': backendProxy(),
+      // Mẫu email kết quả của HR. Thiếu dòng này thì rơi vào SPA fallback y như
+      // '/notifications' ở trên.
+      //
+      // Ở đây KHÔNG lặp lại được mẹo regex của '/admin': backend có endpoint trần
+      // "GET /email-templates" (không phần đuôi) nên '^/email-templates/' sẽ bỏ
+      // sót chính nó. Vì vậy trang HR được đặt ở route SPA '/settings/email-templates'
+      // — khác prefix API nên F5 hay mở thẳng link đều nạp đúng ứng dụng, không
+      // trả JSON {"detail":"Not authenticated"} như bẫy '/admin' từng gây ra.
+      '/email-templates': backendProxy(),
     },
   },
 })

@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
-import { useNavigate, useLocation } from 'react-router-dom'
+import { useNavigate, useLocation, Link } from 'react-router-dom'
 import {
   Search,
   ArrowDownWideNarrow,
@@ -28,6 +28,11 @@ import {
   Sparkles,
   Award,
   ChevronRight,
+  Send,
+  MailCheck,
+  MailWarning,
+  Mail,
+  Settings2,
 } from 'lucide-react'
 import Topbar from '../components/Topbar.jsx'
 import {
@@ -38,6 +43,7 @@ import {
   Dropdown,
   SecondaryButton,
   PrimaryButton,
+  ConfirmDialog,
 } from '../components/ui.jsx'
 import ProjectCard from '../components/ProjectCard.jsx'
 import CandidateDetailModal from '../components/CandidateDetailModal.jsx'
@@ -57,6 +63,7 @@ import {
   addShortlistItem,
   updateShortlistItemStatus,
   removeShortlistItem,
+  sendShortlistNotifications,
 } from '../api/shortlists.js'
 
 const STATUS_BADGE = {
@@ -70,6 +77,39 @@ const INTERVIEW_BADGE = {
   pending: { variant: 'neutral', label: 'Đã có câu hỏi' },
   in_progress: { variant: 'ai', label: 'Đang phỏng vấn' },
   completed: { variant: 'completed', label: 'Đã phỏng vấn' },
+}
+
+// Trạng thái gửi mail kết quả của MỘT ứng viên trong shortlist.
+//
+// Phải khớp đúng điều kiện lọc của backend (POST /shortlists/{id}/send-notifications):
+// chỉ gửi khi quyết định là accepted/rejected, ứng viên có email, và chưa gửi lần nào
+// HOẶC quyết định đã đổi so với lần gửi trước (notified_status != candidate_status).
+// Lệch điều kiện ở đây là UI hứa một con số mà backend gửi một con số khác.
+//
+// `queued: true` = ứng viên này sẽ nằm trong lô gửi nếu HR bấm nút.
+function notifyState(item) {
+  const decided = item.candidate_status === 'accepted' || item.candidate_status === 'rejected'
+  if (!decided) {
+    return { queued: false, variant: 'neutral', icon: null, label: '—',
+      title: 'Chưa chốt quyết định — chưa gửi mail' }
+  }
+  if (!item.candidate?.email) {
+    return { queued: false, variant: 'error', icon: MailWarning, label: 'Thiếu email',
+      title: 'Không trích được email từ CV nên không thể gửi thông báo' }
+  }
+  if (item.notified_at && item.notified_status === item.candidate_status) {
+    return { queued: false, variant: 'success', icon: MailCheck, label: 'Đã gửi',
+      title: `Đã gửi lúc ${new Date(item.notified_at).toLocaleString('vi-VN')}` }
+  }
+  if (item.notified_at) {
+    return { queued: true, variant: 'warning', icon: MailWarning, label: 'Cần gửi lại',
+      title:
+        `Đã gửi thông báo "${item.notified_status}" lúc ` +
+        `${new Date(item.notified_at).toLocaleString('vi-VN')}, nhưng quyết định đã đổi ` +
+        `thành "${item.candidate_status}" — cần gửi lại.` }
+  }
+  return { queued: true, variant: 'info', icon: Mail, label: 'Chưa gửi',
+    title: 'Sẽ được gửi ở lần bấm “Gửi email kết quả” tiếp theo' }
 }
 
 // COMPLETED (có điểm) xếp trước theo điểm giảm dần; PENDING/FAILED (không điểm) xếp cuối.
@@ -175,6 +215,12 @@ export default function Shortlisting() {
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState('')
 
+  // Gửi mail kết quả: hỏi xác nhận trước (hành động ra ngoài, không rút lại được),
+  // `sending` khoá nút để không xếp hàng hai lần, `sentTick` kích hoạt nạp lại.
+  const [confirmSend, setConfirmSend] = useState(false)
+  const [sending, setSending] = useState(false)
+  const [sentTick, setSentTick] = useState(0)
+
   useEffect(() => {
     if (!projectId) {
       setRows(null)
@@ -227,6 +273,17 @@ export default function Shortlisting() {
       cancelled = true
     }
   }, [activeSlId])
+
+  // Backend gửi mail trong BackgroundTasks, nên notified_at chỉ xuất hiện vài giây
+  // SAU khi API trả về. Nạp lại hai nhịp để cột "Email" tự chuyển sang "Đã gửi" —
+  // không nạp lại thì HR thấy vẫn "Chưa gửi" và bấm gửi thêm lần nữa. Hai mốc chứ
+  // không phải polling vô hạn: mỗi ứng viên là một kết nối SMTP, lô lớn có thể lâu
+  // hơn 12s và lúc đó HR đổi tab/nạp lại trang là xong.
+  useEffect(() => {
+    if (!sentTick) return
+    const timers = [3000, 12000].map((ms) => setTimeout(refreshShortlist, ms))
+    return () => timers.forEach(clearTimeout)
+  }, [sentTick])
 
   // ---- Danh sách hiển thị ----
   // PHẢI đặt trên các nhánh `return` sớm bên dưới: hook chạy sau một câu return có
@@ -303,6 +360,23 @@ export default function Shortlisting() {
       toast('Đã xóa shortlist.')
     } catch (e) {
       toast(e.message)
+    }
+  }
+
+  async function handleSendNotifications() {
+    if (!activeSlId) return
+    setSending(true)
+    try {
+      const res = await sendShortlistNotifications(activeSlId)
+      setConfirmSend(false)
+      toast(res?.message || 'Đã xếp hàng gửi email thông báo.')
+      // Chỉ đánh thức vòng nạp lại khi thực sự có mail được xếp hàng: gọi lúc
+      // total_queued = 0 thì không có gì đổi, nạp lại chỉ tốn request.
+      if (res?.total_queued) setSentTick((n) => n + 1)
+    } catch (e) {
+      toast(e.message || 'Không gửi được email thông báo.')
+    } finally {
+      setSending(false)
     }
   }
 
@@ -413,6 +487,17 @@ export default function Shortlisting() {
   const completedCount = list.filter((c) => c.status === 'COMPLETED').length
   // id ứng viên đã nằm trong shortlist đang chọn (để đổi nút "thêm" thành "đã thêm").
   const shortlistedIds = new Set((slDetail?.items || []).map((i) => i.candidate.id))
+
+  // Lô sẽ được gửi ở lần bấm nút tiếp theo, tính bằng ĐÚNG điều kiện của backend.
+  const slItems = slDetail?.items || []
+  const notifyQueue = slItems.filter((i) => notifyState(i).queued)
+  // Ứng viên đã chốt nhưng CV không trích được email: backend bỏ qua im lặng, nên
+  // phải nói ra ở hộp xác nhận, không thì HR tưởng đã thông báo cho tất cả.
+  const missingEmailCount = slItems.filter(
+    (i) =>
+      (i.candidate_status === 'accepted' || i.candidate_status === 'rejected') &&
+      !i.candidate?.email
+  ).length
 
   function toggleSelect(id) {
     setSelected((l) => (l.includes(id) ? l.filter((x) => x !== id) : [...l, id]))
@@ -797,11 +882,49 @@ export default function Shortlisting() {
 
         {view === 'shortlist' && (
           <Card className="mt-4 overflow-hidden">
-            <div className="flex items-center gap-2 border-b border-slate-200 px-6 py-3">
-              <ListChecks size={16} className="text-indigo-600" />
-              <h2 className="text-sm font-semibold text-slate-800">
-                {slDetail ? slDetail.name : 'Shortlist'}
-              </h2>
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-6 py-3">
+              <div className="flex items-center gap-2">
+                <ListChecks size={16} className="text-indigo-600" />
+                <h2 className="text-sm font-semibold text-slate-800">
+                  {slDetail ? slDetail.name : 'Shortlist'}
+                </h2>
+              </div>
+
+              {/* Gửi mail kết quả cho cả lô. Chỉ hiện khi shortlist đã có ứng viên —
+                  nút gửi trên một danh sách trống chỉ để bấm ra thông báo "không có
+                  ai cần gửi". */}
+              {slDetail?.items?.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <Link
+                    to="/settings/email-templates"
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
+                    title="Sửa nội dung mail gửi ứng viên"
+                  >
+                    <Settings2 size={15} /> Mẫu email
+                  </Link>
+                  <PrimaryButton
+                    className="px-3 py-2"
+                    disabled={sending || notifyQueue.length === 0}
+                    onClick={() => setConfirmSend(true)}
+                    title={
+                      notifyQueue.length === 0
+                        ? 'Không có ứng viên nào cần gửi: hãy chốt “Chọn”/“Từ chối” trước, hoặc tất cả đã được gửi.'
+                        : `Gửi email kết quả cho ${notifyQueue.length} ứng viên`
+                    }
+                  >
+                    {sending ? (
+                      <>
+                        <Loader2 size={15} className="animate-spin" /> Đang gửi…
+                      </>
+                    ) : (
+                      <>
+                        <Send size={15} /> Gửi email kết quả
+                        {notifyQueue.length > 0 && ` (${notifyQueue.length})`}
+                      </>
+                    )}
+                  </PrimaryButton>
+                </div>
+              )}
             </div>
 
             {!activeSlId && (
@@ -831,6 +954,7 @@ export default function Shortlisting() {
                         <th className="px-6 py-3">Ứng viên</th>
                         <th className="px-6 py-3 text-center">Độ phù hợp</th>
                         <th className="px-6 py-3">Quyết định</th>
+                        <th className="px-6 py-3">Email</th>
                         <th className="px-6 py-3 text-right">Thao tác</th>
                       </tr>
                     </thead>
@@ -839,6 +963,7 @@ export default function Shortlisting() {
                         const c = it.candidate
                         const interviewMeta = INTERVIEW_BADGE[c.interview_status]
                         const summaryOpen = openSummaryId === it.id
+                        const notify = notifyState(it)
                         return (
                           <Fragment key={it.id}>
                           <tr className="hover:bg-slate-50/60">
@@ -942,6 +1067,30 @@ export default function Shortlisting() {
                                 </button>
                               </div>
                             </td>
+                            {/* Trạng thái gửi mail kết quả. `title` mang mốc thời gian
+                                cụ thể — nhãn "Đã gửi" một mình không trả lời được câu
+                                hỏi hay gặp nhất: "gửi hồi nào?". */}
+                            <td className="px-6 py-4">
+                              {notify.icon ? (
+                                <Badge
+                                  variant={notify.variant}
+                                  upper={false}
+                                  className="cursor-default"
+                                >
+                                  <span title={notify.title} className="inline-flex items-center gap-1">
+                                    <notify.icon size={12} />
+                                    {notify.label}
+                                  </span>
+                                </Badge>
+                              ) : (
+                                <span
+                                  title={notify.title}
+                                  className="text-xs text-slate-300"
+                                >
+                                  {notify.label}
+                                </span>
+                              )}
+                            </td>
                             <td className="px-6 py-4">
                               <div className="flex justify-end gap-2">
                                 <button
@@ -980,7 +1129,7 @@ export default function Shortlisting() {
                               điểm từng câu hỏi) — chỉ nạp khi HR bấm mũi tên. */}
                           {summaryOpen && (
                             <tr className="bg-slate-50/70">
-                              <td colSpan={6} className="px-6 py-4">
+                              <td colSpan={7} className="px-6 py-4">
                                 <InterviewSummary candidateId={c.id} />
                               </td>
                             </tr>
@@ -992,13 +1141,18 @@ export default function Shortlisting() {
                   </table>
                 </div>
 
-                <div className="flex items-center justify-between border-t border-slate-200 px-6 py-3.5 text-sm text-slate-500">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 px-6 py-3.5 text-sm text-slate-500">
                   <span>
                     {slDetail.items.length} ứng viên •{' '}
                     {slDetail.items.filter((i) => i.candidate_status === 'accepted').length}{' '}
                     đã chọn •{' '}
                     {slDetail.items.filter((i) => i.candidate_status === 'rejected').length}{' '}
                     từ chối
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <MailCheck size={14} className="text-emerald-600" />
+                    {slDetail.items.filter((i) => i.notified_at).length} đã gửi mail
+                    {notifyQueue.length > 0 && ` • ${notifyQueue.length} chờ gửi`}
                   </span>
                 </div>
               </>
@@ -1055,6 +1209,48 @@ export default function Shortlisting() {
           }
         />
       )}
+
+      {/* Xác nhận gửi mail. Dùng ConfirmDialog (tone cảnh báo, không phải "danger"):
+          gửi mail không xoá dữ liệu, nhưng đã ra khỏi hệ thống thì không thu lại được
+          — nên vẫn phải chặn một nhịp và nói rõ gửi cho bao nhiêu người. */}
+      <ConfirmDialog
+        open={confirmSend}
+        tone="warning"
+        busy={sending}
+        title={`Gửi email kết quả cho ${notifyQueue.length} ứng viên?`}
+        confirmLabel="Gửi ngay"
+        onCancel={() => setConfirmSend(false)}
+        onConfirm={handleSendNotifications}
+        description={
+          <div className="space-y-2">
+            <p>
+              Email đi trực tiếp tới ứng viên và <strong>không thu hồi được</strong>.
+              Nội dung lấy từ mẫu bạn đang dùng cho từng loại kết quả.
+            </p>
+            <ul className="space-y-1 text-slate-500">
+              <li>
+                •{' '}
+                {notifyQueue.filter((i) => i.candidate_status === 'accepted').length} thư
+                thông báo được chọn
+              </li>
+              <li>
+                •{' '}
+                {notifyQueue.filter((i) => i.candidate_status === 'rejected').length} thư
+                thông báo từ chối
+              </li>
+              {missingEmailCount > 0 && (
+                <li className="text-amber-700">
+                  • {missingEmailCount} ứng viên bị bỏ qua vì CV không có email
+                </li>
+              )}
+            </ul>
+            <p className="text-slate-500">
+              Ứng viên đã nhận thông báo đúng với quyết định hiện tại sẽ không bị gửi
+              lại.
+            </p>
+          </div>
+        }
+      />
 
       {/* Compare popup */}
       {showCompare && compareList.length >= 2 && (

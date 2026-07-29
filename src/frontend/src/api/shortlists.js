@@ -54,3 +54,19 @@ export function removeShortlistItem(shortlistId, itemId) {
     auth: true,
   })
 }
+
+// POST /shortlists/{id}/send-notifications -> { message, total_queued }
+//
+// Gửi mail kết quả cho các ứng viên đã chốt accepted/rejected. Backend TỰ lọc:
+// chỉ gửi người chưa gửi lần nào, hoặc người vừa bị đổi quyết định sau lần gửi
+// trước (notified_status != candidate_status) -> bấm hai lần không spam ứng viên.
+//
+// Việc gửi chạy trong BackgroundTasks: API trả về NGAY với số đã xếp hàng, chưa
+// phải số đã gửi thành công. Muốn biết ai đã gửi xong thì nạp lại shortlist và
+// đọc notified_at của từng item.
+export function sendShortlistNotifications(shortlistId) {
+  return apiFetch(`/shortlists/${shortlistId}/send-notifications`, {
+    method: 'POST',
+    auth: true,
+  })
+}
