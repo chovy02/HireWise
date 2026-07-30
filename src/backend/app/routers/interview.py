@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from uuid import UUID
 
@@ -19,6 +20,25 @@ router = APIRouter(
     tags=["Interviews"],
     dependencies=[Depends(require_role("hr_staff"))],
 )
+
+# Nhãn phân loại mặc định cho câu hỏi HR tự gõ. Không được chứa chữ "follow" vì
+# frontend nhận diện câu đào sâu bằng cách soi category (utils/interviewQuestions.js).
+MANUAL_CATEGORY = "HR tự soạn"
+
+# Câu hỏi chính cách nhau 10 đơn vị; 9 khe ở giữa dành cho câu đào sâu.
+ORDER_STEP = 10
+
+
+def _next_root_index(db: Session, interview_id: UUID) -> int:
+    """Khe order_index cho câu hỏi chính tiếp theo (cuối danh sách)."""
+    last = (
+        db.query(func.max(models.InterviewQuestion.order_index))
+        .filter(models.InterviewQuestion.interview_id == interview_id)
+        .scalar()
+    )
+    if last is None:
+        return 0
+    return (last // ORDER_STEP + 1) * ORDER_STEP
 
 @router.get("/candidate/{candidate_id}", response_model=schemas.InterviewResponse)
 def get_candidate_interview(
@@ -47,12 +67,6 @@ def generate_interview(
 
     jd = get_owned_jd(db, candidate.jd_id, current_user)
 
-    # Xóa lịch sử phỏng vấn cũ nếu HR muốn tạo lại
-    existing_interview = db.query(models.Interview).filter(models.Interview.cv_id == candidate.id).first()
-    if existing_interview:
-        db.delete(existing_interview)
-        db.commit()
-
     # Đóng gói ngữ cảnh gửi cho AI. Phần "điểm yếu" lấy từ chính lượt chấm điểm
     # (từng thiếu hụt + chỗ đánh dấu cần kiểm chứng) thay vì đoạn tóm tắt chung chung,
     # để câu hỏi sinh ra bám vào chỗ còn nghi vấn của ứng viên này.
@@ -66,13 +80,28 @@ def generate_interview(
     if not ai_questions:
         raise HTTPException(status_code=502, detail="Lỗi khi AI sinh câu hỏi phỏng vấn.")
 
-    # Lưu vào Database
-    interview = models.Interview(cv_id=candidate.id, status="pending")
-    db.add(interview)
+    # Tạo lại bộ câu hỏi: chỉ thay phần AI, GIỮ NGUYÊN câu HR tự soạn (kèm câu trả lời
+    # đã chấm của chúng). Trước đây cả buổi phỏng vấn bị xoá trắng, nghĩa là mỗi lần HR
+    # bấm "Tạo lại" là mất sạch những câu mình gõ tay — không có cách nào lấy lại.
+    interview = db.query(models.Interview).filter(models.Interview.cv_id == candidate.id).first()
+    kept_questions: list[models.InterviewQuestion] = []
+    if interview:
+        for q in list(interview.questions):
+            if q.is_ai_generated:
+                db.delete(q)  # gồm cả câu đào sâu AI từng sinh ra
+            else:
+                kept_questions.append(q)
+        # Tổng kết cũ nói về bộ câu hỏi vừa bị thay -> không còn đúng nữa.
+        interview.feedback_summary = None
+        interview.status = "in_progress" if any(q.answer_text for q in kept_questions) else "pending"
+    else:
+        interview = models.Interview(cv_id=candidate.id, status="pending")
+        db.add(interview)
     db.commit()
     db.refresh(interview)
 
-    for idx, q in enumerate(ai_questions):
+    next_index = 0
+    for q in ai_questions:
         if not isinstance(q, dict):
             continue
         db_question = models.InterviewQuestion(
@@ -80,13 +109,116 @@ def generate_interview(
             question=q.get("question", "Câu hỏi chưa xác định"),
             expected_answer=q.get("expected_answer", ""),
             category=q.get("category", "Chung"),
-            order_index=idx * 10 # Bước nhảy 10 để chèn tối đa 9 câu hỏi phụ vào giữa
+            order_index=next_index # Bước nhảy 10 để chèn tối đa 9 câu hỏi phụ vào giữa
         )
         db.add(db_question)
-    
+        next_index += ORDER_STEP
+
+    # Câu HR tự soạn xuống cuối bộ mới, giữ đúng thứ tự tương đối cũ giữa chúng.
+    for q in sorted(kept_questions, key=lambda x: x.order_index):
+        q.order_index = next_index
+        next_index += ORDER_STEP
+
     db.commit()
     db.refresh(interview)
     return interview
+
+
+@router.post(
+    "/candidate/{candidate_id}/questions",
+    response_model=schemas.InterviewResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def add_manual_question(
+    candidate_id: UUID,
+    payload: schemas.ManualQuestionRequest,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """HR tự thêm một câu hỏi vào cuối bộ câu hỏi.
+
+    Câu này đi cùng đường ống với câu AI sinh: vẫn nhận câu trả lời, vẫn được
+    `/question/{id}/evaluate` chấm điểm và sinh câu đào sâu, vẫn vào biên bản lúc tổng kết.
+
+    Tự tạo buổi phỏng vấn nếu ứng viên chưa có — nhờ vậy HR muốn phỏng vấn thuần thủ công
+    (không cần AI sinh câu, không cần CV đã chấm) thì vẫn bắt đầu được từ đây.
+    """
+    candidate = get_owned_candidate(db, candidate_id, current_user)
+
+    interview = db.query(models.Interview).filter(models.Interview.cv_id == candidate.id).first()
+    if not interview:
+        interview = models.Interview(cv_id=candidate.id, status="pending")
+        db.add(interview)
+        db.commit()
+        db.refresh(interview)
+
+    if interview.status == "completed":
+        raise HTTPException(
+            status_code=400,
+            detail="Buổi phỏng vấn đã kết thúc — không thêm được câu hỏi mới.",
+        )
+
+    question_text = payload.question.strip()
+    if not question_text:
+        raise HTTPException(status_code=400, detail="Nội dung câu hỏi không được để trống.")
+
+    expected = (payload.expected_answer or "").strip()
+
+    db.add(
+        models.InterviewQuestion(
+            interview_id=interview.id,
+            question=question_text,
+            expected_answer=expected or None,
+            category=MANUAL_CATEGORY,
+            order_index=_next_root_index(db, interview.id),
+            is_ai_generated=False,
+        )
+    )
+    db.commit()
+    db.refresh(interview)
+    return interview
+
+
+@router.delete("/question/{question_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_manual_question(
+    question_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Xoá một câu hỏi HR tự soạn (gõ sai, hỏi trùng…).
+
+    Không cho xoá câu AI sinh: bộ câu hỏi AI là một chỉnh thể bám theo CV/JD, muốn đổi
+    thì bấm "Tạo lại". Xoá câu chính thì xoá luôn các câu đào sâu treo dưới nó, nếu không
+    chúng sẽ mồ côi và bị đánh số nhầm vào câu hỏi phía trên.
+    """
+    question = get_owned_question(db, question_id, current_user)
+
+    if question.is_ai_generated:
+        raise HTTPException(
+            status_code=400,
+            detail="Chỉ xoá được câu hỏi do HR tự soạn. Muốn đổi bộ câu hỏi AI thì bấm Tạo lại.",
+        )
+
+    interview = db.query(models.Interview).filter(models.Interview.id == question.interview_id).first()
+    if interview and interview.status == "completed":
+        raise HTTPException(
+            status_code=400,
+            detail="Buổi phỏng vấn đã kết thúc — không xoá được câu hỏi.",
+        )
+
+    root_index = (question.order_index // ORDER_STEP) * ORDER_STEP
+    if question.order_index == root_index:
+        follow_ups = db.query(models.InterviewQuestion).filter(
+            models.InterviewQuestion.interview_id == question.interview_id,
+            models.InterviewQuestion.order_index > root_index,
+            models.InterviewQuestion.order_index < root_index + ORDER_STEP,
+        ).all()
+        for f in follow_ups:
+            db.delete(f)
+
+    db.delete(question)
+    db.commit()
+    return None
 
 @router.post("/question/{question_id}/evaluate", response_model=schemas.EvaluationResultResponse)
 def evaluate_answer(

@@ -8,6 +8,29 @@
   --color-brand: #4f46e5;
   --color-brand-light: #6366f1;
   --color-canvas: #f7f8fb;
+
+  /* Chuyển cảnh dùng chung cho các khối vừa được chèn vào danh sách (vd: ô soạn câu
+     hỏi phỏng vấn, câu hỏi mới thêm). Nội dung bật ra đột ngột thì người dùng khó
+     bắt được cái gì vừa đổi — trượt lên nhẹ 4px là đủ để mắt lần theo. */
+  --animate-rise-in: rise-in 200ms cubic-bezier(0.16, 1, 0.3, 1);
+
+  @keyframes rise-in {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+}
+
+/* Tôn trọng người đã tắt hiệu ứng ở cấp hệ điều hành. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-rise-in {
+    animation: none;
+  }
 }
 
 html,

@@ -7,6 +7,12 @@ export function isFollowUpQuestion(q) {
   return !!q?.category?.toLowerCase().includes('follow')
 }
 
+// Câu do HR tự gõ thay vì AI sinh (backend đặt is_ai_generated = false). Dữ liệu cũ
+// không có cột này -> mặc định coi như của AI, đúng như trước khi có tính năng tự thêm.
+export function isManualQuestion(q) {
+  return q?.is_ai_generated === false
+}
+
 export function sortInterviewQuestions(list) {
   return [...(list || [])].sort((a, b) => a.order_index - b.order_index)
 }

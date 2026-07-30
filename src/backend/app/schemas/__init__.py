@@ -50,7 +50,8 @@ from .interview import (
     InterviewResponse,
     EvaluateAnswerRequest,
     EvaluationResultResponse,
-    GenerateInterviewRequest
+    GenerateInterviewRequest,
+    ManualQuestionRequest,
 )
 
 from .log import SystemLogResponse

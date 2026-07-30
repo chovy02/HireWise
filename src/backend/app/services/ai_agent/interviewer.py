@@ -99,6 +99,15 @@ def generate_interview_questions_ai(
     except Exception as e:
         return []
 
+# Câu hỏi HR tự soạn thường không kèm đáp án kỳ vọng. Nhét chuỗi rỗng vào prompt thì AI
+# coi như "không có gì để đối chiếu" và chấm rất tùy hứng — nên nói rõ để nó tự dựng chuẩn.
+_NO_EXPECTED_ANSWER = (
+    "(Không có sẵn đáp án kỳ vọng — đây là câu hỏi do chính người phỏng vấn soạn. "
+    "Hãy tự xác định đâu là một câu trả lời tốt cho câu hỏi này ở mức chuyên môn tương ứng, "
+    "rồi chấm câu trả lời của ứng viên theo chuẩn đó.)"
+)
+
+
 def evaluate_interview_answer_ai(question: str, expected: str, answer: str, allow_follow_up: bool = True) -> dict:
     if not allow_follow_up:
         guidance = "- LƯU Ý HỆ THỐNG: Đã đạt giới hạn tối đa số câu hỏi phụ cho chủ đề này. BẮT BUỘC để follow_up_question là chuỗi rỗng \"\"."
@@ -109,7 +118,7 @@ def evaluate_interview_answer_ai(question: str, expected: str, answer: str, allo
         )
 
     prompt = EVALUATE_ANSWER_PROMPT.replace("{question}", question)\
-                                   .replace("{expected_answer}", expected or "")\
+                                   .replace("{expected_answer}", (expected or "").strip() or _NO_EXPECTED_ANSWER)\
                                    .replace("{answer_text}", answer)\
                                    .replace("{follow_up_guidance}", guidance)
     try:

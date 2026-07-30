@@ -388,19 +388,25 @@ def _generate_questions_for(
         return {"candidate": c.name, "status": "failed", "reason": "AI không sinh được câu hỏi."}
 
     created = interview is None
+    kept_questions: list[models.InterviewQuestion] = []
     if created:
         interview = models.Interview(cv_id=c.id, status="pending")
         db.add(interview)
         db.commit()
         db.refresh(interview)
     else:
-        # `questions` có cascade delete-orphan -> xoá sạch danh sách là đủ, buổi
-        # phỏng vấn (lịch hẹn, trạng thái, nhận xét) giữ nguyên.
-        interview.questions.clear()
+        # `questions` có cascade delete-orphan -> bỏ khỏi danh sách là xoá khỏi DB, buổi
+        # phỏng vấn (lịch hẹn, trạng thái, nhận xét) giữ nguyên. Chỉ thay phần AI: câu do
+        # HR tự soạn là công sức tay, sinh lại bộ câu hỏi không được cuốn chúng đi theo.
+        kept_questions = [q for q in interview.questions if not q.is_ai_generated]
+        for q in list(interview.questions):
+            if q.is_ai_generated:
+                interview.questions.remove(q)
         db.flush()
 
     saved = 0
-    for idx, q in enumerate(ai_questions):
+    next_index = 0
+    for q in ai_questions:
         if not isinstance(q, dict):
             continue
         db.add(models.InterviewQuestion(
@@ -408,9 +414,15 @@ def _generate_questions_for(
             question=q.get("question", "Câu hỏi chưa xác định"),
             expected_answer=q.get("expected_answer", ""),
             category=q.get("category", "Chung"),
-            order_index=idx * 10,
+            order_index=next_index,
         ))
         saved += 1
+        next_index += 10
+
+    # Đẩy câu HR tự soạn xuống cuối bộ mới, giữ đúng thứ tự tương đối cũ giữa chúng.
+    for q in sorted(kept_questions, key=lambda x: x.order_index):
+        q.order_index = next_index
+        next_index += 10
     db.commit()
 
     return {

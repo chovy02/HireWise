@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   X,
   ArrowLeft,
@@ -10,11 +10,17 @@ import {
   CheckCircle2,
   FileCheck2,
   CornerDownRight,
+  Plus,
+  PenLine,
+  Trash2,
+  ChevronDown,
+  Lightbulb,
 } from 'lucide-react'
 import { Badge, PrimaryButton, SecondaryButton } from './ui.jsx'
 import { useToast } from '../context/ToastContext.jsx'
 import { formatName } from '../utils/formatName.js'
 import {
+  isManualQuestion,
   numberInterviewQuestions,
   sortInterviewQuestions,
 } from '../utils/interviewQuestions.js'
@@ -23,6 +29,8 @@ import {
   generateInterview,
   evaluateAnswer,
   completeInterview,
+  addInterviewQuestion,
+  deleteInterviewQuestion,
 } from '../api/interviews.js'
 
 const STATUS_META = {
@@ -42,8 +50,8 @@ function scoreColor(score) {
 const sortQuestions = sortInterviewQuestions
 
 // Nội dung phỏng vấn (dùng chung cho cả popup lẫn tab trong Shortlisting).
-// Luồng: AI sinh câu hỏi -> HR gõ tóm tắt câu trả lời -> AI chấm + đào sâu ->
-// HR bấm kết thúc -> AI tổng kết năng lực.
+// Luồng: AI sinh câu hỏi (hoặc HR tự thêm) -> HR gõ tóm tắt câu trả lời ->
+// AI chấm + đào sâu -> HR bấm kết thúc -> AI tổng kết năng lực.
 // - onClose: nếu có -> hiện nút đóng (chế độ popup). Bỏ trống -> chế độ tab.
 // - onBack: nếu có -> hiện nút "Quay lại" (chế độ tab, trả HR về tab Shortlist).
 export function InterviewPanel({ candidateId, candidateName, onClose, onBack }) {
@@ -54,6 +62,8 @@ export function InterviewPanel({ candidateId, candidateName, onClose, onBack }) 
   const [aspect, setAspect] = useState('')
   const [generating, setGenerating] = useState(false)
   const [completing, setCompleting] = useState(false)
+  const [composing, setComposing] = useState(false) // đang mở ô soạn câu hỏi tự thêm
+  const composerRef = useRef(null)
 
   const displayName = formatName(candidateName) || 'Ứng viên'
   const completed = interview?.status === 'completed'
@@ -78,6 +88,16 @@ export function InterviewPanel({ candidateId, candidateName, onClose, onBack }) 
     }
   }, [candidateId])
 
+  // Mở ô soạn câu hỏi từ nút trên header: kéo luôn ô đó vào tầm mắt, vì nó nằm
+  // dưới cùng danh sách nên với bộ 10 câu thì bấm xong sẽ không thấy gì thay đổi.
+  useEffect(() => {
+    if (!composing) return
+    const id = requestAnimationFrame(() =>
+      composerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    )
+    return () => cancelAnimationFrame(id)
+  }, [composing])
+
   async function handleGenerate() {
     setGenerating(true)
     try {
@@ -90,6 +110,29 @@ export function InterviewPanel({ candidateId, candidateName, onClose, onBack }) 
     } finally {
       setGenerating(false)
     }
+  }
+
+  // Lưu câu hỏi HR tự soạn. Backend trả về cả buổi phỏng vấn (và tự tạo buổi mới nếu
+  // ứng viên chưa có), nên chỉ cần thay state bằng dữ liệu vừa nhận.
+  async function handleAddQuestion(draft) {
+    const data = await addInterviewQuestion(candidateId, draft)
+    setInterview({ ...data, questions: sortQuestions(data.questions) })
+    setNotFound(false)
+    toast('Đã thêm câu hỏi của bạn.')
+  }
+
+  // Xoá khỏi state cả câu vừa xoá lẫn các câu đào sâu treo dưới nó (backend xoá kèm).
+  function handleQuestionDeleted(removed) {
+    setInterview((prev) => {
+      if (!prev) return prev
+      const root = Math.floor(removed.order_index / 10) * 10
+      return {
+        ...prev,
+        questions: prev.questions.filter(
+          (q) => q.order_index < root || q.order_index >= root + 10
+        ),
+      }
+    })
   }
 
   // Cập nhật 1 câu hỏi trong state + chèn câu hỏi đào sâu (nếu AI sinh ra).
@@ -160,25 +203,37 @@ export function InterviewPanel({ candidateId, candidateName, onClose, onBack }) 
               )}
             </h2>
             <p className="text-xs text-slate-400">
-              Câu hỏi do AI sinh dựa trên CV &amp; JD — HR gõ lại câu trả lời để AI chấm.
+              Câu hỏi do AI sinh từ CV &amp; JD hoặc do bạn tự thêm — HR gõ lại câu trả
+              lời để AI chấm.
             </p>
           </div>
         </div>
         <div className="flex items-center gap-2">
           {interview && !completed && (
-            <SecondaryButton
-              className="px-3 py-2"
-              onClick={handleGenerate}
-              disabled={generating}
-              title="Sinh lại bộ câu hỏi (xóa buổi phỏng vấn hiện tại)"
-            >
-              {generating ? (
-                <Loader2 size={15} className="animate-spin" />
-              ) : (
-                <RefreshCw size={15} />
-              )}
-              Tạo lại
-            </SecondaryButton>
+            <>
+              {/* Header hẹp (popup + tên ứng viên dài) -> chỉ còn icon, khỏi bị xuống dòng */}
+              <SecondaryButton
+                className="px-3 py-2"
+                onClick={() => setComposing(true)}
+                title="Tự soạn một câu hỏi cho ứng viên"
+              >
+                <Plus size={15} />
+                <span className="hidden sm:inline">Thêm câu hỏi</span>
+              </SecondaryButton>
+              <SecondaryButton
+                className="px-3 py-2"
+                onClick={handleGenerate}
+                disabled={generating}
+                title="Sinh lại bộ câu hỏi AI (câu bạn tự soạn vẫn được giữ)"
+              >
+                {generating ? (
+                  <Loader2 size={15} className="animate-spin" />
+                ) : (
+                  <RefreshCw size={15} />
+                )}
+                <span className="hidden sm:inline">Tạo lại</span>
+              </SecondaryButton>
+            </>
           )}
           {onClose && (
             <button
@@ -236,6 +291,32 @@ export function InterviewPanel({ candidateId, candidateName, onClose, onBack }) 
                 </>
               )}
             </PrimaryButton>
+
+            {/* Đường tự soạn: HR nào đã có sẵn câu hỏi trong đầu thì không phải chờ AI
+                sinh một bộ rồi mới thêm được câu của mình. */}
+            <div className="mt-6 flex items-center gap-3">
+              <span className="h-px flex-1 bg-slate-200" />
+              <span className="text-xs font-medium uppercase tracking-wide text-slate-400">
+                hoặc
+              </span>
+              <span className="h-px flex-1 bg-slate-200" />
+            </div>
+
+            <div className="mt-4 text-left">
+              {composing ? (
+                <QuestionComposer
+                  onSubmit={handleAddQuestion}
+                  onCancel={() => setComposing(false)}
+                />
+              ) : (
+                <SecondaryButton
+                  className="w-full"
+                  onClick={() => setComposing(true)}
+                >
+                  <PenLine size={15} /> Tự soạn câu hỏi đầu tiên
+                </SecondaryButton>
+              )}
+            </div>
           </div>
         )}
 
@@ -269,8 +350,23 @@ export function InterviewPanel({ candidateId, candidateName, onClose, onBack }) 
                   question={question}
                   locked={completed}
                   onEvaluated={applyEvaluation}
+                  onDeleted={handleQuestionDeleted}
                 />
               )
+            )}
+
+            {/* Tự thêm câu hỏi — luôn nằm ở cuối bộ câu hỏi, đúng chỗ câu mới sẽ xuất hiện */}
+            {!completed && (
+              <div ref={composerRef}>
+                {composing ? (
+                  <QuestionComposer
+                    onSubmit={handleAddQuestion}
+                    onCancel={() => setComposing(false)}
+                  />
+                ) : (
+                  <AddQuestionTrigger onClick={() => setComposing(true)} />
+                )}
+              </div>
             )}
           </div>
         )}
@@ -319,14 +415,196 @@ export default function InterviewModal({ candidateId, candidateName, onClose }) 
   )
 }
 
+// Ô "+" ở cuối danh sách. Viền nét đứt để nó đọc ra là một chỗ trống chờ điền, không
+// phải một câu hỏi đã có.
+function AddQuestionTrigger({ onClick }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="group flex w-full items-center gap-3 rounded-xl border-2 border-dashed border-slate-200 px-4 py-3.5 text-left transition-all duration-200 hover:border-indigo-300 hover:bg-indigo-50/50 focus:outline-none focus-visible:border-indigo-400 focus-visible:ring-2 focus-visible:ring-indigo-100"
+    >
+      <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-500 transition-all duration-200 group-hover:scale-105 group-hover:bg-indigo-100 group-hover:text-indigo-600">
+        <Plus size={17} />
+      </span>
+      <span className="min-w-0">
+        <span className="block text-sm font-semibold text-slate-700 transition-colors group-hover:text-indigo-700">
+          Thêm câu hỏi của bạn
+        </span>
+      </span>
+    </button>
+  )
+}
+
+// Ô soạn câu hỏi HR tự đặt. Giữ nguyên trạng thái mở sau khi lưu để nhập liền nhiều câu.
+// Ctrl/⌘ + Enter lưu, Esc đóng — Enter trần vẫn xuống dòng vì câu hỏi thường dài.
+function QuestionComposer({ onSubmit, onCancel }) {
+  const toast = useToast()
+  const [text, setText] = useState('')
+  const [expected, setExpected] = useState('')
+  const [showExpected, setShowExpected] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const textRef = useRef(null)
+
+  useEffect(() => {
+    textRef.current?.focus()
+  }, [])
+
+  const tooShort = text.trim().length > 0 && text.trim().length < 5
+
+  async function handleSave() {
+    const question = text.trim()
+    if (question.length < 5) {
+      toast('Nhập nội dung câu hỏi (ít nhất 5 ký tự).')
+      textRef.current?.focus()
+      return
+    }
+    setSaving(true)
+    try {
+      await onSubmit({ question, expectedAnswer: expected.trim() })
+      setText('')
+      setExpected('')
+      setShowExpected(false)
+      textRef.current?.focus()
+    } catch (e) {
+      toast(e.message || 'Không thêm được câu hỏi.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  function handleKeyDown(e) {
+    if (e.key === 'Escape') {
+      e.stopPropagation() // đừng để Esc đóng luôn cả popup phỏng vấn
+      onCancel()
+      return
+    }
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !saving) {
+      e.preventDefault()
+      handleSave()
+    }
+  }
+
+  return (
+    <div
+      onKeyDown={handleKeyDown}
+      className="animate-rise-in rounded-xl border border-indigo-200 bg-indigo-50/40 p-4 shadow-sm"
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-indigo-700">
+          <PenLine size={13} /> Câu hỏi của bạn
+        </span>
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={saving}
+          title="Đóng"
+          className="rounded-md p-1 text-slate-400 transition hover:bg-white hover:text-slate-600 disabled:opacity-50"
+        >
+          <X size={15} />
+        </button>
+      </div>
+
+      <textarea
+        ref={textRef}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        rows={3}
+        disabled={saving}
+        placeholder="Vd: Kể về một lần bạn phải sửa lỗi trên môi trường thật — bạn khoanh vùng nguyên nhân thế nào?"
+        className={`mt-2.5 w-full resize-none rounded-lg border bg-white px-3 py-2 text-sm text-slate-700 outline-none transition focus:ring-2 focus:ring-indigo-100 disabled:bg-slate-50 ${
+          tooShort ? 'border-amber-300' : 'border-slate-200 focus:border-indigo-500'
+        }`}
+      />
+
+      {/* Gợi ý đáp án là tùy chọn: để trống thì lúc chấm AI tự dựng chuẩn trả lời. */}
+      <button
+        type="button"
+        onClick={() => setShowExpected((v) => !v)}
+        className="mt-2 inline-flex items-center gap-1.5 text-xs font-semibold text-slate-500 transition-colors hover:text-indigo-600"
+      >
+        <ChevronDown
+          size={14}
+          className={`transition-transform duration-200 ${showExpected ? 'rotate-180' : ''}`}
+        />
+        Gợi ý đáp án kỳ vọng (tùy chọn)
+      </button>
+
+      {showExpected && (
+        <div className="animate-rise-in mt-1.5">
+          <textarea
+            value={expected}
+            onChange={(e) => setExpected(e.target.value)}
+            rows={2}
+            disabled={saving}
+            placeholder="Các từ khóa / hướng tư duy đúng để AI đối chiếu khi chấm…"
+            className="w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 disabled:bg-slate-50"
+          />
+          <p className="mt-1 text-[11px] leading-relaxed text-slate-400">
+            Để trống cũng được — AI sẽ tự dựng chuẩn trả lời tốt cho câu hỏi này rồi chấm
+            theo đó.
+          </p>
+        </div>
+      )}
+
+      <div className="mt-3 flex items-center justify-between gap-3">
+        <span className="hidden text-[11px] text-slate-400 sm:block">
+          Ctrl + Enter để lưu · Esc để đóng
+        </span>
+        <div className="flex items-center gap-2">
+          <SecondaryButton
+            className="px-3 py-1.5 text-xs"
+            onClick={onCancel}
+            disabled={saving}
+          >
+            Huỷ
+          </SecondaryButton>
+          <PrimaryButton
+            className="px-3 py-1.5 text-xs"
+            onClick={handleSave}
+            disabled={saving || !text.trim()}
+          >
+            {saving ? (
+              <>
+                <Loader2 size={13} className="animate-spin" /> Đang lưu…
+              </>
+            ) : (
+              <>
+                <Plus size={13} /> Thêm câu hỏi
+              </>
+            )}
+          </PrimaryButton>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // 1 câu hỏi: ô nhập câu trả lời, nút chấm điểm, và nhận xét AI sau khi chấm.
 // Câu đào sâu (follow-up) được thụt vào + viền trái đậm để tách khỏi câu chính.
-function QuestionCard({ label, isFollowUp, question, locked, onEvaluated }) {
+// Câu HR tự soạn có badge riêng + nút xoá (câu AI thì không: muốn đổi thì bấm "Tạo lại").
+function QuestionCard({ label, isFollowUp, question, locked, onEvaluated, onDeleted }) {
   const toast = useToast()
   const [draft, setDraft] = useState(question.answer_text || '')
   const [evaluating, setEvaluating] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [deleting, setDeleting] = useState(false)
 
   const answered = !!question.answer_text
+  const manual = isManualQuestion(question)
+
+  async function handleDelete() {
+    setDeleting(true)
+    try {
+      await deleteInterviewQuestion(question.id)
+      onDeleted?.(question)
+      toast('Đã xoá câu hỏi.')
+    } catch (e) {
+      toast(e.message || 'Không xoá được câu hỏi.')
+      setDeleting(false)
+      setConfirmDelete(false)
+    }
+  }
 
   async function handleEvaluate() {
     if (!draft.trim()) {
@@ -347,10 +625,12 @@ function QuestionCard({ label, isFollowUp, question, locked, onEvaluated }) {
 
   return (
     <div
-      className={`rounded-xl border p-4 ${
+      className={`group/q animate-rise-in rounded-xl border p-4 transition-colors ${
         isFollowUp
           ? 'ml-8 border-indigo-200 border-l-4 border-l-indigo-400 bg-indigo-50/50'
-          : 'border-slate-200'
+          : manual
+            ? 'border-amber-200 border-l-4 border-l-amber-400 bg-amber-50/30'
+            : 'border-slate-200'
       }`}
     >
       {/* Đề bài */}
@@ -359,17 +639,24 @@ function QuestionCard({ label, isFollowUp, question, locked, onEvaluated }) {
           className={`flex h-6 flex-shrink-0 items-center justify-center rounded-full text-xs font-bold ${
             isFollowUp
               ? 'w-9 bg-indigo-100 text-indigo-700'
-              : 'w-6 bg-slate-100 text-slate-600'
+              : manual
+                ? 'w-6 bg-amber-100 text-amber-700'
+                : 'w-6 bg-slate-100 text-slate-600'
           }`}
         >
           {label}
         </div>
         <div className="min-w-0 flex-1">
-          {(isFollowUp || question.score != null) && (
+          {(isFollowUp || manual || question.score != null) && (
             <div className="mb-1 flex flex-wrap items-center gap-2">
               {isFollowUp && (
                 <Badge variant="ai" upper={false}>
                   <CornerDownRight size={12} /> Câu đào sâu
+                </Badge>
+              )}
+              {manual && (
+                <Badge variant="warning" upper={false}>
+                  <PenLine size={11} /> Bạn tự soạn
                 </Badge>
               )}
               {question.score != null && (
@@ -380,8 +667,61 @@ function QuestionCard({ label, isFollowUp, question, locked, onEvaluated }) {
             </div>
           )}
           <p className="text-sm font-semibold text-slate-800">{question.question}</p>
+
+          {/* Gợi ý đáp án chỉ hiện với câu HR tự gõ — để họ soát lại đúng thứ mình vừa nhập. */}
+          {manual && question.expected_answer && (
+            <p className="mt-1.5 flex items-start gap-1.5 text-xs leading-relaxed text-slate-500">
+              <Lightbulb size={13} className="mt-0.5 flex-shrink-0 text-amber-500" />
+              <span>
+                <span className="font-semibold">Đáp án kỳ vọng: </span>
+                {question.expected_answer}
+              </span>
+            </p>
+          )}
         </div>
+
+        {/* Xoá câu tự soạn. Trên máy có chuột thì ẩn tới khi trỏ vào thẻ cho danh sách
+            gọn mắt; màn cảm ứng không có hover nên phải hiện sẵn (`md:` trở lên mới ẩn),
+            không thì không có cách nào bấm tới. */}
+        {manual && !locked && !confirmDelete && (
+          <button
+            type="button"
+            onClick={() => setConfirmDelete(true)}
+            title="Xoá câu hỏi này"
+            className="flex-shrink-0 rounded-md p-1.5 text-slate-300 transition hover:bg-red-50 hover:text-red-500 focus:opacity-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-100 md:opacity-0 md:group-hover/q:opacity-100"
+          >
+            <Trash2 size={15} />
+          </button>
+        )}
       </div>
+
+      {/* Xác nhận xoá ngay trong thẻ — nhẹ hơn một hộp thoại chắn cả trang cho một câu hỏi. */}
+      {manual && !locked && confirmDelete && (
+        <div className="animate-rise-in mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2">
+          <span className="text-xs font-medium text-red-700">
+            Xoá câu hỏi này{answered ? ' cùng câu trả lời và điểm đã chấm' : ''}?
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setConfirmDelete(false)}
+              disabled={deleting}
+              className="rounded-md px-2.5 py-1 text-xs font-medium text-slate-600 transition hover:bg-white disabled:opacity-50"
+            >
+              Huỷ
+            </button>
+            <button
+              type="button"
+              onClick={handleDelete}
+              disabled={deleting}
+              className="inline-flex items-center gap-1.5 rounded-md bg-red-600 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-red-700 disabled:opacity-60"
+            >
+              {deleting ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
+              Xoá
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Ô nhập câu trả lời (thẳng hàng với đề bài, chip số câu đào sâu rộng hơn) */}
       <div className={`mt-3 ${isFollowUp ? 'pl-12' : 'pl-9'}`}>

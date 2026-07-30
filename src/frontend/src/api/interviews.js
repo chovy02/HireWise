@@ -19,6 +19,27 @@ export function generateInterview(candidateId, aspect) {
   })
 }
 
+// POST /interviews/candidate/{candidateId}/questions  { question, expected_answer? }
+//   -> InterviewResponse (đã gồm câu mới ở cuối)
+// Câu HR tự soạn. Backend tự tạo buổi phỏng vấn nếu ứng viên chưa có, nên đây cũng là
+// đường bắt đầu một buổi phỏng vấn thủ công hoàn toàn (không cần AI sinh câu).
+export function addInterviewQuestion(candidateId, { question, expectedAnswer }) {
+  return apiFetch(`/interviews/candidate/${candidateId}/questions`, {
+    method: 'POST',
+    body: { question, expected_answer: expectedAnswer || null },
+    auth: true,
+  })
+}
+
+// DELETE /interviews/question/{questionId} -> 204
+// Chỉ xoá được câu HR tự soạn (backend chặn câu do AI sinh).
+export function deleteInterviewQuestion(questionId) {
+  return apiFetch(`/interviews/question/${questionId}`, {
+    method: 'DELETE',
+    auth: true,
+  })
+}
+
 // POST /interviews/question/{questionId}/evaluate  { answer_text } -> EvaluationResultResponse
 // AI chấm câu trả lời + có thể sinh 1 câu hỏi đào sâu (follow_up_question).
 export function evaluateAnswer(questionId, answerText) {

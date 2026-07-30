@@ -5,10 +5,12 @@ import {
   Sparkles,
   MessageSquareText,
   CornerDownRight,
+  PenLine,
 } from 'lucide-react'
 import { Badge } from './ui.jsx'
 import { getCandidateInterview } from '../api/interviews.js'
 import {
+  isManualQuestion,
   numberInterviewQuestions,
   sortInterviewQuestions,
 } from '../utils/interviewQuestions.js'
@@ -112,13 +114,16 @@ export default function InterviewSummary({ candidateId }) {
       ) : (
         <ol className="space-y-2.5">
           {numberInterviewQuestions(questions).map(({ question: q, label, isFollowUp }) => {
+            const manual = isManualQuestion(q)
             return (
               <li
                 key={q.id}
                 className={`rounded-xl border p-3.5 ${
                   isFollowUp
                     ? 'ml-8 border-indigo-200 border-l-4 border-l-indigo-400 bg-indigo-50/50'
-                    : 'border-slate-200 bg-white'
+                    : manual
+                      ? 'border-amber-200 border-l-4 border-l-amber-400 bg-amber-50/30'
+                      : 'border-slate-200 bg-white'
                 }`}
               >
                 <div className="flex items-start gap-2.5">
@@ -126,7 +131,9 @@ export default function InterviewSummary({ candidateId }) {
                     className={`mt-0.5 flex h-5 flex-shrink-0 items-center justify-center rounded-full text-[11px] font-bold ${
                       isFollowUp
                         ? 'w-8 bg-indigo-100 text-indigo-700'
-                        : 'w-5 bg-slate-100 text-slate-600'
+                        : manual
+                          ? 'w-5 bg-amber-100 text-amber-700'
+                          : 'w-5 bg-slate-100 text-slate-600'
                     }`}
                   >
                     {label}
@@ -136,6 +143,10 @@ export default function InterviewSummary({ candidateId }) {
                       {isFollowUp ? (
                         <Badge variant="ai" upper={false}>
                           <CornerDownRight size={12} /> Câu đào sâu
+                        </Badge>
+                      ) : manual ? (
+                        <Badge variant="warning" upper={false}>
+                          <PenLine size={11} /> HR tự soạn
                         </Badge>
                       ) : (
                         q.category && (
