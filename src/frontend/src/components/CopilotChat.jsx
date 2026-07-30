@@ -17,6 +17,7 @@ import {
   deleteChatSession,
 } from '../api/agent.js'
 import { useProjects } from '../context/ProjectContext.jsx'
+import { formatShortDateTime } from '../utils/datetime.js'
 
 const SUGGESTIONS = [
   'Đang mở tuyển những vị trí nào?',
@@ -29,17 +30,8 @@ const WELCOME = {
   text: 'Xin chào! Mình là trợ lý tuyển dụng. Bạn cứ ra lệnh, mình sẽ thao tác và mở đúng màn hình bên trái cho bạn.',
 }
 
-// Ngày dạng "14/07 18:42" cho danh sách lịch sử.
-function shortDate(iso) {
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return ''
-  return d.toLocaleString('vi-VN', {
-    day: '2-digit',
-    month: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
-}
+// Ngày dạng "14/07 18:42" (giờ Việt Nam) cho danh sách lịch sử.
+const shortDate = (iso) => formatShortDateTime(iso)
 
 // AI Copilot: cột phải. HR chat -> agent gọi tool qua MCP -> điều hướng/làm mới phần
 // giao diện bên trái qua `ui_actions`. Lịch sử hội thoại lưu ở backend (chat_sessions).

@@ -18,7 +18,13 @@ celery_app.conf.update(
     task_serializer="json",
     result_serializer="json",
     accept_content=["json"],
-    timezone="UTC",
+    # Múi giờ nghiệp vụ của hệ thống. Ảnh hưởng tới cách Celery ĐỌC lịch `crontab`
+    # và cách hiển thị mốc thời gian trong log worker — nên khi sau này thêm task
+    # định kỳ, `crontab(hour=8)` nghĩa là 8h SÁNG GIỜ VIỆT NAM, đúng như HR mong đợi.
+    timezone="Asia/Ho_Chi_Minh",
+    # enable_utc: message vẫn truyền mốc thời gian dưới dạng UTC trong nội bộ. Giữ
+    # True (mặc định) để worker/broker lệch múi giờ nhau vẫn hiểu đúng cùng một mốc.
+    enable_utc=True,
     task_track_started=True,
     broker_connection_retry_on_startup = True,
     # Chỉ ack task SAU khi chạy xong -> worker crash giữa chừng thì task được giao lại,

@@ -30,17 +30,10 @@ import { getCandidates, getJd, uploadCvs, retryCandidate, listUploads } from '..
 import { listShortlists } from '../api/shortlists.js'
 import CandidateDetailModal from '../components/CandidateDetailModal.jsx'
 import { formatName } from '../utils/formatName.js'
+import { formatDateTime } from '../utils/datetime.js'
 
-// "2026-07-28T10:26:27" -> "28/07/2026 10:26"
-function formatUploadedAt(iso) {
-  if (!iso) return 'Không rõ thời điểm'
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return 'Không rõ thời điểm'
-  const pad = (n) => String(n).padStart(2, '0')
-  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(
-    d.getHours()
-  )}:${pad(d.getMinutes())}`
-}
+// "2026-07-28T10:26:27+00:00" -> "28/07/2026 17:26" (theo giờ Việt Nam)
+const formatUploadedAt = (iso) => formatDateTime(iso, 'Không rõ thời điểm')
 
 // Trạng thái xử lý CV thật (khớp models.Candidate.status ở backend).
 const STATUS_META = {

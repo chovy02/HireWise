@@ -1,5 +1,6 @@
 import { Briefcase, Users, ArrowRight, Trash2 } from 'lucide-react'
 import { Card } from './ui.jsx'
+import { formatDate as formatLocalDate } from '../utils/datetime.js'
 
 // Thẻ dự án (JD), dùng CHUNG cho Bảng điều khiển và trang chọn dự án ở Rút gọn.
 //
@@ -30,14 +31,8 @@ const ACCENTS = {
   },
 }
 
-// "2026-07-26T13:02:53" -> "26/07/2026"
-function formatDate(iso) {
-  if (!iso) return null
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return null
-  const pad = (n) => String(n).padStart(2, '0')
-  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`
-}
+// "2026-07-26T13:02:53+00:00" -> "26/07/2026" (theo giờ Việt Nam)
+const formatDate = (iso) => formatLocalDate(iso, null)
 
 export default function ProjectCard({
   project,

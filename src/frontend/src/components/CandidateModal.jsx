@@ -22,6 +22,7 @@ import { useToast } from '../context/ToastContext.jsx'
 import { useProjects } from '../context/ProjectContext.jsx'
 import { useAuth } from '../context/AuthContext.jsx'
 import { getCandidateCv } from '../api/jds.js'
+import { formatDateTimeWithSeconds } from '../utils/datetime.js'
 
 // Nhúng file PDF gốc của ứng viên: fetch kèm token -> blob URL -> <iframe>.
 // (iframe không tự gửi được header Authorization, nên phải fetch rồi tạo blob URL.)
@@ -78,14 +79,8 @@ function CvPdf({ candidateId }) {
   )
 }
 
-// Friendly timestamp for the edit-history log.
-function fmt(ts) {
-  try {
-    return new Date(ts).toLocaleString()
-  } catch {
-    return ts
-  }
-}
+// Friendly timestamp for the edit-history log (giờ Việt Nam, tới từng giây).
+const fmt = (ts) => formatDateTimeWithSeconds(ts, ts ?? '—')
 
 const clampScore = (v) => Math.max(0, Math.min(100, Number(v) || 0))
 

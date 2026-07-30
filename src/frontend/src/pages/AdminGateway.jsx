@@ -47,6 +47,7 @@ import {
 import { useToast } from '../context/ToastContext.jsx'
 import { useAuth } from '../context/AuthContext.jsx'
 import { listUsers, createUser, updateUser } from '../api/users.js'
+import { formatDateTimeWithSeconds } from '../utils/datetime.js'
 import {
   getSystemLogs,
   getAiMetrics,
@@ -883,7 +884,7 @@ function AiMonitoring() {
                     {logs.map((l) => (
                       <tr key={l.id} className="cursor-pointer hover:bg-slate-50/60" onClick={() => setOpenLog(l)}>
                         <td className="whitespace-nowrap px-6 py-3 text-xs text-slate-500">
-                          {new Date(l.created_at).toLocaleString('vi-VN')}
+                          {formatDateTimeWithSeconds(l.created_at)}
                         </td>
                         <td className="px-6 py-3">
                           <span className="inline-flex items-center gap-1.5 text-sm font-medium text-slate-700">
@@ -937,7 +938,7 @@ function AiMonitoring() {
                     {toolLogs.map((l) => (
                       <tr key={l.id} className="cursor-pointer hover:bg-slate-50/60" onClick={() => setOpenTool(l)}>
                         <td className="whitespace-nowrap px-6 py-3 text-xs text-slate-500">
-                          {new Date(l.created_at).toLocaleString('vi-VN')}
+                          {formatDateTimeWithSeconds(l.created_at)}
                         </td>
                         <td className="px-6 py-3">
                           <span className="inline-flex items-center gap-1.5 text-sm font-medium text-slate-700">
@@ -974,7 +975,7 @@ function AiMonitoring() {
               <Badge variant="neutral" upper={false}>{num(openLog.total_tokens)} token</Badge>
               <Badge variant="neutral" upper={false}>{num(Math.round(openLog.latency_ms))} ms</Badge>
               <Badge variant="neutral" upper={false}>
-                {new Date(openLog.created_at).toLocaleString('vi-VN')}
+                {formatDateTimeWithSeconds(openLog.created_at)}
               </Badge>
             </div>
             {openLog.error_message && (
@@ -998,7 +999,7 @@ function AiMonitoring() {
               </Badge>
               <Badge variant="neutral" upper={false}>{openTool.user_email || 'Hệ thống'}</Badge>
               <Badge variant="neutral" upper={false}>
-                {new Date(openTool.created_at).toLocaleString('vi-VN')}
+                {formatDateTimeWithSeconds(openTool.created_at)}
               </Badge>
             </div>
             <CodeBlock label="Tham số đầu vào" text={jsonText(openTool.input_params)} />
@@ -1054,7 +1055,7 @@ function AuditSecurity() {
       total: list.length,
       actions: new Set(list.map((l) => l.action)).size,
       actors: new Set(list.map((l) => l.user_email || 'system')).size,
-      latest: list[0] ? new Date(list[0].created_at).toLocaleString('vi-VN') : '—',
+      latest: list[0] ? formatDateTimeWithSeconds(list[0].created_at) : '—',
     }
   }, [logs])
 
@@ -1158,7 +1159,7 @@ function AuditSecurity() {
                       onClick={hasDiff ? () => setOpenLog(l) : undefined}
                     >
                       <td className="whitespace-nowrap px-6 py-3 text-xs text-slate-500">
-                        {new Date(l.created_at).toLocaleString('vi-VN')}
+                        {formatDateTimeWithSeconds(l.created_at)}
                       </td>
                       <td className="px-6 py-3">
                         <Badge variant={AUDIT_ACTION_VARIANT[l.action] || 'ai'} upper={false}>
@@ -1196,7 +1197,7 @@ function AuditSecurity() {
               </Badge>
               <Badge variant="neutral" upper={false}>{openLog.user_email || 'Hệ thống'}</Badge>
               <Badge variant="neutral" upper={false}>
-                {new Date(openLog.created_at).toLocaleString('vi-VN')}
+                {formatDateTimeWithSeconds(openLog.created_at)}
               </Badge>
             </div>
             {openLog.entity_id && (
@@ -1395,7 +1396,7 @@ function BroadcastNotifications() {
                   </div>
                   <p className="mt-1 text-sm text-slate-600">{n.message}</p>
                   <p className="mt-1 text-xs text-slate-400">
-                    {new Date(n.created_at).toLocaleString('vi-VN')}
+                    {formatDateTimeWithSeconds(n.created_at)}
                   </p>
                 </div>
                 <button
@@ -1557,7 +1558,7 @@ function SystemLogs() {
               {logs.map((l) => (
                 <tr key={l.id} className="hover:bg-slate-50/60">
                   <td className="whitespace-nowrap px-6 py-3 text-xs text-slate-500">
-                    {new Date(l.created_at).toLocaleString('vi-VN')}
+                    {formatDateTimeWithSeconds(l.created_at)}
                   </td>
                   <td className="px-6 py-3">
                     <Badge variant={LEVEL_VARIANT[l.level] || 'neutral'} upper={false}>

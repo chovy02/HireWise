@@ -55,6 +55,7 @@ import { useToast } from '../context/ToastContext.jsx'
 import { useProjects } from '../context/ProjectContext.jsx'
 import { getCandidates } from '../api/jds.js'
 import { compareCandidates } from '../api/compare.js'
+import { formatDateTime } from '../utils/datetime.js'
 import {
   listShortlists,
   createShortlist,
@@ -99,13 +100,13 @@ function notifyState(item) {
   }
   if (item.notified_at && item.notified_status === item.candidate_status) {
     return { queued: false, variant: 'success', icon: MailCheck, label: 'Đã gửi',
-      title: `Đã gửi lúc ${new Date(item.notified_at).toLocaleString('vi-VN')}` }
+      title: `Đã gửi lúc ${formatDateTime(item.notified_at)}` }
   }
   if (item.notified_at) {
     return { queued: true, variant: 'warning', icon: MailWarning, label: 'Cần gửi lại',
       title:
         `Đã gửi thông báo "${item.notified_status}" lúc ` +
-        `${new Date(item.notified_at).toLocaleString('vi-VN')}, nhưng quyết định đã đổi ` +
+        `${formatDateTime(item.notified_at)}, nhưng quyết định đã đổi ` +
         `thành "${item.candidate_status}" — cần gửi lại.` }
   }
   return { queued: true, variant: 'info', icon: Mail, label: 'Chưa gửi',

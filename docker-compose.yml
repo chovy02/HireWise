@@ -1,3 +1,7 @@
+# MÚI GIỜ: mọi container đặt TZ=Asia/Ho_Chi_Minh để log/`date` đọc được theo giờ Việt
+# Nam. Việc này KHÔNG ảnh hưởng tới dữ liệu: cột thời gian đều là timestamptz và code
+# luôn ghi `datetime.now(timezone.utc)`, tức lưu một mốc tuyệt đối chứ không phụ thuộc
+# TZ của tiến trình. Đổi TZ chỉ đổi cách CON NGƯỜI đọc, không đổi cái được lưu.
 services:
   db:
     image: postgres:15-alpine
@@ -7,6 +11,10 @@ services:
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_DB=${POSTGRES_DB}
+      # Chỉ đổi cách psql IN ra timestamptz (hiện "+07" thay vì "+00"). Giá trị lưu
+      # trong file dữ liệu không đổi — timestamptz luôn là một mốc tuyệt đối.
+      - TZ=Asia/Ho_Chi_Minh
+      - PGTZ=Asia/Ho_Chi_Minh
     ports:
       - "5433:5432"
     volumes:
@@ -48,6 +56,7 @@ services:
     env_file:
       - .env
     environment:
+      - TZ=Asia/Ho_Chi_Minh
       - CV_STORAGE_DIR=/data/cv_storage
       - EMAIL_ATTACHMENT_DIR=/data/email_attachments
       # Agent loop của web gọi tool QUA MCP server (service `mcp` cùng network).
@@ -83,6 +92,7 @@ services:
     env_file:
       - .env
     environment:
+      - TZ=Asia/Ho_Chi_Minh
       # Sổ sách rate limit để ở DB 2, tách khỏi broker (DB 0) và result backend (DB 1).
       - RATE_LIMIT_REDIS_URL=redis://redis:6379/2
 
@@ -94,6 +104,7 @@ services:
     restart: always
     command: python /mcpsrv/server.py
     environment:
+      - TZ=Asia/Ho_Chi_Minh
       - PYTHONPATH=/app
       - RATE_LIMIT_REDIS_URL=redis://redis:6379/2
     env_file:
@@ -116,6 +127,7 @@ services:
     ports:
       - "5173:5173"
     environment:
+      - TZ=Asia/Ho_Chi_Minh
       # Inside Docker the backend is reachable by service name, not localhost.
       - VITE_PROXY_TARGET=http://api:8000
     depends_on:
