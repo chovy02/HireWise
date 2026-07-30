@@ -1,42 +1,104 @@
 """
-MCP CLIENT — backend nói chuyện với HireWise MCP Server qua SSE.
+MCP CLIENT — backend nói chuyện với HireWise MCP Server qua Streamable HTTP.
 
-Nhờ module này, agent loop của web KHÔNG còn gọi thẳng hàm Python trong agent_tools
-nữa, mà: hỏi MCP server "có tool gì?" -> đưa danh sách cho LLM -> LLM chọn -> gọi
-call_tool qua MCP. Tức MCP nằm THẬT trong luồng chạy của sản phẩm.
+Nhờ module này, agent loop của web KHÔNG gọi thẳng hàm Python trong agent_tools nữa,
+mà: hỏi MCP server "có tool gì?" -> đưa danh sách cho LLM -> LLM chọn -> gọi
+`call_tool` qua MCP. Tức MCP nằm THẬT trong luồng chạy của sản phẩm.
 
-Điểm tinh tế: tham số `acting_user_id` (HR đang đăng nhập) bị LỌC khỏi schema trước
-khi đưa cho LLM, và được backend tiêm vào lúc gọi -> LLM không thể mạo danh user.
+Ba điểm đáng chú ý
+------------------
+1. `acting_user_id` bị LỌC khỏi schema trước khi đưa cho LLM và được backend tiêm vào
+   lúc gọi -> model không thể mạo danh user. (Server vẫn xác minh lại danh tính đó.)
+2. PHÂN BIỆT LỖI KẾT NỐI VỚI LỖI NGHIỆP VỤ. Lỗi nghiệp vụ ("không tìm thấy ứng viên")
+   trả về cho LLM tự xử lý; lỗi kết nối ném `MCPUnavailable` để agent rơi về đường
+   fallback. Bản trước gộp cả hai thành `{"error": ...}`, nên khi MCP chết GIỮA lượt
+   thì LLM nhận một thông báo vô nghĩa rồi tự bịa câu trả lời.
+3. TIMEOUT. Mỗi lời gọi tool có trần thời gian riêng; không có nó, một tool treo giữ
+   request của HR tới 5 phút (mặc định đọc của transport).
 """
 
+import asyncio
 import json
+import logging
 import os
+import time
 from contextlib import asynccontextmanager
+from datetime import timedelta
 
+import anyio
+import httpx
 from mcp import ClientSession
-from mcp.client.sse import sse_client
+from mcp.client.streamable_http import streamablehttp_client
+from mcp.shared.exceptions import McpError
 
-MCP_URL = os.getenv("MCP_SERVER_URL", "http://mcp:8001/sse")
+log = logging.getLogger(__name__)
+
+MCP_URL = os.getenv("MCP_SERVER_URL", "http://mcp:8001/mcp")
+MCP_AUTH_TOKEN = (os.getenv("MCP_AUTH_TOKEN") or "").strip()
+
+# Bắt tay + đọc: giữ ngắn để MCP hỏng thì rơi về fallback nhanh, HR không ngồi đợi.
+CONNECT_TIMEOUT = float(os.getenv("MCP_CONNECT_TIMEOUT", "8"))
+# Trần cho MỘT lời gọi tool. Tool nặng nhất là generate_interview_questions theo lô:
+# mỗi ứng viên một lượt gọi Gemini chạy tuần tự, tối đa 8 người (_MAX_BATCH).
+TOOL_TIMEOUT = float(os.getenv("MCP_TOOL_TIMEOUT", "150"))
+# Bao lâu thì hỏi lại MCP server danh sách tool. Danh sách gần như không đổi, mà
+# list_tools mỗi lượt chat là một vòng round-trip thừa trước cả khi LLM chạy.
+TOOLS_CACHE_TTL = float(os.getenv("MCP_TOOLS_CACHE_TTL", "300"))
 
 # Tham số do backend tiêm, không bao giờ để LLM tự điền.
 _INJECTED_PARAMS = {"acting_user_id"}
 
+# Các lỗi có nghĩa "không nói chuyện được với MCP server" (khác với "tool báo lỗi").
+_CONNECTION_ERRORS = (
+    httpx.HTTPError,
+    ConnectionError,
+    OSError,
+    anyio.BrokenResourceError,
+    anyio.ClosedResourceError,
+    anyio.EndOfStream,
+    asyncio.TimeoutError,
+)
+
 
 class MCPUnavailable(Exception):
-    """Không kết nối được MCP server -> caller nên fallback sang gọi tool nội bộ."""
+    """Không nói chuyện được với MCP server -> caller nên fallback sang tool nội bộ."""
+
+
+def _headers() -> dict[str, str]:
+    return {"Authorization": f"Bearer {MCP_AUTH_TOKEN}"} if MCP_AUTH_TOKEN else {}
 
 
 @asynccontextmanager
 async def mcp_session():
-    """Mở 1 phiên MCP (dùng cho cả 1 lượt chat, không mở/đóng mỗi lần gọi tool)."""
+    """Mở 1 phiên MCP (dùng cho cả 1 lượt chat, không mở/đóng mỗi lần gọi tool).
+
+    Chỉ lỗi ở GIAI ĐOẠN KẾT NỐI (mở transport + handshake) mới thành `MCPUnavailable`.
+    Sau khi bắt tay xong, mọi exception từ thân lệnh `with` được ném NGUYÊN VẸN: nếu
+    gộp luôn cả chúng thành "MCP không kết nối được" thì một bug bình thường trong
+    agent loop sẽ bị chẩn đoán sai, và `run_agent` chạy lại cả lượt một cách vô ích.
+    Mất kết nối GIỮA chừng vẫn được nhận diện — `call_tool` tự ném `MCPUnavailable`.
+    """
+    if not MCP_AUTH_TOKEN:
+        raise MCPUnavailable(
+            "Thiếu MCP_AUTH_TOKEN ở phía backend — không thể xác thực với MCP server."
+        )
+    connected = False
     try:
-        async with sse_client(MCP_URL) as (read, write):
+        async with streamablehttp_client(
+            MCP_URL,
+            headers=_headers(),
+            timeout=timedelta(seconds=CONNECT_TIMEOUT),
+            sse_read_timeout=timedelta(seconds=TOOL_TIMEOUT + 30),
+        ) as (read, write, _get_session_id):
             async with ClientSession(read, write) as session:
-                await session.initialize()
+                await asyncio.wait_for(session.initialize(), timeout=CONNECT_TIMEOUT)
+                connected = True
                 yield session
     except MCPUnavailable:
         raise
-    except Exception as e:  # noqa: BLE001 - gộp mọi lỗi kết nối/handshake
+    except Exception as e:  # noqa: BLE001
+        if connected:
+            raise  # lỗi của thân lệnh with (hoặc lúc dọn dẹp) — không phải lỗi kết nối
         raise MCPUnavailable(f"Không kết nối được MCP server ({MCP_URL}): {e}") from e
 
 
@@ -60,33 +122,47 @@ def _to_llm_schema(tool) -> dict:
     }
 
 
+# Cache tiến trình: (thời điểm lấy, schema cho LLM, tên tool hợp lệ).
+_tools_cache: tuple[float, list[dict], set[str]] | None = None
+
+
 async def fetch_tools(session: ClientSession) -> tuple[list[dict], set[str]]:
     """Lấy danh sách tool từ MCP server. Trả (schema cho LLM, tên các tool hợp lệ)."""
-    resp = await session.list_tools()
+    global _tools_cache
+
+    now = time.monotonic()
+    if _tools_cache and now - _tools_cache[0] < TOOLS_CACHE_TTL:
+        return _tools_cache[1], _tools_cache[2]
+
+    try:
+        resp = await asyncio.wait_for(session.list_tools(), timeout=CONNECT_TIMEOUT)
+    except Exception as e:  # noqa: BLE001
+        raise MCPUnavailable(f"Không lấy được danh sách tool từ MCP: {e}") from e
+
     tools = [_to_llm_schema(t) for t in resp.tools]
     names = {t.name for t in resp.tools}
+    _tools_cache = (now, tools, names)
     return tools, names
 
 
-async def call_tool(session: ClientSession, name: str, args: dict, acting_user_id=None) -> dict:
-    """
-    Gọi 1 tool qua MCP và parse kết quả về dict.
+def invalidate_tools_cache() -> None:
+    """Quên schema đã cache (dùng khi phiên MCP hỏng — server có thể vừa đổi)."""
+    global _tools_cache
+    _tools_cache = None
 
-    FastMCP trả kết quả dạng text content chứa JSON (vì tool của ta trả dict/list).
-    """
-    payload = dict(args or {})
-    if acting_user_id:
-        payload["acting_user_id"] = str(acting_user_id)
 
-    try:
-        res = await session.call_tool(name, payload)
-    except Exception as e:  # noqa: BLE001 - trả lỗi cho LLM tự xử lý
-        return {"error": f"MCP call_tool thất bại: {e}"}
+def _parse_result(res) -> dict:
+    """Kết quả MCP -> dict.
+
+    Ưu tiên `structuredContent`: mọi tool của HireWise khai `-> dict[str, Any]` nên
+    server gửi kèm bản đã cấu trúc, khỏi phải parse lại chuỗi. Vẫn giữ nhánh text để
+    không phụ thuộc hoàn toàn vào một tính năng của server.
+    """
+    structured = getattr(res, "structuredContent", None)
+    if isinstance(structured, dict):
+        return structured
 
     texts = [c.text for c in (res.content or []) if getattr(c, "text", None)]
-
-    if getattr(res, "isError", False):
-        return {"error": "\n".join(texts) or "MCP tool báo lỗi."}
     if not texts:
         return {}
 
@@ -106,6 +182,37 @@ async def call_tool(session: ClientSession, name: str, args: dict, acting_user_i
         if isinstance(one, list):
             return {"items": one}
         return {"result": one}
-
-    # Nhiều block -> tool đã trả về một danh sách.
     return {"items": items}
+
+
+async def call_tool(session: ClientSession, name: str, args: dict, acting_user_id=None) -> dict:
+    """Gọi 1 tool qua MCP và parse kết quả về dict.
+
+    Ném `MCPUnavailable` nếu MẤT KẾT NỐI (để agent fallback cả lượt); trả
+    `{"error": ...}` nếu tool chạy được nhưng báo lỗi nghiệp vụ (để LLM tự xử lý).
+    """
+    payload = dict(args or {})
+    if acting_user_id:
+        payload["acting_user_id"] = str(acting_user_id)
+
+    try:
+        res = await session.call_tool(
+            name, payload, read_timeout_seconds=timedelta(seconds=TOOL_TIMEOUT)
+        )
+    except _CONNECTION_ERRORS as e:
+        invalidate_tools_cache()
+        raise MCPUnavailable(f"Mất kết nối MCP khi gọi tool {name}: {e}") from e
+    except McpError as e:
+        # Timeout ở tầng giao thức cũng là McpError; coi như tool hỏng chứ không phải
+        # kết nối chết, vì phiên vẫn dùng tiếp được cho các bước sau.
+        log.warning("MCP tool %s lỗi giao thức: %s", name, e)
+        return {"error": f"Tool {name} không hoàn thành: {e}"}
+    except Exception as e:  # noqa: BLE001
+        log.warning("MCP tool %s thất bại: %s", name, e)
+        return {"error": f"Gọi tool {name} thất bại: {e}"}
+
+    if getattr(res, "isError", False):
+        texts = [c.text for c in (res.content or []) if getattr(c, "text", None)]
+        return {"error": "\n".join(texts) or f"Tool {name} báo lỗi."}
+
+    return _parse_result(res)

@@ -1,15 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import {
-  Sparkles,
-  Send,
-  Loader2,
-  Wrench,
-  SquarePen,
-  History,
-  Trash2,
-  X,
-} from 'lucide-react'
+import { Sparkles, Send, Loader2, SquarePen, History, Trash2, X } from 'lucide-react'
 import {
   chatWithAgent,
   listChatSessions,
@@ -142,10 +133,9 @@ export default function CopilotChat({ open = false, onClose }) {
       // Backend tự dựng lịch sử từ DB theo session_id -> không gửi lại history.
       const res = await chatWithAgent(content, sessionId)
       if (res.session_id) setSessionId(res.session_id)
-      setMessages((m) => [
-        ...m,
-        { role: 'ai', text: res.reply || '(không có phản hồi)', tools: res.tool_calls },
-      ])
+      // Chỉ giữ phần TEXT trả lời. `tool_calls`/`steps` là chuyện nội bộ của agent —
+      // HR không cần biết mình vừa gọi tool nào, hiện ra chỉ làm rối khung chat.
+      setMessages((m) => [...m, { role: 'ai', text: res.reply || '(không có phản hồi)' }])
       runUiActions(res.ui_actions)
     } catch (err) {
       setMessages((m) => [...m, { role: 'ai', text: `⚠️ ${err.message}`, error: true }])
@@ -272,18 +262,6 @@ export default function CopilotChat({ open = false, onClose }) {
               ].join(' ')}
             >
               {m.text}
-              {m.tools?.length > 0 && (
-                <div className="mt-1.5 flex flex-wrap gap-1">
-                  {[...new Set(m.tools)].map((t) => (
-                    <span
-                      key={t}
-                      className="inline-flex items-center gap-1 rounded bg-white/70 px-1.5 py-0.5 text-[10px] font-medium text-slate-500"
-                    >
-                      <Wrench size={9} /> {t}
-                    </span>
-                  ))}
-                </div>
-              )}
             </div>
           </div>
         ))}

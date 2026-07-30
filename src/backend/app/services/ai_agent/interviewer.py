@@ -11,9 +11,7 @@ Yêu cầu công việc (JD): {jd_requirements}
 Hồ sơ và các điểm yếu của ứng viên: {candidate_info}
 
 YÊU CẦU BẮT BUỘC VỀ SỐ LƯỢNG VÀ NỘI DUNG:
-1. SỐ LƯỢNG LINH HOẠT (Từ 5 đến 10 câu):
-   - Nếu CV ứng viên dày dặn kinh nghiệm, tham gia nhiều dự án phức tạp hoặc JD có nhiều tiêu chí khắt khe -> Hãy tạo từ 8 đến 10 câu hỏi để kiểm tra toàn diện.
-   - Nếu CV đơn giản, ít thực chiến (thực tập sinh, Fresher) hoặc ít dự án -> Chỉ tạo từ 5 đến 6 câu hỏi trọng tâm nhất.
+{count_requirement}
 2. KHÔNG hỏi lý thuyết suông. Bắt buộc trích xuất trực tiếp tên các dự án ứng viên đã làm trong CV để đặt câu hỏi tình huống thực tế.
 3. Tạo ít nhất 1-2 câu hỏi xoáy thẳng vào điểm yếu hoặc những công nghệ ứng viên ghi chung chung để xác thực.
 4. Trả về DUY NHẤT một mảng JSON. Không bọc markdown.
@@ -68,8 +66,31 @@ def _clean_json(text: str) -> str:
         text = text.strip()
     return text
 
-def generate_interview_questions_ai(jd_reqs: dict, candidate_info: dict, aspect: str = "") -> list:
+# Mặc định: để AI tự cân số câu theo độ dày của CV.
+_COUNT_FLEXIBLE = """1. SỐ LƯỢNG LINH HOẠT (Từ 5 đến 10 câu):
+   - Nếu CV ứng viên dày dặn kinh nghiệm, tham gia nhiều dự án phức tạp hoặc JD có nhiều tiêu chí khắt khe -> Hãy tạo từ 8 đến 10 câu hỏi để kiểm tra toàn diện.
+   - Nếu CV đơn giản, ít thực chiến (thực tập sinh, Fresher) hoặc ít dự án -> Chỉ tạo từ 5 đến 6 câu hỏi trọng tâm nhất."""
+
+
+def generate_interview_questions_ai(
+    jd_reqs: dict, candidate_info: dict, aspect: str = "", num_questions: int = 0
+) -> list:
+    """`num_questions` > 0 -> chốt cứng số câu hỏi.
+
+    Có tham số này vì HR hay yêu cầu rất cụ thể ("tạo cho mỗi người 3 câu hỏi"), mà
+    prompt mặc định lại ép khoảng 5-10 câu — nên yêu cầu đó trước đây bị bỏ qua im
+    lặng và HR nhận về số câu khác hẳn thứ mình vừa nói.
+    """
+    if num_questions and num_questions > 0:
+        count_requirement = (
+            f"1. SỐ LƯỢNG CỐ ĐỊNH: Tạo CHÍNH XÁC {num_questions} câu hỏi, không nhiều hơn, "
+            f"không ít hơn. Hãy chọn đúng {num_questions} câu ĐẮT GIÁ NHẤT."
+        )
+    else:
+        count_requirement = _COUNT_FLEXIBLE
+
     prompt = GENERATE_QUESTIONS_PROMPT.replace("{aspect}", aspect or "Phỏng vấn toàn diện")\
+                                      .replace("{count_requirement}", count_requirement)\
                                       .replace("{jd_requirements}", json.dumps(jd_reqs, ensure_ascii=False))\
                                       .replace("{candidate_info}", json.dumps(candidate_info, ensure_ascii=False))
     try:

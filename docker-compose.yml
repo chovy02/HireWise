@@ -35,8 +35,11 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+      # `service_healthy` chứ không phải `service_started`: "container đã chạy" không
+      # có nghĩa MCP đã nhận request. Với service_started, lượt chat đầu tiên sau khi
+      # `up` thường rơi xuống đường fallback mà không ai biết.
       mcp:
-        condition: service_started
+        condition: service_healthy
     ports:
       - "8000:8000"
     volumes:
@@ -51,7 +54,8 @@ services:
       - CV_STORAGE_DIR=/data/cv_storage
       - EMAIL_ATTACHMENT_DIR=/data/email_attachments
       # Agent loop của web gọi tool QUA MCP server (service `mcp` cùng network).
-      - MCP_SERVER_URL=http://mcp:8001/sse
+      # Endpoint /mcp = transport Streamable HTTP; /sse cũ đã deprecated trong đặc tả.
+      - MCP_SERVER_URL=http://mcp:8001/mcp
       # Ngân sách token Groq đếm CHUNG cho mọi container, nên api/worker/mcp phải
       # trỏ về cùng một Redis — mỗi tiến trình đếm riêng thì cộng lại vẫn vượt trần.
       - RATE_LIMIT_REDIS_URL=redis://redis:6379/2
@@ -103,6 +107,17 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+    # /healthz là route DUY NHẤT được miễn xác thực (chỉ trả trạng thái, không dữ
+    # liệu nghiệp vụ) — mọi endpoint MCP khác đòi Bearer $MCP_AUTH_TOKEN.
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8001/healthz', timeout=3).status==200 else 1)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    # CẢNH BÁO: publish cổng này là mở HireWise ra ngoài máy. An toàn được là nhờ
+    # MCP_AUTH_TOKEN — nếu không cần client MCP ngoài (Claude Desktop), hãy xoá khối
+    # `ports` này đi: service `api` gọi qua tên `mcp` trong network nội bộ.
     ports:
       - "8001:8001"
     volumes:

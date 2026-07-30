@@ -2,24 +2,31 @@
 Agent loop: LLM là chương trình chính, tự chọn & gọi tool.
 
 LUỒNG CHÍNH ĐI QUA MCP:
-    run_agent -> mcp_client (SSE) -> MCP server -> agent_tools -> DB
-Danh sách tool KHÔNG còn hard-code: backend hỏi MCP server `list_tools()` rồi đưa
-schema đó cho LLM; LLM chọn tool -> backend gọi `call_tool()` qua MCP.
+    run_agent -> mcp_client (Streamable HTTP) -> MCP server -> agent_tools -> DB
+Danh sách tool KHÔNG hard-code: backend hỏi MCP server `list_tools()` rồi đưa schema
+đó cho LLM; LLM chọn tool -> backend gọi `call_tool()` qua MCP.
 
 FALLBACK: nếu MCP server không kết nối được, tự động quay về gọi thẳng hàm trong
-agent_tools (in-process) để sản phẩm không chết giữa demo.
+agent_tools (in-process) để sản phẩm không chết giữa demo. Schema của đường fallback
+sinh từ CÙNG `tool_registry` mà MCP server dùng, nên LLM thấy y hệt nhau ở hai đường.
+
+FALLBACK GIỮA LƯỢT: nếu MCP chết SAU khi một tool GHI đã chạy xong, ta KHÔNG chạy lại
+cả lượt — làm vậy sẽ tạo JD lần hai, gửi email lần hai. Trường hợp đó báo lỗi trung
+thực cho HR thay vì âm thầm nhân đôi tác dụng phụ.
 """
 
 import asyncio
 import inspect
 import json
+import logging
 import os
+import re
 import time
 
 from groq import Groq
 from sqlalchemy.orm import Session
 
-from app.services.ai_agent.agent_tools import TOOLS, TOOL_FUNCS, USER_BOUND
+from app.services.ai_agent.tool_registry import SPECS, llm_tool_schemas
 from app.services.ai_agent.mcp_client import (
     MCPUnavailable,
     call_tool,
@@ -29,8 +36,28 @@ from app.services.ai_agent.mcp_client import (
 from app.services.logging import write_tool_log
 from app.services.ai_agent.gemini_client import record_ai_log
 
+log = logging.getLogger(__name__)
+
 _client = Groq(api_key=os.getenv("GROQ_MCP_API_KEY"))
 AGENT_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+
+# Model dự phòng khi model chính CẠN HẠN MỨC NGÀY (TPD).
+#
+# Groq tính TPD theo TỪNG MODEL và theo ORGANIZATION — không theo API key. Nghĩa là
+# đổi sang một key khác trong cùng tài khoản KHÔNG hồi phục được hạn mức (đã kiểm
+# chứng: 3 key của dự án báo về cùng một số dư). Thứ thực sự còn hạn mức là một MODEL
+# khác. Hết 70b thì hạ xuống model khác còn hơn là ném cho HR câu "gặp trục trặc".
+#
+# THỨ TỰ QUAN TRỌNG: xếp theo NĂNG LỰC GỌI TOOL giảm dần, không phải theo tốc độ.
+# Đã thử `llama-3.1-8b-instant` đứng đầu: nó bịa ra ứng viên không tồn tại ("Trần Văn
+# A", "Nguyễn Thị B") thay vì dùng kết quả search vừa nhận. Một agent thao tác dữ liệu
+# thật mà bịa tham số thì tệ hơn hẳn việc báo lỗi thẳng, nên model yếu để cuối cùng.
+_FALLBACK_MODELS = [
+    m.strip()
+    for m in os.getenv("GROQ_FALLBACK_MODELS", "openai/gpt-oss-120b,openai/gpt-oss-20b").split(",")
+    if m.strip()
+]
+_MODEL_CHAIN = [AGENT_MODEL] + [m for m in _FALLBACK_MODELS if m != AGENT_MODEL]
 MAX_STEPS = int(os.getenv("AGENT_MAX_STEPS", "10"))
 # Model llama trên Groq thỉnh thoảng sinh cú pháp gọi tool sai -> 400 tool_use_failed.
 # Đây là lỗi ngẫu nhiên, gọi lại thường qua được nên ta retry vài lần.
@@ -69,7 +96,39 @@ def _completion_for_log(resp) -> str:
         return ""
 
 
-def _complete(messages: list, tools: list):
+def _is_quota_error(err: Exception) -> bool:
+    """Lỗi này là do CẠN HẠN MỨC nhà cung cấp (429), không phải lỗi lập trình."""
+    text = str(err).lower()
+    return "rate_limit" in text or "rate limit" in text or "error code: 429" in text
+
+
+def _quota_wait_hint(err: Exception) -> str:
+    """Rút thời gian chờ mà Groq gợi ý ('try again in 34m45.6s') thành lời người đọc."""
+    m = re.search(r"try again in\s+(?:(\d+)m)?([\d.]+)s", str(err), re.IGNORECASE)
+    if not m:
+        return ""
+    phut = int(m.group(1) or 0)
+    if phut >= 1:
+        return f" Hạn mức sẽ mở lại sau khoảng {phut} phút."
+    return " Bạn thử lại sau ít phút nhé."
+
+
+def _friendly_error(err: Exception) -> str:
+    """Câu trả lời cho HR khi lượt LLM thất bại.
+
+    Trước đây mọi lỗi đều thành "mình gặp trục trặc, bạn thử diễn đạt lại" — với lỗi
+    cạn hạn mức thì đó là lời khuyên SAI: diễn đạt lại bao nhiêu lần cũng hỏng, mà HR
+    lại tưởng do mình gõ chưa rõ.
+    """
+    if _is_quota_error(err):
+        return (
+            "Hệ thống đã dùng hết hạn mức AI cho hôm nay nên mình chưa xử lý được yêu cầu "
+            "này." + _quota_wait_hint(err)
+        )
+    return "Xin lỗi, mình gặp trục trặc khi xử lý yêu cầu này. Bạn thử diễn đạt lại giúp mình nhé."
+
+
+def _complete_sync(messages: list, tools: list):
     """Gọi Groq (có tools), tự retry khi model sinh tool-call hỏng hoặc lỗi tạm thời.
 
     Mọi lượt gọi đều ghi vào ai_logs như các agent khác: agent chat đi thẳng qua
@@ -78,28 +137,42 @@ def _complete(messages: list, tools: list):
     """
     last_err = None
     start = time.time()
-    for attempt in range(_LLM_RETRIES):
-        try:
-            resp = _client.chat.completions.create(
-                model=AGENT_MODEL,
-                messages=messages,
-                tools=tools,
-                tool_choice="auto",
-                temperature=0.2,
-            )
-            record_ai_log(
-                agent_name="copilot_agent",
-                prompt=_prompt_for_log(messages),
-                completion=_completion_for_log(resp),
-                total_tokens=getattr(getattr(resp, "usage", None), "total_tokens", 0) or 0,
-                latency_ms=(time.time() - start) * 1000,
-                is_error=False,
-                error_message=None,
-            )
-            return resp
-        except Exception as e:  # noqa: BLE001 - thử lại cho cả tool_use_failed lẫn 429/5xx
-            last_err = e
-            time.sleep(0.8 * (attempt + 1))
+    for model in _MODEL_CHAIN:
+        for attempt in range(_LLM_RETRIES):
+            try:
+                # Temperature TĂNG DẦN qua các lần thử. Với temperature cố định, một
+                # prompt làm llama sinh cú pháp tool-call hỏng (`tool_use_failed`) sẽ
+                # sinh ra đúng chuỗi hỏng đó ở cả 3 lần retry — retry thành vô nghĩa,
+                # và HR nhận câu "mình gặp trục trặc" một cách rất ổn định. Nới ngẫu
+                # nhiên để lần thử sau thực sự là một lần thử KHÁC.
+                resp = _client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    tools=tools,
+                    tool_choice="auto",
+                    temperature=0.2 + 0.3 * attempt,
+                )
+                completion = _completion_for_log(resp)
+                if model != AGENT_MODEL:
+                    completion = f"[model dự phòng: {model}]\n{completion}"
+                record_ai_log(
+                    agent_name="copilot_agent",
+                    prompt=_prompt_for_log(messages),
+                    completion=completion,
+                    total_tokens=getattr(getattr(resp, "usage", None), "total_tokens", 0) or 0,
+                    latency_ms=(time.time() - start) * 1000,
+                    is_error=False,
+                    error_message=None,
+                )
+                return resp
+            except Exception as e:  # noqa: BLE001 - cả tool_use_failed lẫn 429/5xx
+                last_err = e
+                if _is_quota_error(e):
+                    # Hết hạn mức thì thử lại CÙNG model chỉ tốn thêm thời gian chờ —
+                    # hạn mức không hồi phục trong vài giây. Sang model khác ngay.
+                    log.warning("Model %s hết hạn mức, chuyển model dự phòng: %s", model, e)
+                    break
+                time.sleep(0.8 * (attempt + 1))
 
     # Hết lượt retry -> ghi 1 dòng lỗi rồi mới ném ra.
     record_ai_log(
@@ -112,6 +185,19 @@ def _complete(messages: list, tools: list):
         error_message=str(last_err),
     )
     raise last_err
+
+
+async def _complete(messages: list, tools: list):
+    """Gọi Groq mà KHÔNG chặn event loop.
+
+    SDK Groq là đồng bộ, `record_ai_log` ghi DB đồng bộ, và `_complete_sync` còn
+    `time.sleep` tới ~4.8s giữa các lần retry. Gọi thẳng trong vòng lặp agent thì suốt
+    thời gian đó event loop đứng im — kể cả tác vụ nền đang giữ luồng SSE của transport
+    MCP. Hệ quả quan sát được: một lượt LLM chậm hoặc phải retry làm phiên MCP đứt
+    (`anyio.BrokenResourceError`) ở lần gọi tool kế tiếp, dù server vẫn hoàn toàn khoẻ.
+    Đẩy sang thread thì loop rảnh để nuôi transport.
+    """
+    return await asyncio.to_thread(_complete_sync, messages, tools)
 
 
 SYSTEM_PROMPT = """Bạn là trợ lý tuyển dụng thông minh của hệ thống HireWise, hỗ trợ nhân viên HR.
@@ -134,6 +220,11 @@ ID KỸ THUẬT LÀ CHUYỆN NỘI BỘ — HR KHÔNG BAO GIỜ ĐƯỢC THẤY:
 - HR hỏi chung chung không nêu vị trí (vd "tìm người biết Python"): gọi search_candidates với skill="python" và BỎ TRỐNG jd_id để tìm xuyên mọi vị trí.
 - Cần HR làm rõ thì hỏi bằng ngôn ngữ nghiệp vụ (tên vị trí, tên ứng viên), không hỏi ID.
 
+LÀM VIỆC THEO LÔ — RẤT QUAN TRỌNG:
+- HR nói "tất cả những người...", "mỗi người...", "nhóm trên X điểm": TRƯỚC HẾT gọi search_candidates một lần để lấy danh sách, RỒI truyền TẤT CẢ tên đó vào MỘT lời gọi tool (add_to_shortlist, generate_interview_questions đều nhận candidate_ids là DANH SÁCH).
+- TUYỆT ĐỐI KHÔNG gọi cùng một tool lặp đi lặp lại cho từng người. Làm vậy vừa chậm, vừa dễ hết hạn mức giữa chừng và bỏ sót người.
+- HR nêu con số cụ thể (vd "mỗi người 3 câu hỏi"): PHẢI truyền num_questions=3, đừng để mặc định.
+
 VĂN PHONG TRẢ LỜI — NGẮN GỌN:
 - Tối đa 1-2 câu. Chỉ nói KẾT QUẢ, không thuật lại các bước đã làm, không nhắc lại yêu cầu của HR.
 - Không lặp lại chi tiết HR vừa gõ (kinh nghiệm, kỹ năng...), không thêm trạng thái thừa như 'đang ở trạng thái active'.
@@ -143,6 +234,7 @@ Nguyên tắc khác:
 - Khi HR muốn "mở/xem/vào" một vị trí, một ứng viên, hay một màn hình: hãy gọi tool điều hướng phù hợp để giao diện nhảy tới đúng nơi.
 - Không bao giờ bịa ID, điểm số, hay tên ứng viên. Chỉ nói những gì tool trả về.
 - Với send_interview_invite (gửi email thật, không thu hồi được): PHẢI hỏi HR xác nhận và chỉ gửi (confirm=true) khi HR đồng ý rõ ràng.
+- Nếu một tool trả về error="needs_confirmation": ĐỪNG gọi lại ngay. Hãy nói cho HR biết rủi ro trong trường "message" rồi chờ họ đồng ý, sau đó mới gọi lại kèm cờ xác nhận.
 - Luôn trả lời bằng tiếng Việt.
 """
 
@@ -151,12 +243,13 @@ Nguyên tắc khác:
 # Thực thi tool — đường FALLBACK (gọi thẳng hàm Python, không qua MCP)
 # --------------------------------------------------------------------------- #
 def _execute_tool(db: Session, name: str, args: dict, user_id) -> dict:
-    fn = TOOL_FUNCS.get(name)
-    if fn is None:
+    spec = SPECS.get(name)
+    if spec is None:
         return {"error": f"Tool không tồn tại: {name}"}
+    fn = spec.fn
     # Tiêm user_id cho các tool cần (LLM không được tự điền).
-    if name in USER_BOUND:
-        args[USER_BOUND[name]] = str(user_id)
+    if spec.user_bound:
+        args[spec.user_bound] = str(user_id)
     # Phạm vi dữ liệu: mọi tool chỉ được thấy JD/ứng viên của HR đang đăng nhập.
     # GHI ĐÈ chứ không setdefault — owner_id không nằm trong schema đưa cho LLM, nên
     # nếu nó vẫn bịa ra một giá trị thì đó là mưu toan đọc dữ liệu tài khoản khác.
@@ -173,7 +266,10 @@ def _execute_tool(db: Session, name: str, args: dict, user_id) -> dict:
         pass
     try:
         result = fn(db, **args)
+        if not isinstance(result, dict):  # giao kèo: tool luôn trả dict
+            result = {"result": result}
     except Exception as e:  # noqa: BLE001 - trả lỗi cho LLM để nó tự xử lý/thông báo
+        db.rollback()
         result = {"error": f"{type(e).__name__}: {e}"}
 
     # Audit trail (đường MCP thì MCP server tự ghi, khỏi ghi 2 lần).
@@ -191,6 +287,23 @@ def _execute_tool(db: Session, name: str, args: dict, user_id) -> dict:
 # --------------------------------------------------------------------------- #
 # Vòng lặp agent — dùng chung cho cả 2 đường, khác nhau ở `tools` và `execute`
 # --------------------------------------------------------------------------- #
+# Trần độ dài kết quả tool ghi vào `steps`. `steps` đi ra frontend VÀ được lưu làm
+# "trí nhớ" của agent cho lượt sau (chat_store). Một kết quả compare_candidates hay
+# get_jd đầy đủ dễ chiếm trọn hạn mức ghi chú, đẩy id của các tool khác ra ngoài.
+_STEP_RESULT_CHARS = 1500
+
+
+def _trim_step_result(result):
+    """Cắt bớt kết quả tool trước khi ghi vào `steps` (không đụng bản gửi cho LLM)."""
+    try:
+        text = json.dumps(result, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        return {"_unserializable": str(result)[:200]}
+    if len(text) <= _STEP_RESULT_CHARS:
+        return result
+    return {"_truncated": True, "preview": text[:_STEP_RESULT_CHARS]}
+
+
 async def _agent_loop(messages: list, tools: list, execute) -> dict:
     """`execute`: async callable (name, args) -> dict kết quả tool."""
     used: list[str] = []
@@ -216,12 +329,9 @@ async def _agent_loop(messages: list, tools: list, execute) -> dict:
 
     for _ in range(MAX_STEPS):
         try:
-            resp = _complete(messages, tools)
+            resp = await _complete(messages, tools)
         except Exception as e:  # noqa: BLE001 - trả lời nhẹ nhàng thay vì 500
-            return _out(
-                "Xin lỗi, mình gặp trục trặc khi xử lý yêu cầu này. Bạn thử diễn đạt lại giúp mình nhé.",
-                error=str(e),
-            )
+            return _out(_friendly_error(e), error=str(e))
 
         if getattr(resp, "usage", None):
             usage["prompt_tokens"] += resp.usage.prompt_tokens or 0
@@ -258,7 +368,7 @@ async def _agent_loop(messages: list, tools: list, execute) -> dict:
 
             result = await execute(name, args)
             used.append(name)
-            steps.append({"tool": name, "args": args, "result": result})
+            steps.append({"tool": name, "args": args, "result": _trim_step_result(result)})
 
             # Directive điều hướng giao diện cho frontend.
             if isinstance(result, dict):
@@ -283,12 +393,24 @@ async def _run_via_mcp(messages: list, user_id) -> dict:
     async with mcp_session() as session:
         tools, names = await fetch_tools(session)
 
+        # Các tool GHI đã chạy XONG trong lượt này. Nếu MCP chết sau đó, chạy lại cả
+        # lượt ở đường fallback sẽ lặp lại đúng những tác dụng phụ này -> không được.
+        applied: list[str] = []
+
         async def execute(name: str, args: dict) -> dict:
             if name not in names:
                 return {"error": f"Tool không tồn tại trên MCP server: {name}"}
-            return await call_tool(session, name, args, acting_user_id=user_id)
+            result = await call_tool(session, name, args, acting_user_id=user_id)
+            spec = SPECS.get(name)
+            if spec and not spec.read_only and not (isinstance(result, dict) and "error" in result):
+                applied.append(name)
+            return result
 
-        out = await _agent_loop(messages, tools, execute)
+        try:
+            out = await _agent_loop(messages, tools, execute)
+        except MCPUnavailable as e:
+            e.applied_tools = applied  # để run_agent quyết định có fallback được không
+            raise
         out["mcp"] = True
         return out
 
@@ -299,7 +421,7 @@ async def _run_local(messages: list, db: Session, user_id) -> dict:
     async def execute(name: str, args: dict) -> dict:
         return _execute_tool(db, name, args, user_id)
 
-    out = await _agent_loop(messages, TOOLS, execute)
+    out = await _agent_loop(messages, llm_tool_schemas(), execute)
     out["mcp"] = False
     return out
 
@@ -309,8 +431,8 @@ def run_agent(db: Session, message: str, user_id=None, history: list | None = No
     Chạy 1 lượt hội thoại. Ưu tiên đi qua MCP; MCP chết thì fallback gọi tool nội bộ.
 
     Hàm này SYNC (router FastAPI sync chạy trong threadpool) nên dùng asyncio.run được.
-    Phiên MCP + list_tools được mở TRƯỚC khi gọi LLM, nên nếu MCP hỏng ta fallback mà
-    không tốn token nào.
+    Phiên MCP + list_tools được mở TRƯỚC khi gọi LLM, nên nếu MCP hỏng ngay từ đầu ta
+    fallback mà không tốn token nào.
     """
     def _messages() -> list:
         m = [{"role": "system", "content": SYSTEM_PROMPT}]
@@ -322,6 +444,24 @@ def run_agent(db: Session, message: str, user_id=None, history: list | None = No
     try:
         return asyncio.run(_run_via_mcp(_messages(), user_id))
     except MCPUnavailable as e:
+        applied = getattr(e, "applied_tools", None) or []
+        if applied:
+            # Đã có tool GHI chạy xong rồi mới mất kết nối. Chạy lại lượt này sẽ tạo
+            # JD lần hai / gửi email lần hai. Thà báo thật để HR kiểm tra lại.
+            return {
+                "reply": (
+                    "Mình đã thực hiện xong thao tác nhưng mất kết nối trước khi tổng hợp "
+                    "câu trả lời. Bạn kiểm tra lại trên màn hình giúp mình, đừng gửi lại "
+                    "yêu cầu để tránh bị lặp."
+                ),
+                "tool_calls": applied,
+                "steps": [],
+                "ui_actions": [{"type": "refresh"}],
+                "usage": {"prompt_tokens": 0, "completion_tokens": 0},
+                "mcp": True,
+                "error": str(e),
+                "mcp_error": str(e),
+            }
         out = asyncio.run(_run_local(_messages(), db, user_id))
         out["mcp_error"] = str(e)
         return out

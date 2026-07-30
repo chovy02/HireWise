@@ -34,6 +34,16 @@ python-dotenv==1.0.1
 celery[redis]==5.3.6
 redis==5.0.3
 
-# Backend làm MCP CLIENT: agent loop gọi tool qua MCP server (SSE) thay vì gọi
-# thẳng hàm Python -> MCP thực sự nằm trong luồng chạy của web.
-mcp
+# Backend làm MCP CLIENT: agent loop gọi tool qua MCP server (Streamable HTTP) thay
+# vì gọi thẳng hàm Python -> MCP thực sự nằm trong luồng chạy của web.
+#
+# GHIM khoảng phiên bản: SDK này còn đổi hành vi nhanh. Từ 1.10, FastMCP sinh
+# outputSchema từ annotation trả về và VALIDATE kết quả — đủ để làm hỏng những tool
+# vốn chạy tốt ở bản cũ. Để trôi tự do thì một lần `docker build` lại là một lần
+# đánh cược.
+mcp>=1.12,<2
+
+# Test giao kèo registry <-> MCP server (tests/test_mcp_contract.py). Nằm trong
+# requirements chính vì bộ test đó chạy TRONG container:
+#   docker exec hirewise_mcp python -m pytest /app/tests/test_mcp_contract.py -q
+pytest==8.3.3

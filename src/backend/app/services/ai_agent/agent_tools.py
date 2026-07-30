@@ -1,20 +1,29 @@
 """
-Bộ TOOL dùng chung cho AI Agent (kiến trúc B).
+Bộ TOOL dùng chung cho AI Agent (kiến trúc B) — phần THỰC THI.
 
-Mỗi hàm bọc lại một service đã có sẵn (pipeline / comparator / interviewer / email)
-và trả về dict JSON-serializable để nhét thẳng vào hội thoại với LLM.
+Mỗi hàm bọc lại một service đã có sẵn (pipeline / comparator / interviewer / email).
+Đây thuần tuý là các hàm Python; phần MÔ TẢ tool cho LLM/MCP (tên, schema tham số,
+annotation an toàn) nằm ở `tool_registry.py` — MỘT nguồn sự thật duy nhất, dùng
+chung cho cả MCP server lẫn đường fallback.
 
-- TOOLS      : mô tả tool dạng JSON schema (OpenAI/Groq function-calling) cho LLM đọc.
-- TOOL_FUNCS : ánh xạ tên tool -> hàm Python thật.
-- USER_BOUND : các tool cần user_id của HR đang đăng nhập (agent loop tự tiêm vào,
-               KHÔNG để LLM tự bịa).
+HAI GIAO KÈO mà mọi tool ở đây phải giữ:
+
+1. Chữ ký: `db` là tham số đầu tiên (Session); `owner_id` luôn có mặt và do tầng gọi
+   TIÊM vào (LLM không điền được) để giới hạn phạm vi dữ liệu; các tool ghi nhận
+   thêm `created_by`.
+2. Kiểu trả về: LUÔN là `dict`. Không trả list/str trần. MCP (mcp>=1.10) sinh
+   outputSchema từ annotation và VALIDATE kết quả — một tool khai `-> list[dict]`
+   nhưng trả `{"error": ...}` lúc hỏng sẽ ném ToolError và LLM chỉ nhận được stack
+   trace pydantic thay vì thông báo lỗi đọc được.
 
 Tất cả hàm nhận `db` là tham số đầu tiên (Session), phần còn lại là tham số do LLM điền.
 """
 
 import asyncio
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app import models
@@ -23,10 +32,34 @@ from app.services.ai_agent.comparator import compare_candidates_ai
 from app.services.ai_agent.evaluation_view import evaluation_for_agent, weakness_context
 from app.services.ai_agent.interviewer import generate_interview_questions_ai
 
+# Trần độ dài markdown JD nhét vào ngữ cảnh LLM. Một JD đầy đủ dài vài nghìn từ, mà
+# nội dung đó được lặp lại ở MỌI bước còn lại của lượt agent -> đốt token vô ích.
+_JD_MARKDOWN_MAX = 1500
+
+# Trần số ứng viên cho MỘT lời gọi tool theo lô. Mỗi ứng viên là một lượt gọi Gemini
+# chạy tuần tự, nên lô quá lớn sẽ chạm trần thời gian chờ của MCP client.
+_MAX_BATCH = 8
+
 
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
+def _run_async(coro):
+    """Chạy 1 coroutine từ code ĐỒNG BỘ, kể cả khi đang nằm trong event loop.
+
+    Agent loop là async và gọi tool đồng bộ ngay bên trong nó, nên `asyncio.run()`
+    gọi thẳng ở đây ném RuntimeError("cannot be called from a running event loop").
+    Đẩy sang một thread riêng (có loop riêng) thì chạy được ở CẢ hai đường — MCP
+    (tool chạy trong worker thread) lẫn fallback (tool chạy trong loop).
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)  # không có loop nào đang chạy -> chạy thẳng
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, coro).result()
+
+
 def _uuid(value) -> uuid.UUID:
     try:
         return uuid.UUID(str(value))
@@ -115,23 +148,30 @@ def _candidate_brief(c: models.Candidate) -> dict:
 # --------------------------------------------------------------------------- #
 # TOOLS (read-only)
 # --------------------------------------------------------------------------- #
-def list_jds(db: Session, status: str = "active", owner_id=None) -> list[dict]:
+def list_jds(db: Session, status: str = "active", owner_id=None) -> dict:
+    """Trả về ENVELOPE dict (không phải list trần) — xem giao kèo ở đầu module."""
     q = _owner_filter(db.query(models.JobDescription), owner_id)
     if status != "all":
         q = q.filter(models.JobDescription.status == status)
     rows = q.order_by(models.JobDescription.created_at.desc()).all()
-    return [{"jd_id": str(j.id), "title": j.title, "status": j.status} for j in rows]
+    jds = [{"jd_id": str(j.id), "title": j.title, "status": j.status} for j in rows]
+    return {"count": len(jds), "jds": jds}
 
 
 def get_jd(db: Session, jd_id: str, owner_id=None) -> dict:
     jd = _resolve_jd(db, jd_id, owner_id)
     if jd is None:
         return {"error": "Không tìm thấy JD."}
+    md = jd.jd_markdown or ""
+    truncated = len(md) > _JD_MARKDOWN_MAX
     return {
         "jd_id": str(jd.id),
         "title": jd.title,
         "requirements": jd.requirements,
-        "jd_markdown": jd.jd_markdown,
+        # Cắt bớt: `requirements` (đã cấu trúc) mới là thứ agent cần để lập luận;
+        # markdown chỉ để trích dẫn, không đáng nhân bản vài nghìn token mỗi bước.
+        "jd_markdown": md[:_JD_MARKDOWN_MAX],
+        "jd_markdown_truncated": truncated,
         "status": jd.status,
     }
 
@@ -181,6 +221,11 @@ def search_candidates(
     result = {
         "scope": jd.title if jd else "tất cả vị trí",
         "count": len(briefs),
+        # Danh sách id DỌN SẴN để truyền thẳng vào các tool theo lô (add_to_shortlist,
+        # generate_interview_questions). Bắt LLM tự bới từng candidate_id ra khỏi mảng
+        # `candidates` là chỗ model yếu hay trượt — có model đã bịa hẳn tên ứng viên
+        # không tồn tại thay vì trích đúng id. Ở đây chép nguyên mảng này là xong.
+        "candidate_ids": [b["candidate_id"] for b in briefs],
         "candidates": briefs,
     }
 
@@ -303,44 +348,58 @@ def compare_candidates(
     return result
 
 
-def generate_interview_questions(
-    db: Session, candidate_id: str, aspect: str = "", owner_id=None
+def _interview_has_human_work(interview: models.Interview) -> bool:
+    """Buổi phỏng vấn này đã có CÔNG SỨC của HR chưa (đáp án, chấm điểm, nhận xét)?"""
+    if interview.feedback or interview.feedback_summary:
+        return True
+    return any(
+        q.answer_text or q.ai_evaluation or q.score is not None
+        for q in interview.questions
+    )
+
+
+def _generate_questions_for(
+    db: Session,
+    c: models.Candidate,
+    aspect: str,
+    num_questions: int,
+    replace: bool,
 ) -> dict:
-    """
-    Sinh bộ câu hỏi phỏng vấn bám CV + JD và LƯU vào DB (tạo Interview +
-    InterviewQuestion) đúng như luồng /interviews/.../generate, để HR thấy được
-    trong màn hình phỏng vấn. Nếu ứng viên đã có buổi phỏng vấn thì tạo lại.
-    """
-    c = _resolve_candidate(db, candidate_id, owner_id)
-    if c is None:
-        return {"error": "Không tìm thấy ứng viên."}
+    """Sinh + lưu bộ câu hỏi cho MỘT ứng viên đã resolve. Trả kết quả gọn cho batch."""
     if c.evaluation is None:
-        return {"error": f"Ứng viên {c.name or c.id} chưa được chấm điểm nên chưa thể tạo phỏng vấn."}
+        return {"candidate": c.name, "status": "skipped",
+                "reason": "Chưa được chấm điểm nên chưa thể tạo phỏng vấn."}
+
+    interview = db.query(models.Interview).filter(models.Interview.cv_id == c.id).first()
+    if interview is not None and _interview_has_human_work(interview) and not replace:
+        return {"candidate": c.name, "status": "needs_confirmation",
+                "reason": "Đã có buổi phỏng vấn với dữ liệu HR đã nhập; sinh lại sẽ ghi đè."}
 
     jd = db.get(models.JobDescription, c.jd_id)
-
-    # Tạo lại: xoá buổi phỏng vấn cũ (nếu có) để tránh trùng.
-    old = db.query(models.Interview).filter(models.Interview.cv_id == c.id).first()
-    if old is not None:
-        db.delete(old)
-        db.commit()
-
     candidate_context = {
         "full_cv": c.raw_text,
         "ai_identified_weaknesses": weakness_context(c.evaluation),
     }
+    # Gọi AI TRƯỚC khi đụng vào DB: AI hỏng thì bộ câu hỏi cũ vẫn còn nguyên.
     ai_questions = generate_interview_questions_ai(
-        jd.requirements if jd else {}, candidate_context, aspect
+        jd.requirements if jd else {}, candidate_context, aspect, num_questions
     )
     if not ai_questions:
-        return {"error": "AI không sinh được câu hỏi phỏng vấn."}
+        return {"candidate": c.name, "status": "failed", "reason": "AI không sinh được câu hỏi."}
 
-    interview = models.Interview(cv_id=c.id, status="pending")
-    db.add(interview)
-    db.commit()
-    db.refresh(interview)
+    created = interview is None
+    if created:
+        interview = models.Interview(cv_id=c.id, status="pending")
+        db.add(interview)
+        db.commit()
+        db.refresh(interview)
+    else:
+        # `questions` có cascade delete-orphan -> xoá sạch danh sách là đủ, buổi
+        # phỏng vấn (lịch hẹn, trạng thái, nhận xét) giữ nguyên.
+        interview.questions.clear()
+        db.flush()
 
-    saved = []
+    saved = 0
     for idx, q in enumerate(ai_questions):
         if not isinstance(q, dict):
             continue
@@ -351,16 +410,81 @@ def generate_interview_questions(
             category=q.get("category", "Chung"),
             order_index=idx * 10,
         ))
-        saved.append({"question": q.get("question"), "category": q.get("category")})
+        saved += 1
     db.commit()
 
     return {
-        "status": "created",
-        "interview_id": str(interview.id),
         "candidate": c.name,
-        "count": len(saved),
-        "questions": saved,
+        "status": "created" if created else "replaced",
+        "count": saved,
     }
+
+
+def generate_interview_questions(
+    db: Session,
+    candidate_ids: list[str],
+    aspect: str = "",
+    num_questions: int = 0,
+    replace: bool = False,
+    owner_id=None,
+) -> dict:
+    """
+    Sinh bộ câu hỏi phỏng vấn bám CV + JD và LƯU vào DB cho MỘT HOẶC NHIỀU ứng viên,
+    đúng như luồng /interviews/.../generate, để HR thấy trong màn hình phỏng vấn.
+
+    NHẬN CẢ DANH SÁCH. HR hay yêu cầu theo lô ("tạo câu hỏi cho mỗi người trong nhóm
+    trên 80 điểm"). Nếu tool chỉ nhận 1 người thì agent phải gọi lại N lần, mỗi lần
+    gửi lại toàn bộ hội thoại cho LLM — tốn token theo cấp số nhân và dễ đụng trần số
+    bước. Gộp thành 1 lời gọi thì chi phí gần như không đổi theo N.
+
+    KHÔNG XOÁ BUỔI PHỎNG VẤN CŨ. Bản trước xoá thẳng `Interview` của ứng viên rồi tạo
+    lại — kéo theo mọi câu trả lời, điểm chấm và nhận xét HR đã nhập biến mất, chỉ vì
+    agent gọi lại tool lần hai. Giờ:
+      - chưa có buổi phỏng vấn -> tạo mới;
+      - có nhưng CHỈ gồm câu hỏi AI (HR chưa đụng vào) -> thay bộ câu hỏi, giữ nguyên
+        buổi phỏng vấn (lịch hẹn, trạng thái);
+      - có và HR ĐÃ làm việc trên đó -> BỎ QUA người đó và báo lại, trừ khi replace=True.
+    """
+    refs = [r for r in (candidate_ids or []) if str(r).strip()]
+    if not refs:
+        return {"error": "Cần ít nhất 1 ứng viên."}
+    if len(refs) > _MAX_BATCH:
+        return {
+            "error": f"Mỗi lần chỉ xử lý tối đa {_MAX_BATCH} ứng viên (mỗi người là một "
+                     f"lượt gọi AI). Hãy chia nhỏ danh sách rồi gọi lại.",
+            "requested": len(refs),
+        }
+
+    results, not_found, seen = [], [], set()
+    for ref in refs:
+        c = _resolve_candidate(db, ref, owner_id)
+        if c is None:
+            not_found.append(str(ref))
+            continue
+        if c.id in seen:  # LLM có thể truyền trùng dưới 2 dạng tên/id
+            continue
+        seen.add(c.id)
+        results.append(_generate_questions_for(db, c, aspect, num_questions, replace))
+
+    cho_xac_nhan = [r["candidate"] for r in results if r["status"] == "needs_confirmation"]
+    out = {
+        "processed": len(results),
+        "results": results,
+        "summary": {
+            "created": sum(1 for r in results if r["status"] == "created"),
+            "replaced": sum(1 for r in results if r["status"] == "replaced"),
+            "skipped": sum(1 for r in results if r["status"] in ("skipped", "failed")),
+        },
+    }
+    if not_found:
+        out["not_found"] = not_found
+    if cho_xac_nhan:
+        out["needs_confirmation"] = cho_xac_nhan
+        out["how_to_proceed"] = (
+            "Những người này đã có dữ liệu phỏng vấn HR nhập. Hỏi HR xác nhận, nếu đồng "
+            "ý thì gọi lại CHỈ với các tên đó kèm replace=true. PHẢI báo cho HR biết."
+        )
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -394,55 +518,97 @@ def list_shortlists(db: Session, jd_id: str, owner_id=None) -> dict:
     }
 
 
+def _shortlist_for(db: Session, jd_id, name: str, created_by: str) -> models.Shortlist:
+    """Lấy shortlist tên `name` của một vị trí, chưa có thì tạo.
+
+    So tên KHÔNG PHÂN BIỆT HOA/THƯỜNG: HR gõ "điểm cao" nhưng LLM hay viết hoa lại
+    thành "Điểm cao", và khớp chính xác sẽ đẻ ra hai shortlist khác nhau cho cùng một
+    ý định — HR mở màn hình lên thấy danh sách bị xé đôi mà không hiểu vì sao.
+    """
+    sl = (
+        db.query(models.Shortlist)
+        .filter(models.Shortlist.jd_id == jd_id, func.lower(models.Shortlist.name) == name.lower())
+        .first()
+    )
+    if sl is None:
+        sl = models.Shortlist(jd_id=jd_id, name=name, created_by=_uuid(created_by))
+        db.add(sl)
+        db.commit()
+        db.refresh(sl)
+    return sl
+
+
 def add_to_shortlist(
     db: Session,
-    candidate_id: str,
+    candidate_ids: list[str],
     created_by: str,
     shortlist_name: str = "AI Shortlist",
     owner_id=None,
 ) -> dict:
     """
-    Đưa 1 ứng viên vào shortlist. Tự tìm shortlist tên `shortlist_name` trong JD của
-    ứng viên; nếu chưa có thì tạo. Chống thêm trùng. Đây là tool 'một phát ăn ngay'
-    cho yêu cầu "đưa ứng viên X vào shortlisting".
+    Đưa MỘT HOẶC NHIỀU ứng viên vào shortlist. Tự tìm shortlist tên `shortlist_name`
+    trong JD của từng ứng viên; chưa có thì tạo. Chống thêm trùng.
+
+    NHẬN CẢ DANH SÁCH vì HR gần như luôn thao tác theo nhóm ("cho tất cả người trên 80
+    điểm vào shortlist X"). Bản chỉ nhận 1 người bắt agent gọi lại N lần, mỗi lần gửi
+    lại toàn bộ hội thoại cho LLM — vừa đốt token vừa dễ chạm trần số bước của agent.
+
+    LƯU Ý NGHIỆP VỤ: shortlist thuộc về VỊ TRÍ. Nhóm ứng viên trải trên nhiều vị trí
+    sẽ vào nhiều shortlist cùng tên, mỗi vị trí một cái — kết quả trả về nói rõ điều đó
+    để agent không báo nhầm là "một shortlist duy nhất".
     """
-    c = _resolve_candidate(db, candidate_id, owner_id)
-    if c is None:
-        return {"error": "Không tìm thấy ứng viên."}
+    refs = [r for r in (candidate_ids or []) if str(r).strip()]
+    if not refs:
+        return {"error": "Cần ít nhất 1 ứng viên."}
 
-    sl = (
-        db.query(models.Shortlist)
-        .filter(
-            models.Shortlist.jd_id == c.jd_id,
-            models.Shortlist.name == shortlist_name,
+    name = (shortlist_name or "AI Shortlist").strip() or "AI Shortlist"
+    added, already_in, not_found, seen = [], [], [], set()
+    theo_vi_tri: dict[str, int] = {}
+
+    for ref in refs:
+        c = _resolve_candidate(db, ref, owner_id)
+        if c is None:
+            not_found.append(str(ref))
+            continue
+        if c.id in seen:  # LLM có thể truyền trùng dưới 2 dạng tên/id
+            continue
+        seen.add(c.id)
+
+        sl = _shortlist_for(db, c.jd_id, name, created_by)
+        exists = (
+            db.query(models.ShortlistItem)
+            .filter(
+                models.ShortlistItem.shortlist_id == sl.id,
+                models.ShortlistItem.cv_id == c.id,
+            )
+            .first()
         )
-        .first()
-    )
-    if sl is None:
-        sl = models.Shortlist(jd_id=c.jd_id, name=shortlist_name, created_by=_uuid(created_by))
-        db.add(sl)
-        db.commit()
-        db.refresh(sl)
+        if exists:
+            already_in.append(c.name)
+            continue
 
-    existing = (
-        db.query(models.ShortlistItem)
-        .filter(
-            models.ShortlistItem.shortlist_id == sl.id,
-            models.ShortlistItem.cv_id == c.id,
-        )
-        .first()
-    )
-    if existing:
-        return {"status": "already_in", "shortlist": sl.name, "candidate": c.name}
+        db.add(models.ShortlistItem(shortlist_id=sl.id, cv_id=c.id))
+        added.append(c.name)
+        jd_title = c.jd.title if c.jd else "?"
+        theo_vi_tri[jd_title] = theo_vi_tri.get(jd_title, 0) + 1
 
-    db.add(models.ShortlistItem(shortlist_id=sl.id, cv_id=c.id))
     db.commit()
-    return {
-        "status": "added",
-        "shortlist": sl.name,
-        "shortlist_id": str(sl.id),
-        "candidate": c.name,
+
+    out = {
+        "shortlist": name,
+        "added": added,
+        "added_count": len(added),
+        "by_jd": theo_vi_tri,
     }
+    if already_in:
+        out["already_in"] = already_in
+    if not_found:
+        out["not_found"] = not_found
+        out["warning"] = f"Không tìm thấy: {', '.join(not_found)}. PHẢI báo điều này cho HR."
+    # Điều hướng sang màn hình Shortlisting để HR thấy ngay kết quả.
+    if added:
+        out["ui_action"] = {"type": "navigate", "path": "/shortlisting"}
+    return out
 
 
 def send_interview_invite(
@@ -476,9 +642,14 @@ def send_interview_invite(
         }
 
     # Gửi thật qua hàm chuẩn trong services/email.py (fastapi_mail là async).
+    # `_run_async` chứ không phải `asyncio.run`: tool này bị gọi từ bên trong agent
+    # loop (async), nơi asyncio.run() luôn ném RuntimeError.
     from app.services.email import send_interview_email
 
-    asyncio.run(send_interview_email(c.email, preview["name"], when, location))
+    try:
+        _run_async(send_interview_email(c.email, preview["name"], when, location))
+    except Exception as e:  # noqa: BLE001 - SMTP hỏng phải nói rõ, không giả vờ đã gửi
+        return {"error": f"Gửi email thất bại: {type(e).__name__}: {e}", **preview}
     return {"status": "sent", **preview}
 
 
@@ -505,234 +676,3 @@ def open_shortlisting(db: Session, owner_id=None) -> dict:
     """Mở màn hình Shortlisting (danh sách rút gọn ứng viên)."""
     return {"ui_action": {"type": "navigate", "path": "/shortlisting"}}
 
-
-# --------------------------------------------------------------------------- #
-# Đăng ký tool cho LLM
-# --------------------------------------------------------------------------- #
-TOOL_FUNCS = {
-    "list_jds": list_jds,
-    "get_jd": get_jd,
-    "search_candidates": search_candidates,
-    "get_candidate": get_candidate,
-    "create_jd": create_jd,
-    "compare_candidates": compare_candidates,
-    "generate_interview_questions": generate_interview_questions,
-    "create_shortlist": create_shortlist,
-    "list_shortlists": list_shortlists,
-    "add_to_shortlist": add_to_shortlist,
-    "send_interview_invite": send_interview_invite,
-    "open_jd": open_jd,
-    "open_dashboard": open_dashboard,
-    "open_shortlisting": open_shortlisting,
-}
-
-# Tool cần user_id của HR đăng nhập -> agent loop tiêm, không đưa vào schema.
-USER_BOUND = {
-    "create_jd": "created_by",
-    "create_shortlist": "created_by",
-    "add_to_shortlist": "created_by",
-}
-
-TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "list_jds",
-            "description": "Liệt kê các vị trí tuyển dụng (Job Description).",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "status": {
-                        "type": "string",
-                        "enum": ["active", "closed", "all"],
-                        "description": "Lọc theo trạng thái, mặc định 'active'.",
-                    }
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_jd",
-            "description": "Xem chi tiết 1 JD (yêu cầu đã cấu trúc + markdown).",
-            "parameters": {
-                "type": "object",
-                "properties": {"jd_id": {"type": "string", "description": "UUID của JD HOẶC tên vị trí, vd 'Backend Developer'."}},
-                "required": ["jd_id"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "search_candidates",
-            "description": (
-                "Tìm ứng viên đã chấm điểm, lọc theo kỹ năng và/hoặc điểm tối thiểu. "
-                "jd_id là TUỲ CHỌN: nếu HR chỉ nói 'tìm người biết Python' mà KHÔNG nhắc vị trí nào "
-                "thì BỎ TRỐNG jd_id để tìm xuyên mọi vị trí — TUYỆT ĐỐI không hỏi HR jd_id."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "jd_id": {"type": "string", "description": "TUỲ CHỌN. UUID hoặc TÊN vị trí, chỉ điền khi HR có nêu vị trí."},
-                    "min_score": {"type": "number", "description": "Điểm tối thiểu (thang 0-100)."},
-                    "skill": {"type": "string", "description": "Kỹ năng cần có, vd 'python'."},
-                    "limit": {"type": "integer"},
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_candidate",
-            "description": "Chi tiết 1 ứng viên: thông tin, điểm, giải thích, bằng chứng, kỹ năng, dự án.",
-            "parameters": {
-                "type": "object",
-                "properties": {"candidate_id": {"type": "string", "description": "UUID HOẶC tên ứng viên, vd 'Nguyễn Minh Khoa'."}},
-                "required": ["candidate_id"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "create_jd",
-            "description": "Chuẩn hóa 1 JD ngôn ngữ tự nhiên bằng AI rồi LƯU vào hệ thống.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "raw_text": {"type": "string", "description": "Nội dung JD thô do HR mô tả."}
-                },
-                "required": ["raw_text"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "compare_candidates",
-            "description": (
-                "So sánh 2+ ứng viên cùng 1 vị trí. QUAN TRỌNG: nếu HR nói kiểu 'so sánh top 3' "
-                "thì ĐỪNG tự liệt kê id — hãy truyền jd_id + top_n=3, tool sẽ tự lấy đúng N người "
-                "điểm cao nhất. Chỉ dùng candidate_ids khi HR gọi đích danh từng người."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "jd_id": {"type": "string", "description": "UUID hoặc tên vị trí (dùng kèm top_n)."},
-                    "top_n": {"type": "integer", "description": "So sánh N ứng viên điểm cao nhất của vị trí đó."},
-                    "candidate_ids": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "UUID HOẶC tên từng ứng viên (chỉ khi HR gọi đích danh).",
-                    },
-                    "aspect": {"type": "string", "description": "Khía cạnh trọng tâm, vd 'Python và hạ tầng'."},
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "generate_interview_questions",
-            "description": "Sinh bộ câu hỏi phỏng vấn bám CV + JD cho 1 ứng viên VÀ LƯU vào buổi phỏng vấn của họ (HR xem được trong màn hình phỏng vấn).",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "candidate_id": {"type": "string", "description": "UUID HOẶC tên ứng viên."},
-                    "aspect": {"type": "string", "description": "Trọng tâm phỏng vấn (tùy chọn)."},
-                },
-                "required": ["candidate_id"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "add_to_shortlist",
-            "description": "Đưa 1 ứng viên vào shortlist của vị trí họ ứng tuyển (tự tạo shortlist nếu chưa có). Dùng khi HR muốn 'đưa/thêm ứng viên vào shortlisting'.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "candidate_id": {"type": "string", "description": "UUID HOẶC tên ứng viên."},
-                    "shortlist_name": {"type": "string", "description": "Tên shortlist, mặc định 'AI Shortlist'."},
-                },
-                "required": ["candidate_id"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "create_shortlist",
-            "description": "Tạo 1 shortlist mới (rỗng) cho 1 vị trí.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "jd_id": {"type": "string", "description": "UUID hoặc tên vị trí."},
-                    "name": {"type": "string"},
-                },
-                "required": ["jd_id", "name"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_shortlists",
-            "description": "Liệt kê các shortlist của 1 vị trí kèm số ứng viên.",
-            "parameters": {
-                "type": "object",
-                "properties": {"jd_id": {"type": "string", "description": "UUID hoặc tên vị trí."}},
-                "required": ["jd_id"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "send_interview_invite",
-            "description": "Gửi email mời phỏng vấn. HÀNH ĐỘNG KHÔNG ĐẢO NGƯỢC: chỉ đặt confirm=true SAU KHI HR đã xác nhận rõ ràng; nếu chưa, gọi với confirm=false để xem trước.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "candidate_id": {"type": "string"},
-                    "when": {"type": "string", "description": "Thời gian phỏng vấn, vd '10h00 thứ Ba 14/07'."},
-                    "location": {"type": "string", "description": "Nơi/link phỏng vấn."},
-                    "confirm": {"type": "boolean", "description": "true = gửi thật; false = chỉ xem trước."},
-                },
-                "required": ["candidate_id", "when"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "open_jd",
-            "description": "Điều hướng GIAO DIỆN bên phải sang trang chi tiết của 1 vị trí (project). Dùng khi HR muốn 'mở/xem/vào' một vị trí cụ thể.",
-            "parameters": {
-                "type": "object",
-                "properties": {"jd_id": {"type": "string", "description": "UUID của JD HOẶC tên vị trí, vd 'Backend Developer'."}},
-                "required": ["jd_id"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "open_dashboard",
-            "description": "Điều hướng giao diện về màn hình Dashboard (danh sách các vị trí tuyển dụng).",
-            "parameters": {"type": "object", "properties": {}},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "open_shortlisting",
-            "description": "Điều hướng giao diện sang màn hình Shortlisting.",
-            "parameters": {"type": "object", "properties": {}},
-        },
-    },
-]
