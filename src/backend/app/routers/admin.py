@@ -16,6 +16,7 @@ from app.core.dependencies import require_role
 from app.core.dependencies import get_current_user # Dùng để lấy ID của admin đang tạo thông báo
 from app.database import get_db
 from app.services.logging import write_audit_log
+from app.utils.timezone import format_local
 
 # ==========================================
 # HELPERS
@@ -25,25 +26,16 @@ def _clamp(limit: int, lo: int = 1, hi: int = 500) -> int:
     return min(max(limit, lo), hi)
 
 
-def _since_aware(hours: Optional[int]) -> Optional[datetime]:
-    """Mốc thời gian bắt đầu cửa sổ lọc, dạng CÓ timezone.
+def _since(hours: Optional[int]) -> Optional[datetime]:
+    """Mốc bắt đầu cửa sổ lọc, LUÔN có timezone. hours=None/0 = không giới hạn.
 
-    Dùng cho ai_logs.created_at (kiểu timestamptz). hours=None/0 = không giới hạn.
+    Trước đây phải có thêm một biến thể `_since_naive` vì audit_logs /
+    agent_tool_logs / system_logs dùng cột `timestamp without time zone`. Nay mọi
+    cột thời gian đều là timestamptz (xem migration d7f1a3c9e5b2) nên một hàm là đủ.
     """
     if not hours:
         return None
     return datetime.now(timezone.utc) - timedelta(hours=hours)
-
-
-def _since_naive(hours: Optional[int]) -> Optional[datetime]:
-    """Như `_since_aware` nhưng BỎ timezone.
-
-    audit_logs / agent_tool_logs / system_logs dùng cột `timestamp without time
-    zone` lưu giờ UTC; so sánh với datetime có tz sẽ bị Postgres từ chối.
-    """
-    if not hours:
-        return None
-    return datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=hours)
 
 
 # ==========================================
@@ -192,7 +184,7 @@ def get_ai_metrics(
     Trả cả số tổng lẫn breakdown theo agent: chi phí token và độ trễ chỉ có ý nghĩa
     hành động được khi biết agent nào gây ra.
     """
-    since = _since_aware(hours)
+    since = _since(hours)
 
     q = db.query(models.AILog)
     if since is not None:
@@ -200,11 +192,10 @@ def get_ai_metrics(
 
     total = q.count()
 
-    # Lượt gọi tool của Agent nằm ở bảng khác (cột thời gian KHÔNG có timezone).
+    # Lượt gọi tool của Agent nằm ở bảng khác.
     tool_q = db.query(models.AgentToolLog)
-    since_naive = _since_naive(hours)
-    if since_naive is not None:
-        tool_q = tool_q.filter(models.AgentToolLog.created_at >= since_naive)
+    if since is not None:
+        tool_q = tool_q.filter(models.AgentToolLog.created_at >= since)
     tool_calls = tool_q.count()
     tool_errors = tool_q.filter(models.AgentToolLog.status != "success").count()
 
@@ -277,7 +268,7 @@ def list_ai_logs(
     """Lịch sử Prompt/Completion của AI, lọc theo agent, trạng thái, thời gian, từ khóa."""
     query = db.query(models.AILog)
 
-    since = _since_aware(hours)
+    since = _since(hours)
     if since is not None:
         query = query.filter(models.AILog.created_at >= since)
     if agent_name:
@@ -319,7 +310,7 @@ def list_agent_tool_logs(
         .outerjoin(models.User, models.AgentToolLog.user_id == models.User.id)
     )
 
-    since = _since_naive(hours)
+    since = _since(hours)
     if since is not None:
         query = query.filter(models.AgentToolLog.created_at >= since)
     if tool_name:
@@ -376,7 +367,7 @@ def list_audit_logs(
         query = query.filter(models.AuditLog.entity_type == entity_type)
     if action:
         query = query.filter(models.AuditLog.action == action)
-    since = _since_naive(hours)
+    since = _since(hours)
     if since is not None:
         query = query.filter(models.AuditLog.created_at >= since)
     if q:
@@ -517,7 +508,7 @@ def export_system_logs_csv(db: Session = Depends(get_db)):
     output.write('\ufeff') # Ghi Byte Order Mark (BOM) để Excel đọc đúng tiếng Việt UTF-8
     
     writer = csv.writer(output)
-    writer.writerow(["ID", "Level", "Module", "Message", "Created At"]) # Tiêu đề cột
+    writer.writerow(["ID", "Level", "Module", "Message", "Thời điểm (UTC+7)"]) # Tiêu đề cột
     
     for log in logs:
         writer.writerow([
@@ -525,7 +516,7 @@ def export_system_logs_csv(db: Session = Depends(get_db)):
             log.level, 
             log.module, 
             log.message, 
-            log.created_at.strftime("%Y-%m-%d %H:%M:%S")
+            format_local(log.created_at)
         ])
         
     output.seek(0)
@@ -544,7 +535,7 @@ def export_ai_logs_csv(db: Session = Depends(get_db)):
     output.write('\ufeff')
     
     writer = csv.writer(output)
-    writer.writerow(["ID", "Agent Name", "Prompt", "Completion", "Tokens", "Latency (ms)", "Is Error", "Created At"])
+    writer.writerow(["ID", "Agent Name", "Prompt", "Completion", "Tokens", "Latency (ms)", "Is Error", "Thời điểm (UTC+7)"])
     
     for log in logs:
         writer.writerow([
@@ -555,7 +546,7 @@ def export_ai_logs_csv(db: Session = Depends(get_db)):
             log.total_tokens, 
             log.latency_ms,
             "Lỗi" if log.is_error else "Thành công",
-            log.created_at.strftime("%Y-%m-%d %H:%M:%S")
+            format_local(log.created_at)
         ])
         
     output.seek(0)
@@ -585,7 +576,7 @@ def export_audit_logs_csv(db: Session = Depends(get_db)):
     writer = csv.writer(output)
     writer.writerow([
         "ID", "Người thực hiện", "Action", "Entity Type", "Entity ID",
-        "Trước (JSON)", "Sau (JSON)", "Created At",
+        "Trước (JSON)", "Sau (JSON)", "Thời điểm (UTC+7)",
     ])
 
     for log, email in rows:
@@ -597,7 +588,7 @@ def export_audit_logs_csv(db: Session = Depends(get_db)):
             log.entity_id,
             json.dumps(log.old_data, ensure_ascii=False) if log.old_data else "",
             json.dumps(log.new_data, ensure_ascii=False) if log.new_data else "",
-            log.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+            format_local(log.created_at),
         ])
         
     output.seek(0)
@@ -624,7 +615,7 @@ def export_agent_tool_logs_csv(db: Session = Depends(get_db)):
     writer = csv.writer(output)
     writer.writerow([
         "ID", "Người dùng", "Tool", "Tham số (JSON)", "Kết quả (JSON)",
-        "Trạng thái", "Created At",
+        "Trạng thái", "Thời điểm (UTC+7)",
     ])
 
     for log, email in rows:
@@ -635,7 +626,7 @@ def export_agent_tool_logs_csv(db: Session = Depends(get_db)):
             json.dumps(log.input_params, ensure_ascii=False) if log.input_params else "",
             json.dumps(log.result, ensure_ascii=False) if log.result else "",
             log.status,
-            log.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+            format_local(log.created_at),
         ])
 
     output.seek(0)

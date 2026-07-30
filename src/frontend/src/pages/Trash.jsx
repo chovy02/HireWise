@@ -4,17 +4,10 @@ import Topbar from '../components/Topbar.jsx'
 import { Card, ConfirmDialog, StateRow } from '../components/ui.jsx'
 import { useProjects } from '../context/ProjectContext.jsx'
 import { useToast } from '../context/ToastContext.jsx'
+import { formatDateTime } from '../utils/datetime.js'
 
-// "2026-07-28T09:44:00" -> "28/07/2026 09:44"
-function formatDeletedAt(iso) {
-  if (!iso) return null
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return null
-  const pad = (n) => String(n).padStart(2, '0')
-  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(
-    d.getHours()
-  )}:${pad(d.getMinutes())}`
-}
+// "2026-07-28T09:44:00+00:00" -> "28/07/2026 16:44" (theo giờ Việt Nam)
+const formatDeletedAt = (iso) => formatDateTime(iso, null)
 
 export default function Trash() {
   const { fetchTrash, restoreProject, purgeProject } = useProjects()

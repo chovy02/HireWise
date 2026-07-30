@@ -31,6 +31,7 @@ import RichTextToolbar from '../components/RichTextToolbar.jsx'
 import { sanitizeHtml, parseInert } from '../utils/sanitizeHtml.js'
 import { useAuth } from '../context/AuthContext.jsx'
 import { useToast } from '../context/ToastContext.jsx'
+import { formatDateTime } from '../utils/datetime.js'
 import {
   getEmailTemplates,
   upsertEmailTemplate,
@@ -806,7 +807,7 @@ function TemplateEditor({
         <div className="flex flex-wrap items-center justify-end gap-2.5 border-t border-slate-100 pt-4">
           {saved?.updated_at && (
             <span className="mr-auto text-xs text-slate-400">
-              Cập nhật lần cuối: {new Date(saved.updated_at).toLocaleString('vi-VN')}
+              Cập nhật lần cuối: {formatDateTime(saved.updated_at)}
             </span>
           )}
           <SecondaryButton

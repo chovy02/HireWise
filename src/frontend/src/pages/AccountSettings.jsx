@@ -32,6 +32,7 @@ import {
 import { useAuth } from '../context/AuthContext.jsx'
 import { useToast } from '../context/ToastContext.jsx'
 import { me as fetchMe, updateProfile, changePassword } from '../api/auth.js'
+import { formatDateTime } from '../utils/datetime.js'
 
 const ROLE_LABEL = {
   admin: 'Quản trị viên',
@@ -52,11 +53,8 @@ function initialsOf(name) {
     .toUpperCase()
 }
 
-function formatDate(value) {
-  if (!value) return '—'
-  const d = new Date(value)
-  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString('vi-VN')
-}
+// Ngày + giờ theo múi giờ Việt Nam (UTC+7).
+const formatDate = (value) => formatDateTime(value)
 
 // Ô nhập dùng lại cho cả hai thẻ, có nhãn + dòng gợi ý/lỗi bên dưới.
 function LabeledInput({ label, icon: Icon, hint, error, trailing, ...rest }) {

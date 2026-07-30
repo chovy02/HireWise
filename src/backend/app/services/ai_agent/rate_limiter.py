@@ -167,6 +167,11 @@ def _local_throttle():
 def _keys(key_id: str, model: str) -> list[str]:
     now = time.time()
     minute = int(now // 60)
+    # CỐ Ý DÙNG UTC, KHÔNG ĐỔI SANG UTC+7: đây là sổ đếm ngân sách token/ngày của
+    # Groq, và hạn mức phía Groq reset vào NỬA ĐÊM UTC. Đổi mốc ngày sang giờ Việt
+    # Nam sẽ khiến cửa sổ đếm của ta lệch 7 tiếng so với cửa sổ thật của nhà cung
+    # cấp — hệ quả là có lúc tưởng còn quota nhưng đã bị 429, có lúc tự chặn oan.
+    # (Mọi mốc thời gian HIỂN THỊ cho người dùng thì mới quy sang UTC+7.)
     day = datetime.now(timezone.utc).strftime("%Y%m%d")
     prefix = f"groqrl:{key_id}:{model}"
     return [

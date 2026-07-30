@@ -6,6 +6,20 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 from app.database import Base
 
+# QUY ƯỚC THỜI GIAN CỦA TOÀN HỆ THỐNG
+#
+# MỌI cột thời gian dùng DateTime(timezone=True) (timestamptz), và MỌI giá trị ghi
+# vào đều là datetime.now(timezone.utc) — tức DB luôn lưu MỘT MỐC THỜI ĐIỂM tuyệt
+# đối, không phải "giờ trên đồng hồ tường".
+#
+# VÌ SAO PHẢI timezone=True: trước đây các cột này là `timestamp without time zone`
+# nhưng code lại ghi vào giờ UTC. Postgres cắt bỏ phần offset, nên API trả ra chuỗi
+# "2026-07-26T13:02:53" KHÔNG có offset; theo chuẩn ECMAScript, `new Date()` hiểu
+# chuỗi dạng đó là GIỜ ĐỊA PHƯƠNG của trình duyệt. Máy ở Việt Nam (UTC+7) vì thế
+# hiển thị mọi mốc thời gian SỚM HƠN 7 TIẾNG so với thực tế.
+#
+# Có timezone=True thì API trả "2026-07-26T13:02:53+00:00", trình duyệt quy đổi
+# đúng, và frontend chỉ việc format sang UTC+7 (xem utils/datetime.js).
 class User(Base):
     __tablename__ = "users"
 
@@ -25,8 +39,8 @@ class User(Base):
     # code so sánh với datetime.now(timezone.utc), lưu naive sẽ ném TypeError khi so sánh.
     verification_code: Mapped[str] = mapped_column(String(6), nullable=True)
     verification_code_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     jds = relationship("JobDescription", back_populates="creator")
     evaluation_overrides = relationship("EvaluationOverride", back_populates="user")
@@ -52,8 +66,8 @@ class EmailTemplate(Base):
     # HTML và gửi đi rỗng. Mặc định "text" để mọi mẫu đã lưu trước đây chạy y như cũ.
     body_format: Mapped[str] = mapped_column(String(10), nullable=False, server_default="text", default="text")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True) # Cho phép tắt để dùng lại mail mặc định
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     user = relationship("User", backref="email_templates")
     attachments = relationship(
@@ -92,7 +106,7 @@ class EmailTemplateAttachment(Base):
     is_inline: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     # Khóa để HTML trỏ tới ảnh: <img src="cid:{content_id}">. Chỉ ảnh inline mới có.
     content_id: Mapped[str] = mapped_column(String(100), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     template = relationship("EmailTemplate", back_populates="attachments")
 
@@ -102,7 +116,7 @@ class ChatSession(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     title: Mapped[str] = mapped_column(String(255), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     user = relationship("User", back_populates="chat_sessions")
     messages = relationship("ChatMessage", back_populates="session", cascade="all, delete-orphan")
@@ -116,7 +130,7 @@ class ChatMessage(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     prompt_tokens: Mapped[int] = mapped_column(Integer, default=0)      
     completion_tokens: Mapped[int] = mapped_column(Integer, default=0)   
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     session = relationship("ChatSession", back_populates="messages")
 
@@ -135,9 +149,9 @@ class JobDescription(Base):
     # Cố ý KHÔNG xoá thẳng khỏi DB: mỗi JD gắn với hàng chục CV đã tốn quota AI để
     # chấm, bấm nhầm một cái là mất trắng và phải chạy lại từ đầu. Xoá mềm cho phép
     # khôi phục nguyên vẹn; muốn xoá hẳn thì phải vào thùng rác xác nhận lần nữa.
-    deleted_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    deleted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
     created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     creator = relationship("User", back_populates="jds")
     cvs = relationship("Candidate", back_populates="jd")
@@ -164,7 +178,7 @@ class UploadBatch(Base):
     duplicated: Mapped[int] = mapped_column(Integer, default=0)  # đã nộp trước đó cho JD này
     failed: Mapped[int] = mapped_column(Integer, default=0)      # không đọc được text
     uploaded_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     jd = relationship("JobDescription", back_populates="upload_batches")
 
@@ -186,7 +200,7 @@ class Candidate(Base):
     # biết vì sao, và không phân biệt được lỗi tạm thời (AI quá tải -> thử lại được)
     # với lỗi vĩnh viễn (CV là ảnh scan -> thử lại vô ích).
     error_message: Mapped[str] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     jd = relationship("JobDescription", back_populates="cvs")
     skills = relationship("CandidateSkill", back_populates="cv", cascade="all, delete-orphan")
@@ -225,7 +239,7 @@ class CandidateProject(Base):
     tech_stack: Mapped[dict] = mapped_column(JSONB, nullable=True)
     # 'from_cv' (parser trích) hoặc nguồn khác nếu sau này HR tự thêm.
     source: Mapped[str] = mapped_column(String(50), nullable=False, default="from_cv")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     candidate = relationship("Candidate", back_populates="projects")
 
@@ -249,7 +263,7 @@ class Evaluation(Base):
     details: Mapped[dict] = mapped_column(JSONB, nullable=True)
     external_tool_logs: Mapped[dict] = mapped_column(JSONB, nullable=True)
     is_overridden: Mapped[bool] = mapped_column(Boolean, default=False)
-    evaluated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    evaluated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     cv = relationship("Candidate", back_populates="evaluation")
     jd = relationship("JobDescription", back_populates="evaluations")
@@ -266,7 +280,7 @@ class EvaluationOverride(Base):
     old_score: Mapped[float] = mapped_column(Float, nullable=False)
     new_score: Mapped[float] = mapped_column(Float, nullable=False)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     evaluation = relationship("Evaluation", back_populates="overrides")
     user = relationship("User", back_populates="evaluation_overrides")
@@ -278,7 +292,7 @@ class Shortlist(Base):
     jd_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("job_descriptions.id"), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     jd = relationship("JobDescription", back_populates="shortlists")
     creator = relationship("User", back_populates="shortlists")
@@ -299,7 +313,7 @@ class ShortlistItem(Base):
     shortlist_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("shortlists.id"), nullable=False)
     cv_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("candidates.id"), nullable=False)
     candidate_status: Mapped[str] = mapped_column(String(50), default="pending") # pending, accepted, rejected
-    added_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     notified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
     notified_status: Mapped[str] = mapped_column(String(50), nullable=True)
 
@@ -313,7 +327,7 @@ class Interview(Base):
     cv_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("candidates.id"), unique=True, nullable=False)
     feedback: Mapped[str] = mapped_column(Text, nullable=True)
     feedback_summary: Mapped[str] = mapped_column(Text, nullable=True)
-    scheduled_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    scheduled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(String(50), default="pending")    #(pending, in_progress, completed) 
 
     cv = relationship("Candidate", back_populates="interview")
@@ -348,7 +362,7 @@ class AgentToolLog(Base):
     input_params: Mapped[dict] = mapped_column(JSONB, nullable=True)
     result: Mapped[dict] = mapped_column(JSONB, nullable=True)
     status: Mapped[str] = mapped_column(String(50), nullable=False) # success, error, timeout
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     user = relationship("User", back_populates="agent_logs")
     evaluation = relationship("Evaluation", back_populates="agent_logs")
@@ -361,7 +375,7 @@ class SystemLog(Base):
     module: Mapped[str] = mapped_column(String(100), nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
     payload: Mapped[dict] = mapped_column(JSONB, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 class AILog(Base):
     __tablename__ = "ai_logs"
@@ -387,7 +401,7 @@ class AuditLog(Base):
     entity_id: Mapped[str] = mapped_column(String(255), nullable=True)
     old_data: Mapped[dict] = mapped_column(JSONB, nullable=True) # Dữ liệu trước khi sửa
     new_data: Mapped[dict] = mapped_column(JSONB, nullable=True) # Dữ liệu sau khi sửa
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     user = relationship("User")
 
@@ -401,6 +415,6 @@ class Notification(Base):
     type: Mapped[str] = mapped_column(String(50), default="info") 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True) # Bật/Tắt hiển thị
     created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     creator = relationship("User")

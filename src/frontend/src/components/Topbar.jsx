@@ -6,6 +6,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Bell, X } from 'lucide-react'
 import { getActiveNotifications } from '../api/notifications.js'
+import { formatDateTime } from '../utils/datetime.js'
 
 const SEEN_KEY = 'hirewise_seen_notifications'
 
@@ -134,7 +135,7 @@ export function NotificationBell() {
                         <p className="text-sm font-semibold text-slate-900">{n.title}</p>
                         <p className="mt-0.5 text-sm text-slate-600">{n.message}</p>
                         <p className="mt-1 text-xs text-slate-400">
-                          {new Date(n.created_at).toLocaleString('vi-VN')}
+                          {formatDateTime(n.created_at)}
                         </p>
                       </div>
                     </li>
