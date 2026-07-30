@@ -42,10 +42,14 @@ services:
     volumes:
       - ./src/backend:/app
       - cv_storage:/data/cv_storage
+      # Ảnh/file HR gắn vào mẫu mail. Volume riêng vì việc gửi mail chạy trong
+      # BackgroundTasks của chính service `api`, và file phải sống qua mỗi lần rebuild.
+      - email_attachments:/data/email_attachments
     env_file:
       - .env
     environment:
       - CV_STORAGE_DIR=/data/cv_storage
+      - EMAIL_ATTACHMENT_DIR=/data/email_attachments
       # Agent loop của web gọi tool QUA MCP server (service `mcp` cùng network).
       - MCP_SERVER_URL=http://mcp:8001/sse
       # Ngân sách token Groq đếm CHUNG cho mọi container, nên api/worker/mcp phải
@@ -124,3 +128,4 @@ services:
 volumes:
   postgres_data:
   cv_storage:
+  email_attachments:

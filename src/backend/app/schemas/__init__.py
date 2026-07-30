@@ -55,5 +55,6 @@ from .log import SystemLogResponse
 
 from .emailtemplate import (
     EmailTemplateUpsert,
-    EmailTemplateResponse
+    EmailTemplateResponse,
+    EmailAttachmentResponse
 )

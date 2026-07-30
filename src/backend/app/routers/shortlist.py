@@ -68,6 +68,15 @@ def _background_send_notifications(
         # Gom vào Dict để tra cứu nhanh theo type: {"accepted": obj, "rejected": obj}
         template_map = {t.template_type: t for t in templates}
 
+        # Đọc danh sách file/ảnh MỘT LẦN cho mỗi mẫu, ngay ở đây.
+        #
+        # Không để send_shortlist_email tự truy vấn: nó chạy một lần cho MỖI ứng viên,
+        # nên một lô 200 người sẽ thành 200 lượt query cho cùng hai bộ file. Quan hệ
+        # `attachments` là lazy-load, đọc trong vòng lặp cũng cho ra đúng chuyện đó.
+        attachment_map = {
+            t_type: list(tpl.attachments) for t_type, tpl in template_map.items()
+        }
+
         for item_id, cand_email, cand_name, jd_title, cand_status in items_to_notify:
             # Lấy template tương ứng với status ("accepted" / "rejected")
             custom_tpl = template_map.get(cand_status)
@@ -79,7 +88,8 @@ def _background_send_notifications(
                 candidate_name=cand_name or "Ứng viên",
                 jd_title=jd_title,
                 status=cand_status,
-                custom_template=custom_tpl # [MỚI] Truyền template vào đây
+                custom_template=custom_tpl, # [MỚI] Truyền template vào đây
+                attachments=attachment_map.get(cand_status),
             )
             if success:
                 item = db.query(models.ShortlistItem).filter(models.ShortlistItem.id == item_id).first()

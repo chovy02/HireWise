@@ -9,6 +9,11 @@ import {
   Eye,
   AlertTriangle,
   Variable,
+  GripVertical,
+  MousePointerClick,
+  Paperclip,
+  FileText,
+  X,
 } from 'lucide-react'
 import Topbar from '../components/Topbar.jsx'
 import {
@@ -21,11 +26,17 @@ import {
   SecondaryButton,
   StateRow,
 } from '../components/ui.jsx'
+import TokenEditor, { plainTextToHtml } from '../components/TokenEditor.jsx'
+import RichTextToolbar from '../components/RichTextToolbar.jsx'
+import { sanitizeHtml, parseInert } from '../utils/sanitizeHtml.js'
 import { useAuth } from '../context/AuthContext.jsx'
 import { useToast } from '../context/ToastContext.jsx'
 import {
   getEmailTemplates,
   upsertEmailTemplate,
+  uploadEmailAttachment,
+  deleteEmailAttachment,
+  fetchEmailAttachmentBlob,
   TEMPLATE_TYPES,
   TEMPLATE_VARIABLES,
 } from '../api/emailTemplates.js'
@@ -58,12 +69,46 @@ const PREVIEW_SAMPLE = {
 
 const KNOWN_TOKENS = new Set(TEMPLATE_VARIABLES.map((v) => v.token))
 
-// Thay biến động giống backend (SafeDict): biến KHÔNG nhận ra thì GIỮ NGUYÊN chuỗi
+// Thay biến động giống backend (_fill_tokens): biến KHÔNG nhận ra thì GIỮ NGUYÊN chuỗi
 // thay vì bỏ trống — để phần xem trước phản ánh đúng cái ứng viên sẽ nhận được.
 function renderPreview(text, values) {
   return String(text ?? '').replace(/\{(\w+)\}/g, (whole, key) =>
     key in values ? values[key] : whole
   )
+}
+
+// Nội dung HTML có chữ thật hay chỉ là vỏ thẻ rỗng?
+//
+// Trình duyệt để lại "<div><br></div>" trong một ô contenteditable đã bị xoá sạch, nên
+// kiểm tra bằng .trim() trên chuỗi HTML luôn cho ra "có nội dung" và một mẫu trắng
+// vẫn lưu được. Phải bóc thẻ ra rồi mới xét — ảnh cũng tính là có nội dung.
+function htmlHasContent(html) {
+  const holder = parseInert(sanitizeHtml(html || ''))
+  if (holder.querySelector('img')) return true
+  return holder.textContent.replace(/​/g, '').trim().length > 0
+}
+
+// Đổi "cid:att-xxx" trong HTML thành blob: URL để khung xem trước hiện được ảnh.
+//
+// parseInert: dựng ngoài tài liệu đang sống để cái src="cid:..." trung gian không làm
+// trình duyệt đi tải rồi báo ERR_UNKNOWN_URL_SCHEME.
+function resolveCidsInHtml(html, cidUrls) {
+  const holder = parseInert(sanitizeHtml(html || ''))
+  for (const img of holder.querySelectorAll('img')) {
+    const src = img.getAttribute('src') || ''
+    if (!src.startsWith('cid:')) continue
+    const url = cidUrls[src.slice(4)]
+    if (url) img.setAttribute('src', url)
+    else img.removeAttribute('src')
+    img.className = 'my-1 block h-auto max-w-full rounded'
+  }
+  return holder.innerHTML
+}
+
+function formatBytes(n) {
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`
 }
 
 // Các biến HR gõ mà backend không biết. Backend không báo lỗi cho chúng — mail vẫn
@@ -79,6 +124,70 @@ function findUnknownTokens(...texts) {
   return [...found]
 }
 
+// Thẻ biến kéo-thả được.
+//
+// CÁCH CHÈN DỰA HẲN VÀO TRÌNH DUYỆT: chỉ cần setData('text/plain') lúc bắt đầu kéo,
+// còn việc chèn là hành vi mặc định của <input>/<textarea> — và nó chèn đúng ngay chỗ
+// con trỏ chuột nhả ra, rồi phát sự kiện `input` nên onChange của React nhận được như
+// người dùng tự gõ.
+//
+// VÌ VẬY TUYỆT ĐỐI KHÔNG preventDefault() ở dragover/drop trên các ô nhập, và cũng
+// không tự tính vị trí chèn. Đã đo trên chính React của dự án: thả vào giữa ô thì
+// biến vào đúng ký tự thứ 42 (chỗ nhả chuột), state React khớp DOM, onChange chạy 1
+// lần. Ngược lại, cách "tự chèn tại el.selectionStart đọc trong dragover" cho ra 0 —
+// selectionStart KHÔNG chạy theo vạch chèn khi kéo — nên biến rơi về đầu ô.
+//
+// role="button" + tabIndex thay cho <button>: vẫn bấm/Enter được để chèn tại con trỏ
+// (đường dùng cho bàn phím và cảm ứng, nơi không kéo-thả được), nhưng chắc chắn kéo
+// được ở mọi trình duyệt.
+function VariableChip({ variable, onInsert, onDragStart, onDragEnd }) {
+  return (
+    <span
+      role="button"
+      tabIndex={0}
+      draggable="true"
+      onDragStart={(e) => {
+        e.dataTransfer.setData('text/plain', variable.token)
+        e.dataTransfer.effectAllowed = 'copy'
+        onDragStart?.()
+      }}
+      onDragEnd={() => onDragEnd?.()}
+      onClick={() => onInsert?.()}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onInsert?.()
+        }
+      }}
+      title={`${variable.token} — kéo vào ô, hoặc bấm để chèn tại con trỏ`}
+      className="inline-flex cursor-grab select-none items-center gap-1.5 rounded-lg border border-indigo-200 bg-indigo-50 px-2 py-1.5 text-xs font-semibold text-indigo-700 shadow-sm transition hover:border-indigo-400 hover:bg-indigo-100 focus:outline-none focus:ring-2 focus:ring-indigo-200 active:cursor-grabbing"
+    >
+      <GripVertical size={12} className="flex-shrink-0 text-indigo-400" />
+      {/* Hiện NHÃN chứ không phải {token}: thẻ kéo ra phải trông giống hệt thẻ sẽ
+          nằm trong ô, để HR biết trước mình đang chèn cái gì. Tên biến thật nằm ở
+          tooltip cho ai cần tra. */}
+      {variable.label}
+    </span>
+  )
+}
+
+// Nội dung mẫu về dạng HTML để mở bằng trình soạn thảo.
+//
+// Mẫu lưu trước tính năng này (và cả 2 mẫu mặc định của hệ thống) là chữ thường với
+// dấu \n. Nạp thẳng vào ô HTML thì HTML gộp hết khoảng trắng và cả mail dồn thành một
+// đoạn liền — nên phải đổi \n thành <div> trước.
+function draftFromTemplate(t) {
+  return {
+    subject: t.subject,
+    body_template:
+      t.body_format === 'html' ? t.body_template : plainTextToHtml(t.body_template),
+    // Mở bằng trình soạn thảo là từ nay lưu dưới dạng HTML. Không cố giữ lại 'text':
+    // HR vừa bấm in đậm là nội dung đã không còn biểu diễn được bằng chữ thường.
+    body_format: 'html',
+    is_active: t.is_active,
+  }
+}
+
 export default function EmailTemplates() {
   const toast = useToast()
   const { user } = useAuth()
@@ -87,6 +196,46 @@ export default function EmailTemplates() {
   const [drafts, setDrafts] = useState({}) // { accepted: {...}, rejected: {...} } đang sửa
   const [loadErr, setLoadErr] = useState('')
   const [savingType, setSavingType] = useState(null)
+
+  // cid -> blob: URL cho ảnh chèn giữa bài. Giữ ở đây (cấp trang) chứ không trong từng
+  // ô soạn thảo: khung xem trước cũng cần đúng bộ URL này.
+  const [cidUrls, setCidUrls] = useState({})
+
+  // Thu hồi các blob URL khi rời trang. Không gọi revokeObjectURL thì mỗi ảnh giữ
+  // nguyên bộ nhớ cho tới khi đóng tab.
+  const cidUrlsRef = useRef({})
+  useEffect(() => {
+    cidUrlsRef.current = cidUrls
+  }, [cidUrls])
+  useEffect(() => {
+    return () => {
+      for (const url of Object.values(cidUrlsRef.current)) URL.revokeObjectURL(url)
+    }
+  }, [])
+
+  // Tải ảnh inline của một mẫu về dạng blob để hiển thị được.
+  //
+  // Không thể để <img src="/email-templates/.../content"> vì endpoint đó cần header
+  // Authorization mà thẻ <img> không gửi được — cùng lý do trang xem CV phải tải PDF
+  // qua fetch (xem apiFetchBlob).
+  async function loadInlineImages(templatesByType) {
+    const entries = []
+    for (const [type, tpl] of Object.entries(templatesByType)) {
+      for (const att of tpl.attachments || []) {
+        if (!att.is_inline || !att.content_id) continue
+        try {
+          const blob = await fetchEmailAttachmentBlob(type, att.id)
+          entries.push([att.content_id, URL.createObjectURL(blob)])
+        } catch {
+          // Ảnh lỗi thì bỏ qua: TokenEditor hiện ô ảnh vỡ kèm alt, phần còn lại của
+          // mẫu vẫn soạn được bình thường.
+        }
+      }
+    }
+    if (entries.length) {
+      setCidUrls((prev) => ({ ...prev, ...Object.fromEntries(entries) }))
+    }
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -100,16 +249,10 @@ export default function EmailTemplates() {
         setTemplates(byType)
         setDrafts(
           Object.fromEntries(
-            Object.entries(byType).map(([type, t]) => [
-              type,
-              {
-                subject: t.subject,
-                body_template: t.body_template,
-                is_active: t.is_active,
-              },
-            ])
+            Object.entries(byType).map(([type, t]) => [type, draftFromTemplate(t)])
           )
         )
+        loadInlineImages(byType)
       })
       .catch((e) => !cancelled && setLoadErr(e.message))
     return () => {
@@ -123,22 +266,23 @@ export default function EmailTemplates() {
 
   async function handleSave(type) {
     const draft = drafts[type]
-    if (!draft.subject.trim() || !draft.body_template.trim()) {
+    // Kiểm tra trên phần CHỮ, không trên chuỗi HTML: một ô rỗng vẫn có thể chứa
+    // "<div><br></div>" do trình duyệt tự thêm, nên .trim() trên HTML luôn khác rỗng
+    // và nút Lưu sẽ chấp nhận một mẫu trắng.
+    if (!draft.subject.trim() || !htmlHasContent(draft.body_template)) {
       toast('Tiêu đề và nội dung mail không được để trống.')
       return
     }
     setSavingType(type)
     try {
       const saved = await upsertEmailTemplate(type, draft)
-      setTemplates((prev) => ({ ...prev, [type]: saved }))
-      setDrafts((prev) => ({
+      // Giữ lại attachments đang có: PUT chỉ trả về mẫu, và nếu ghi đè bằng mảng rỗng
+      // thì danh sách file vừa gắn biến mất khỏi giao diện dù vẫn còn dưới DB.
+      setTemplates((prev) => ({
         ...prev,
-        [type]: {
-          subject: saved.subject,
-          body_template: saved.body_template,
-          is_active: saved.is_active,
-        },
+        [type]: { ...saved, attachments: saved.attachments ?? prev[type]?.attachments ?? [] },
       }))
+      setDrafts((prev) => ({ ...prev, [type]: draftFromTemplate(saved) }))
       toast(`Đã lưu mẫu mail “${TEMPLATE_META[type].title}”.`)
     } catch (e) {
       toast(e.message || 'Không lưu được mẫu mail.')
@@ -152,11 +296,61 @@ export default function EmailTemplates() {
   function handleRevert(type) {
     const src = templates?.[type]
     if (!src) return
-    updateDraft(type, {
-      subject: src.subject,
-      body_template: src.body_template,
-      is_active: src.is_active,
-    })
+    updateDraft(type, draftFromTemplate(src))
+  }
+
+  // Gắn file vào mẫu. inline=true -> ảnh chèn ngay tại con trỏ trong nội dung.
+  async function handleUpload(type, file, { inline, editorRef }) {
+    try {
+      const att = await uploadEmailAttachment(type, file, inline)
+      // Mẫu có thể vừa được backend tạo ra lúc này (_get_or_create_template), nên nạp
+      // lại để `id`, `updated_at` và danh sách file khớp với DB.
+      setTemplates((prev) => ({
+        ...prev,
+        [type]: {
+          ...prev[type],
+          attachments: [...(prev[type]?.attachments || []), att],
+        },
+      }))
+
+      if (inline) {
+        const url = URL.createObjectURL(file)
+        setCidUrls((prev) => ({ ...prev, [att.content_id]: url }))
+        editorRef?.current?.insertImage(att.content_id, url, file.name)
+        toast(`Đã chèn ảnh “${file.name}” vào nội dung.`)
+      } else {
+        toast(`Đã đính kèm “${file.name}”.`)
+      }
+    } catch (e) {
+      toast(e.message || 'Không tải được file lên.')
+    }
+  }
+
+  async function handleDeleteAttachment(type, attachment, editorRef) {
+    try {
+      await deleteEmailAttachment(type, attachment.id)
+      setTemplates((prev) => ({
+        ...prev,
+        [type]: {
+          ...prev[type],
+          attachments: (prev[type]?.attachments || []).filter((a) => a.id !== attachment.id),
+        },
+      }))
+      // Ảnh inline: bỏ luôn thẻ <img> khỏi nội dung, kẻo còn lại một ô ảnh vỡ trỏ tới
+      // file đã xoá (backend cố tình không tự sửa nội dung — xem remove_attachment).
+      if (attachment.is_inline && attachment.content_id) {
+        editorRef?.current?.removeImagesByCid(attachment.content_id)
+        setCidUrls((prev) => {
+          const next = { ...prev }
+          if (next[attachment.content_id]) URL.revokeObjectURL(next[attachment.content_id])
+          delete next[attachment.content_id]
+          return next
+        })
+      }
+      toast(`Đã xoá “${attachment.filename}”.`)
+    } catch (e) {
+      toast(e.message || 'Không xoá được file.')
+    }
   }
 
   return (
@@ -170,32 +364,7 @@ export default function EmailTemplates() {
         />
 
         {/* Bảng biến động: đặt TRÊN các ô nhập vì HR cần biết gõ được gì trước khi gõ. */}
-        <Card className="mt-6 p-5">
-          <div className="flex items-center gap-2">
-            <Variable size={16} className="text-indigo-600" />
-            <h2 className="text-sm font-semibold text-slate-800">
-              Biến động dùng được trong mẫu
-            </h2>
-          </div>
-          <p className="mt-1.5 text-sm text-slate-500">
-            Bấm vào một biến để chèn vào ô đang nhập. Hệ thống thay chúng bằng dữ
-            liệu thật lúc gửi; biến viết sai tên sẽ hiện nguyên văn trong mail của
-            ứng viên.
-          </p>
-          <div className="mt-3 flex flex-wrap gap-2">
-            {TEMPLATE_VARIABLES.map((v) => (
-              <span
-                key={v.token}
-                className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs"
-              >
-                <code className="font-mono font-semibold text-indigo-700">
-                  {v.token}
-                </code>
-                <span className="text-slate-500">{v.label}</span>
-              </span>
-            ))}
-          </div>
-        </Card>
+        
 
         {templates === null && !loadErr && (
           <Card className="mt-5">
@@ -218,15 +387,81 @@ export default function EmailTemplates() {
                 saved={templates[type]}
                 hrName={user?.name || 'HR Staff'}
                 saving={savingType === type}
+                cidUrls={cidUrls}
                 onChange={(patch) => updateDraft(type, patch)}
                 onSave={() => handleSave(type)}
                 onRevert={() => handleRevert(type)}
+                onUpload={(file, opts) => handleUpload(type, file, opts)}
+                onDeleteAttachment={(att, editorRef) =>
+                  handleDeleteAttachment(type, att, editorRef)
+                }
               />
             ))}
           </div>
         )}
       </main>
     </>
+  )
+}
+
+// Danh sách file đính kèm của mẫu (KHÔNG gồm ảnh chèn giữa bài — ảnh đã hiện ngay
+// trong nội dung, liệt kê lại chỉ gây tưởng là gửi hai lần).
+function AttachmentList({ attachments, onDelete }) {
+  const files = attachments.filter((a) => !a.is_inline)
+  const inlineCount = attachments.length - files.length
+
+  if (!files.length && !inlineCount) return null
+
+  return (
+    <div className="rounded-lg border border-slate-200 bg-slate-50/70 p-3">
+      <div className="flex items-center gap-2">
+        <Paperclip size={14} className="text-slate-500" />
+        <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+          File đính kèm
+        </span>
+        {inlineCount > 0 && (
+          <span className="text-xs text-slate-400">
+            (+{inlineCount} ảnh trong nội dung)
+          </span>
+        )}
+      </div>
+
+      {files.length === 0 ? (
+        <p className="mt-1.5 text-xs text-slate-400">
+          Chưa có file nào. Dùng nút <Paperclip size={11} className="inline" /> trên
+          thanh công cụ để đính kèm.
+        </p>
+      ) : (
+        <ul className="mt-2 space-y-1.5">
+          {files.map((att) => (
+            <li
+              key={att.id}
+              className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 py-1.5"
+            >
+              <FileText size={14} className="flex-shrink-0 text-slate-400" />
+              <span className="min-w-0 flex-1 truncate text-sm text-slate-700">
+                {att.filename}
+              </span>
+              <span className="flex-shrink-0 text-xs text-slate-400">
+                {formatBytes(att.size_bytes)}
+              </span>
+              <button
+                type="button"
+                onClick={() => onDelete(att)}
+                title={`Xoá ${att.filename}`}
+                aria-label={`Xoá ${att.filename}`}
+                className="flex-shrink-0 rounded p-1 text-slate-400 transition hover:bg-red-50 hover:text-red-600"
+              >
+                <X size={14} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="mt-2 text-xs text-slate-400">
+        Mọi ứng viên nhận kết quả này sẽ nhận cùng bộ file.
+      </p>
+    </div>
   )
 }
 
@@ -237,26 +472,101 @@ function TemplateEditor({
   saved,
   hrName,
   saving,
+  cidUrls,
   onChange,
   onSave,
   onRevert,
+  onUpload,
+  onDeleteAttachment,
 }) {
   const meta = TEMPLATE_META[type]
   const [showPreview, setShowPreview] = useState(false)
 
-  // Ô nhập được focus lần cuối — nút chèn biến cần biết chèn vào tiêu đề hay nội dung.
+  // Buộc thanh công cụ đọc lại queryCommandState sau mỗi lần vùng chọn đổi, để nút
+  // in đậm sáng/tắt theo đúng chỗ con trỏ đang đứng.
+  const [selectionTick, setSelectionTick] = useState(0)
+  const bumpSelection = () => setSelectionTick((n) => n + 1)
+
+  const [uploading, setUploading] = useState(false)
+  // Hai input file ẩn: một cho ảnh chèn giữa bài, một cho file đính kèm. Dùng input
+  // thật (không phải API) để hộp thoại chọn file là của hệ điều hành, và `accept`
+  // lọc sẵn đúng loại.
+  const imageInputRef = useRef(null)
+  const fileInputRef = useRef(null)
+
+  async function pickAndUpload(input, inline) {
+    const file = input.files?.[0]
+    // Reset NGAY: không xoá value thì chọn lại đúng file vừa rồi sẽ không phát sự kiện
+    // change (giá trị không đổi) và HR tưởng nút bị hỏng.
+    input.value = ''
+    if (!file) return
+    setUploading(true)
+    try {
+      await onUpload(file, { inline, editorRef: bodyRef })
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  // Ô nhập được focus lần cuối — đường BẤM để chèn cần biết chèn vào tiêu đề hay
+  // nội dung. (Đường KÉO THẢ không cần: thả ở đâu thì vào đó.)
   const subjectRef = useRef(null)
   const bodyRef = useRef(null)
   const [lastField, setLastField] = useState('body_template')
+
+  // Đang kéo một biến -> làm nổi cả hai ô để HR thấy chỗ thả được; `dragOverField`
+  // là ô con trỏ đang đi vào.
+  const [dragging, setDragging] = useState(false)
+  const [dragOverField, setDragOverField] = useState(null)
+
+  // Props chung cho hai ô nhập.
+  //
+  // KHÔNG có onDragOver, và các handler dưới đây TUYỆT ĐỐI KHÔNG preventDefault():
+  // chỉ đổi trạng thái hiển thị. Hủy dragover/drop là chặn luôn việc chèn mặc định
+  // của trình duyệt — mà đó chính là thứ đặt biến vào đúng vị trí nhả chuột.
+  //
+  // Đã đo: đổi state (kéo theo render lại + đổi className) ngay trong lúc kéo và cả
+  // trong drop đều KHÔNG ảnh hưởng — biến vẫn vào đúng ký tự thứ 42 khi thả giữa ô,
+  // state React vẫn khớp DOM.
+  //
+  // onDrop phải có: `dragEnd` một mình không đủ để tắt highlight. Có lần trình duyệt
+  // phát thêm `dragenter` SAU `dragend`, làm ô sáng vĩnh viễn sau khi đã thả xong.
+  function dropZoneProps(field) {
+    return {
+      onFocus: () => setLastField(field),
+      onDragEnter: () => setDragOverField(field),
+      onDragLeave: () =>
+        setDragOverField((current) => (current === field ? null : current)),
+      onDrop: () => {
+        setDragging(false)
+        setDragOverField(null)
+      },
+    }
+  }
+
+  // Viền/nền báo chỗ thả. Ô đang được trỏ tới đậm hơn hai ô còn lại.
+  function dropZoneClass(field) {
+    if (dragOverField === field) return 'border-indigo-500 bg-indigo-50/60 ring-2 ring-indigo-200'
+    if (dragging) return 'border-indigo-300 border-dashed bg-indigo-50/20'
+    return 'border-slate-200'
+  }
 
   // Mẫu chưa từng lưu (id === null) là bản mặc định của hệ thống: KHÔNG có gì để
   // hoàn tác về, và HR nên biết mình đang xem bản gốc chứ không phải bản của mình.
   const isDefault = !saved?.id
 
+  // So với bản đã QUY VỀ HTML, không so thẳng với bản trên server.
+  //
+  // Mẫu cũ lưu dạng chữ thường được đổi sang HTML ngay khi mở trang, nên so trực tiếp
+  // thì chuỗi luôn khác nhau: vừa vào trang đã hiện "Chưa lưu" và nút Lưu sáng lên dù
+  // HR chưa gõ gì. Việc đổi định dạng để hiển thị KHÔNG phải là một thay đổi của HR.
+  const baseline = useMemo(() => (saved ? draftFromTemplate(saved) : null), [saved])
+
   const dirty =
-    draft.subject !== saved?.subject ||
-    draft.body_template !== saved?.body_template ||
-    draft.is_active !== saved?.is_active
+    !baseline ||
+    draft.subject !== baseline.subject ||
+    draft.body_template !== baseline.body_template ||
+    draft.is_active !== baseline.is_active
 
   const unknownTokens = useMemo(
     () => findUnknownTokens(draft.subject, draft.body_template),
@@ -265,25 +575,15 @@ function TemplateEditor({
 
   const previewValues = { ...PREVIEW_SAMPLE, hr_name: hrName }
 
-  // Chèn biến tại đúng con trỏ của ô vừa dùng, rồi trả focus về đó — chèn vào cuối
-  // chuỗi thì HR phải tự cắt dán lại, mất hẳn ý nghĩa của cái nút.
+  // Ảnh chèn giữa bài đã nằm trong nội dung rồi; danh sách "file đính kèm" chỉ hiện
+  // loại còn lại, đúng như Gmail.
+  const regularAttachments = (saved?.attachments || []).filter((a) => !a.is_inline)
+
+  // Đường BẤM để chèn: đẩy xuống ô vừa dùng. TokenEditor tự lo chèn đúng chỗ con trỏ
+  // (nó nhớ vùng chọn cuối cùng, vì bấm ra ngoài ô là con trỏ đã rời đi).
   function insertToken(token) {
-    const field = lastField
-    const el = field === 'subject' ? subjectRef.current : bodyRef.current
-    const current = draft[field] ?? ''
-    if (!el) {
-      onChange({ [field]: current + token })
-      return
-    }
-    const start = el.selectionStart ?? current.length
-    const end = el.selectionEnd ?? current.length
-    onChange({ [field]: current.slice(0, start) + token + current.slice(end) })
-    // Đặt lại con trỏ sau khi React vẽ lại giá trị mới.
-    requestAnimationFrame(() => {
-      el.focus()
-      const pos = start + token.length
-      el.setSelectionRange(pos, pos)
-    })
+    const editor = lastField === 'subject' ? subjectRef.current : bodyRef.current
+    editor?.insertToken(token)
   }
 
   return (
@@ -330,47 +630,105 @@ function TemplateEditor({
       </div>
 
       <div className="space-y-4 p-6">
+        {/* Khay biến: một hàng duy nhất phục vụ CẢ hai ô, đặt trên cùng vì HR cần
+            thấy có thứ để kéo trước khi bắt đầu soạn. */}
+        <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Kéo biến vào ô
+            </span>
+            <div className="flex flex-wrap gap-1.5">
+              {TEMPLATE_VARIABLES.map((v) => (
+                <VariableChip
+                  key={v.token}
+                  variable={v}
+                  onInsert={() => insertToken(v.token)}
+                  onDragStart={() => setDragging(true)}
+                  onDragEnd={() => {
+                    setDragging(false)
+                    setDragOverField(null)
+                  }}
+                />
+              ))}
+            </div>
+          </div>
+          <p className="mt-2 flex items-start gap-1.5 text-xs text-slate-500">
+            <MousePointerClick size={13} className="mt-0.5 flex-shrink-0" />
+            Thả vào đúng chỗ cần chèn — biến vào ngay vị trí con trỏ chuột. Hoặc bấm
+            vào thẻ để chèn tại con trỏ văn bản. Xoá một biến chỉ cần một lần Backspace.
+          </p>
+        </div>
+
         <div>
           <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">
             Tiêu đề mail
           </label>
-          <input
+          <TokenEditor
             ref={subjectRef}
             value={draft.subject}
-            onFocus={() => setLastField('subject')}
-            onChange={(e) => onChange({ subject: e.target.value })}
-            className="mt-1.5 w-full rounded-lg border border-slate-200 px-3.5 py-2.5 text-sm text-slate-800 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+            onChange={(text) => onChange({ subject: text })}
+            variables={TEMPLATE_VARIABLES}
+            singleLine
+            ariaLabel="Tiêu đề mail"
+            {...dropZoneProps('subject')}
+            className={`mt-1.5 w-full rounded-lg border px-3.5 py-2.5 text-sm text-slate-800 transition-colors focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 ${dropZoneClass(
+              'subject'
+            )}`}
           />
         </div>
 
         <div>
-          <div className="flex items-center justify-between">
-            <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-              Nội dung mail
-            </label>
-            <div className="flex flex-wrap gap-1.5">
-              {TEMPLATE_VARIABLES.map((v) => (
-                <button
-                  key={v.token}
-                  type="button"
-                  onClick={() => insertToken(v.token)}
-                  title={`Chèn ${v.label}`}
-                  className="rounded-md border border-slate-200 bg-white px-2 py-1 font-mono text-[11px] font-semibold text-indigo-700 transition hover:border-indigo-300 hover:bg-indigo-50"
-                >
-                  {v.token}
-                </button>
-              ))}
-            </div>
+          <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Nội dung mail
+          </label>
+
+          <div className="mt-1.5">
+            <RichTextToolbar
+              editorRef={bodyRef}
+              selectionTick={selectionTick}
+              uploading={uploading}
+              onInsertImage={() => imageInputRef.current?.click()}
+              onAttachFile={() => fileInputRef.current?.click()}
+            />
+            {/* Bỏ font-mono của <textarea> cũ: chữ đều nhau chỉ có ích khi phải đọc
+                "{candidate_name}" thô, giờ biến đã thành thẻ nên chữ thường dễ đọc hơn
+                và giống mail thật hơn. */}
+            <TokenEditor
+              ref={bodyRef}
+              value={draft.body_template}
+              onChange={(html) => onChange({ body_template: html })}
+              variables={TEMPLATE_VARIABLES}
+              richText
+              resolveCid={(cid) => cidUrls[cid]}
+              ariaLabel="Nội dung mail"
+              onSelectionChange={bumpSelection}
+              {...dropZoneProps('body_template')}
+              className={`max-h-[460px] min-h-[220px] w-full overflow-y-auto rounded-b-lg border px-3.5 py-2.5 text-sm leading-relaxed text-slate-800 transition-colors focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 ${dropZoneClass(
+                'body_template'
+              )}`}
+            />
           </div>
-          <textarea
-            ref={bodyRef}
-            value={draft.body_template}
-            onFocus={() => setLastField('body_template')}
-            onChange={(e) => onChange({ body_template: e.target.value })}
-            rows={10}
-            className="mt-1.5 w-full resize-y rounded-lg border border-slate-200 px-3.5 py-2.5 font-mono text-[13px] leading-relaxed text-slate-800 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+
+          {/* Input file ẩn — nút thật nằm trên thanh công cụ. */}
+          <input
+            ref={imageInputRef}
+            type="file"
+            accept="image/png,image/jpeg,image/gif,image/webp"
+            className="hidden"
+            onChange={(e) => pickAndUpload(e.target, true)}
+          />
+          <input
+            ref={fileInputRef}
+            type="file"
+            className="hidden"
+            onChange={(e) => pickAndUpload(e.target, false)}
           />
         </div>
+
+        <AttachmentList
+          attachments={saved?.attachments || []}
+          onDelete={(att) => onDeleteAttachment(att, bodyRef)}
+        />
 
         {unknownTokens.length > 0 && (
           <div className="flex items-start gap-2.5 rounded-lg border border-amber-200 bg-amber-50 px-3.5 py-3 text-sm text-amber-800">
@@ -379,9 +737,9 @@ function TemplateEditor({
               Không nhận ra biến{' '}
               <span className="font-mono font-semibold">
                 {unknownTokens.join(', ')}
-              </span>
-              . Hệ thống sẽ gửi nguyên văn phần này cho ứng viên — kiểm tra lại tên
-              biến trong danh sách ở trên.
+              </span>{' '}
+              (vì thế nó không có khung). Hệ thống sẽ gửi nguyên văn phần này cho ứng
+              viên — xoá đi rồi kéo thẻ đúng từ khay vào thay thế.
             </p>
           </div>
         )}
@@ -411,9 +769,36 @@ function TemplateEditor({
                   {renderPreview(draft.subject, previewValues)}
                 </p>
               </div>
-              <pre className="whitespace-pre-wrap px-4 py-4 text-sm leading-relaxed text-slate-700">
-                {renderPreview(draft.body_template, previewValues)}
-              </pre>
+              {/* Xem trước phải render HTML THẬT để HR thấy đúng cái ứng viên nhận
+                  được — in ra dạng chữ thì mọi định dạng và ảnh đều vô hình.
+                  dangerouslySetInnerHTML ở đây an toàn vì chuỗi đã đi qua
+                  sanitizeHtml (danh sách thẻ/thuộc tính cho phép) bên trong
+                  resolveCidsInHtml. */}
+              <div
+                className="px-4 py-4 text-sm leading-relaxed text-slate-700 [&_a]:text-indigo-600 [&_a]:underline [&_li]:ml-5 [&_ol]:ml-1 [&_ol]:list-decimal [&_ul]:ml-1 [&_ul]:list-disc"
+                dangerouslySetInnerHTML={{
+                  __html: resolveCidsInHtml(
+                    renderPreview(draft.body_template, previewValues),
+                    cidUrls
+                  ),
+                }}
+              />
+              {regularAttachments.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2 border-t border-slate-200 bg-slate-50 px-4 py-3">
+                  <span className="text-xs text-slate-500">
+                    {regularAttachments.length} file đính kèm:
+                  </span>
+                  {regularAttachments.map((att) => (
+                    <span
+                      key={att.id}
+                      className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2 py-1 text-xs text-slate-600"
+                    >
+                      <Paperclip size={11} />
+                      {att.filename}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>

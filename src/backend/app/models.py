@@ -47,11 +47,54 @@ class EmailTemplate(Base):
     subject: Mapped[str] = mapped_column(String(255), nullable=False)
     # Nội dung chứa các biến động: {candidate_name}, {jd_title}, {hr_name}
     body_template: Mapped[str] = mapped_column(Text, nullable=False)
+    # "text" hoặc "html". PHẢI khai báo tường minh, KHÔNG đoán bằng cách tìm dấu "<"
+    # trong nội dung: một mẫu chữ thường viết "lương < 20 triệu" sẽ bị nhận nhầm là
+    # HTML và gửi đi rỗng. Mặc định "text" để mọi mẫu đã lưu trước đây chạy y như cũ.
+    body_format: Mapped[str] = mapped_column(String(10), nullable=False, server_default="text", default="text")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True) # Cho phép tắt để dùng lại mail mặc định
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     user = relationship("User", backref="email_templates")
+    attachments = relationship(
+        "EmailTemplateAttachment",
+        back_populates="template",
+        cascade="all, delete-orphan",
+    )
+
+
+class EmailTemplateAttachment(Base):
+    """File HR gắn vào một mẫu mail: ảnh chèn giữa nội dung, hoặc file đính kèm.
+
+    Gắn vào MẪU chứ không gắn vào từng ứng viên: mọi ứng viên nhận cùng kết quả
+    (accepted/rejected) sẽ nhận cùng bộ file — đúng nghĩa "mẫu".
+    """
+    __tablename__ = "email_template_attachments"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # index=True phải khai báo Ở ĐÂY, không chỉ trong migration: main.py gọi
+    # create_all() lúc khởi động nên bảng luôn do model dựng, và migration đi sau chỉ
+    # thấy bảng đã tồn tại rồi bỏ qua — index khai trong migration sẽ không bao giờ
+    # được tạo. Lúc gửi mail luôn tra file theo template_id.
+    template_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("email_templates.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(150), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Đường dẫn trên đĩa (cùng cách làm với CV: xem services/cv_processing/storage.py).
+    # Không nhồi bytes vào DB — một mẫu có 3 ảnh là mỗi lần SELECT mẫu kéo theo vài MB.
+    file_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    # True = ảnh nằm GIỮA nội dung mail (tham chiếu qua cid:), False = file đính kèm.
+    is_inline: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Khóa để HTML trỏ tới ảnh: <img src="cid:{content_id}">. Chỉ ảnh inline mới có.
+    content_id: Mapped[str] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    template = relationship("EmailTemplate", back_populates="attachments")
 
 class ChatSession(Base):
     __tablename__ = "chat_sessions"
