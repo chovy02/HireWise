@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from app import models
 from app.services.ai_agent.pipeline import create_jd_from_text
 from app.services.ai_agent.comparator import compare_candidates_ai
+from app.services.ai_agent.evaluation_view import evaluation_for_agent, weakness_context
 from app.services.ai_agent.interviewer import generate_interview_questions_ai
 
 
@@ -204,12 +205,7 @@ def get_candidate(db: Session, candidate_id: str, owner_id=None) -> dict:
     return {
         **_candidate_brief(c),
         "phone": c.phone,
-        "evaluation": None if ev is None else {
-            "score": ev.score,
-            "score_breakdown": ev.score_breakdown,
-            "explanation": ev.explanation,
-            "evidence": ev.evidence,
-        },
+        "evaluation": None if ev is None else evaluation_for_agent(ev),
         # Không có "projects": model Candidate chưa bao giờ có quan hệ đó (chỉ có
         # skills / evaluation / interview), nên `c.projects` ném AttributeError và
         # tool này hỏng ở MỌI lượt gọi. Kỹ năng đã nằm trong _candidate_brief.
@@ -331,7 +327,7 @@ def generate_interview_questions(
 
     candidate_context = {
         "full_cv": c.raw_text,
-        "ai_identified_weaknesses": c.evaluation.explanation,
+        "ai_identified_weaknesses": weakness_context(c.evaluation),
     }
     ai_questions = generate_interview_questions_ai(
         jd.requirements if jd else {}, candidate_context, aspect

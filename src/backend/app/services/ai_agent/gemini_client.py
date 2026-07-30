@@ -126,7 +126,10 @@ def _models_for(agent_name: str) -> list[str]:
 # Số token output dự kiến theo từng agent, dùng để ĐẶT CHỖ trước cho sát thực tế.
 _EXPECTED_OUTPUT = {
     "cv_parser": 1400,
-    "cv_scorer": 1000,
+    # Bản đánh giá chi tiết (điểm + nhận xét từng trục, đối chiếu từng yêu cầu JD,
+    # điểm mạnh/yếu, rủi ro, gợi ý phỏng vấn) dài gấp ~2.5 lần bản cũ. Đặt chỗ thiếu
+    # thì rate limiter tưởng còn dư ngân sách, cho chạy rồi bị Groq chặn ở giữa batch.
+    "cv_scorer": 2600,
     "jd_processor": 700,
     "evidence": 500,
 }

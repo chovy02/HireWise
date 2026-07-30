@@ -11,6 +11,7 @@ from app.core.ownership import (
     get_owned_jd,
     get_owned_question,
 )
+from app.services.ai_agent.evaluation_view import weakness_context
 from app.services.ai_agent.interviewer import generate_interview_questions_ai, evaluate_interview_answer_ai, summarize_interview_ai
 
 router = APIRouter(
@@ -52,10 +53,12 @@ def generate_interview(
         db.delete(existing_interview)
         db.commit()
 
-    # Đóng gói ngữ cảnh gửi cho AI
+    # Đóng gói ngữ cảnh gửi cho AI. Phần "điểm yếu" lấy từ chính lượt chấm điểm
+    # (từng thiếu hụt + chỗ đánh dấu cần kiểm chứng) thay vì đoạn tóm tắt chung chung,
+    # để câu hỏi sinh ra bám vào chỗ còn nghi vấn của ứng viên này.
     candidate_context = {
         "full_cv": candidate.raw_text,
-        "ai_identified_weaknesses": candidate.evaluation.explanation
+        "ai_identified_weaknesses": weakness_context(candidate.evaluation)
     }
 
     ai_questions = generate_interview_questions_ai(jd.requirements, candidate_context, payload.aspect)

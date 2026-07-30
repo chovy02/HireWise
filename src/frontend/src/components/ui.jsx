@@ -101,7 +101,9 @@ export function Badge({ variant = 'neutral', upper = true, children, className =
 const BAR_COLORS = {
   indigo: 'bg-indigo-500',
   green: 'bg-emerald-500',
+  amber: 'bg-amber-500',
   red: 'bg-red-500',
+  slate: 'bg-slate-300',
 }
 
 export function ProgressBar({ value, color = 'indigo' }) {

@@ -240,6 +240,13 @@ class Evaluation(Base):
     score_breakdown: Mapped[dict] = mapped_column(JSONB, nullable=False)
     explanation: Mapped[str] = mapped_column(Text, nullable=True)
     evidence: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    # Toàn bộ phân tích chi tiết của lượt chấm: kết luận, độ tin cậy, điểm + nhận xét
+    # từng trục, đối chiếu từng yêu cầu JD, điểm mạnh/yếu có mức độ, rủi ro, gợi ý
+    # phỏng vấn (xem scorer._normalize_result).
+    #
+    # nullable: các bản ghi chấm trước khi có cột này không có dữ liệu để backfill —
+    # muốn có thì phải gọi lại AI. UI tự lùi về hiển thị kiểu cũ khi details rỗng.
+    details: Mapped[dict] = mapped_column(JSONB, nullable=True)
     external_tool_logs: Mapped[dict] = mapped_column(JSONB, nullable=True)
     is_overridden: Mapped[bool] = mapped_column(Boolean, default=False)
     evaluated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))

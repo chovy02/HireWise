@@ -4,19 +4,16 @@ import {
   ArrowLeft,
   Pencil,
   Save,
-  Target,
-  CheckCircle2,
-  AlertTriangle,
   Github,
   FolderGit2,
-  Sparkles,
   FileText,
   Loader2,
   MessageSquareText,
   RotateCcw,
   User,
 } from 'lucide-react'
-import { Tag, Badge, ProgressBar, PrimaryButton, SecondaryButton } from './ui.jsx'
+import { Tag, Badge, PrimaryButton, SecondaryButton } from './ui.jsx'
+import EvaluationPanel from './EvaluationPanel.jsx'
 import { useToast } from '../context/ToastContext.jsx'
 import { formatName } from '../utils/formatName.js'
 import { humanizeExtractionError } from '../utils/errorMessage.js'
@@ -31,12 +28,6 @@ const STATUS_BADGE = {
   COMPLETED: { variant: 'completed', label: 'Hoàn tất' },
   PENDING: { variant: 'processing', label: 'Đang xử lý' },
   FAILED: { variant: 'error', label: 'Lỗi' },
-}
-
-const BREAKDOWN_LABEL = {
-  skills_match: 'Kỹ năng',
-  experience_match: 'Kinh nghiệm',
-  education_match: 'Học vấn',
 }
 
 const clampScore = (v) => Math.max(0, Math.min(100, Number(v) || 0))
@@ -177,36 +168,9 @@ export default function CandidateDetailModal({
   const isFailed = detail?.status === 'FAILED'
   const failureInfo = humanizeExtractionError(detail?.error_message)
   const evaluation = detail?.evaluation
-  const evidence = evaluation?.evidence || {}
-  const strengths = evidence.strengths_evidence || {}
-  const weaknesses = evidence.weaknesses_evidence || {}
 
   const inputCls =
     'w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100'
-
-  // 1 thẻ nhận định (điểm mạnh/yếu) kèm trích dẫn nguyên văn từ CV.
-  function EvidenceCard({ stmt, quote, tone }) {
-    const styles =
-      tone === 'strength'
-        ? 'border-slate-200'
-        : 'border-amber-200 bg-amber-50'
-    const titleCls = tone === 'strength' ? 'text-slate-800' : 'text-amber-800'
-    return (
-      <div className={`rounded-lg border p-4 transition ${styles}`}>
-        <p className={`text-sm font-semibold ${titleCls}`}>{stmt}</p>
-        {quote ? (
-          <p className="mt-2 border-l-2 border-indigo-300 pl-2 text-xs italic leading-relaxed text-slate-500">
-            <Sparkles size={12} className="mr-1 inline text-indigo-500" />
-            “{quote}”
-          </p>
-        ) : (
-          <p className="mt-1 text-xs italic text-slate-400">
-            Không tìm thấy bằng chứng nguyên văn.
-          </p>
-        )}
-      </div>
-    )
-  }
 
   return (
     <div className="fixed inset-y-0 right-0 left-60 z-50 flex flex-col bg-white">
@@ -378,13 +342,12 @@ export default function CandidateDetailModal({
               <div className="grid grid-cols-1 lg:min-h-0 lg:flex-1 lg:grid-cols-2 lg:grid-rows-1">
                 {/* Left — điểm + breakdown + editor + đánh giá; own scrollbar on desktop */}
                 <div className="px-6 py-5 lg:min-h-0 lg:overflow-y-auto lg:border-r lg:border-slate-100">
-                  {/* Score + breakdown */}
-                  <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4">
-                    <div>
-                      <p className="text-xs uppercase tracking-wide text-slate-400">
-                        Điểm phù hợp
-                      </p>
-                      {editing ? (
+                  {/* Toàn bộ phần đánh giá AI. Con số điểm do modal render (vì HR sửa
+                      được tại chỗ), phần còn lại nằm trong EvaluationPanel. */}
+                  <EvaluationPanel
+                    evaluation={evaluation}
+                    scoreNode={
+                      editing ? (
                         <div className="mt-1 flex items-center gap-2">
                           <input
                             type="number"
@@ -403,118 +366,56 @@ export default function CandidateDetailModal({
                             /100
                           </span>
                         </p>
-                      )}
-                    </div>
-
-                    {/* Breakdown bars */}
-                    <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-3">
-                      {Object.entries(evaluation.score_breakdown || {}).map(
-                        ([key, val]) => (
-                          <div key={key}>
-                            <div className="flex items-center justify-between text-xs text-slate-500">
-                              <span>{BREAKDOWN_LABEL[key] || key}</span>
-                              <span className="font-semibold text-slate-700">
-                                {val}
-                              </span>
-                            </div>
-                            <div className="mt-1">
-                              <ProgressBar value={Number(val) || 0} />
-                            </div>
+                      )
+                    }
+                    /* Ô nhập lý do chỉnh điểm phải nằm NGAY dưới con số vừa sửa —
+                       đặt ở cuối cột thì HR bấm bút chì xong không thấy nó đâu. */
+                    belowScore={
+                      editing && (
+                        <div className="mt-4 rounded-xl border border-indigo-100 bg-indigo-50/50 p-4">
+                          <p className="text-xs font-bold uppercase tracking-wide text-indigo-700">
+                            Lý do chỉnh điểm (bắt buộc)
+                          </p>
+                          <textarea
+                            value={reason}
+                            onChange={(e) => setReason(e.target.value)}
+                            rows={2}
+                            placeholder="Vd: AI đánh giá thấp kinh nghiệm thực tế của ứng viên…"
+                            className={`mt-2 resize-none ${inputCls}`}
+                          />
+                          <div className="mt-3 flex justify-end gap-2">
+                            <SecondaryButton
+                              className="px-3 py-2"
+                              onClick={() => {
+                                setEditing(false)
+                                setReason('')
+                                setDraftScore(String(evaluation.score))
+                              }}
+                              disabled={saving}
+                            >
+                              Hủy
+                            </SecondaryButton>
+                            <PrimaryButton
+                              className="px-3 py-2"
+                              onClick={saveOverride}
+                              disabled={saving}
+                            >
+                              {saving ? (
+                                <>
+                                  <Loader2 size={15} className="animate-spin" /> Đang
+                                  lưu…
+                                </>
+                              ) : (
+                                <>
+                                  <Save size={15} /> Lưu
+                                </>
+                              )}
+                            </PrimaryButton>
                           </div>
-                        )
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Override editor */}
-                  {editing && (
-                    <div className="mt-4 rounded-xl border border-indigo-100 bg-indigo-50/50 p-4">
-                      <p className="text-xs font-bold uppercase tracking-wide text-indigo-700">
-                        Lý do chỉnh điểm (bắt buộc)
-                      </p>
-                      <textarea
-                        value={reason}
-                        onChange={(e) => setReason(e.target.value)}
-                        rows={2}
-                        placeholder="Vd: AI đánh giá thấp kinh nghiệm thực tế của ứng viên…"
-                        className={`mt-2 resize-none ${inputCls}`}
-                      />
-                      <div className="mt-3 flex justify-end gap-2">
-                        <SecondaryButton
-                          className="px-3 py-2"
-                          onClick={() => {
-                            setEditing(false)
-                            setReason('')
-                            setDraftScore(String(evaluation.score))
-                          }}
-                          disabled={saving}
-                        >
-                          Hủy
-                        </SecondaryButton>
-                        <PrimaryButton
-                          className="px-3 py-2"
-                          onClick={saveOverride}
-                          disabled={saving}
-                        >
-                          {saving ? (
-                            <>
-                              <Loader2 size={15} className="animate-spin" /> Đang
-                              lưu…
-                            </>
-                          ) : (
-                            <>
-                              <Save size={15} /> Lưu
-                            </>
-                          )}
-                        </PrimaryButton>
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="mt-5" />
-                  {evaluation.explanation && (
-                    <div className="mb-5">
-                      <h3 className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-slate-500">
-                        <Target size={14} /> Giải thích
-                      </h3>
-                      <p className="mt-2 text-sm leading-relaxed text-slate-600">
-                        {evaluation.explanation}
-                      </p>
-                    </div>
-                  )}
-
-                  {Object.keys(strengths).length > 0 && (
-                    <>
-                      <h3 className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-emerald-600">
-                        <CheckCircle2 size={14} /> Điểm mạnh &amp; bằng chứng
-                      </h3>
-                      <div className="mt-3 space-y-3">
-                        {Object.entries(strengths).map(([stmt, quote]) => (
-                          <EvidenceCard key={stmt} stmt={stmt} quote={quote} tone="strength" />
-                        ))}
-                      </div>
-                    </>
-                  )}
-
-                  {Object.keys(weaknesses).length > 0 && (
-                    <>
-                      <h3 className="mt-6 flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-amber-600">
-                        <AlertTriangle size={14} /> Điểm còn thiếu
-                      </h3>
-                      <div className="mt-3 space-y-3">
-                        {Object.entries(weaknesses).map(([stmt, quote]) => (
-                          <EvidenceCard key={stmt} stmt={stmt} quote={quote} tone="weakness" />
-                        ))}
-                      </div>
-                    </>
-                  )}
-
-                  {evidence.evidence_error && (
-                    <p className="mt-4 text-xs text-slate-400">
-                      Không sinh được bằng chứng cho ứng viên này (
-                      {evidence.evidence_error}).
-                    </p>
-                  )}
+                        </div>
+                      )
+                    }
+                  />
 
                   {detail.skills?.length > 0 && (
                     <div className="mt-6">

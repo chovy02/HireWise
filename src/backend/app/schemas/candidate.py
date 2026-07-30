@@ -20,6 +20,10 @@ class EvaluationResponse(BaseModel):
     score_breakdown: dict
     explanation: Optional[str] = None
     evidence: dict
+    # Phân tích chi tiết (rubric từng trục, đối chiếu yêu cầu JD, rủi ro...).
+    # None với các đánh giá chấm từ trước khi có cột này — UI lùi về hiển thị
+    # điểm mạnh/yếu từ `evidence`.
+    details: Optional[dict] = None
     is_overridden: bool
     evaluated_at: datetime
 

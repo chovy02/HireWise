@@ -26,6 +26,7 @@ def _empty_result() -> dict:
         "weaknesses": None,
         "score_breakdown": None,
         "evidence": None,
+        "details": None,
     }
 
 
@@ -64,6 +65,7 @@ def process_cv_from_text(raw_text: str, jd_requirements: dict) -> dict:
     result["weaknesses"] = score_result.get("weaknesses")
     result["score_breakdown"] = score_result.get("score_breakdown")
     result["evidence"] = score_result.get("evidence") or {}
+    result["details"] = score_result.get("details") or {}
 
     result["status"] = "completed"
     return result
@@ -349,6 +351,7 @@ def evaluate_candidate(db: Session, candidate_id) -> dict:
             score_breakdown=score_result.get("score_breakdown") or {},
             explanation=score_result.get("explanation"),
             evidence=evidence,
+            details=score_result.get("details") or {},
         )
         db.add(evaluation)
 
