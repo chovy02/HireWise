@@ -84,10 +84,15 @@ def test_schema_fallback_khop_voi_mcp(mcp_tools):
 
 
 def test_tham_so_khop_nhau(mcp_tools):
+    """Khớp TUYỆT ĐỐI, không còn ngoại lệ nào.
+
+    Trước đây phải trừ ra `acting_user_id` vì danh tính là một tham số tool. Giờ danh
+    tính đi bằng header nên schema chỉ còn đúng những gì LLM được phép điền — nếu một
+    tham số "nội bộ" nào lại bò vào schema, test này phải đỏ.
+    """
     for spec in R.REGISTRY:
         mcp_props = set((mcp_tools[spec.name].inputSchema.get("properties") or {}))
-        # acting_user_id do backend tiêm, không thuộc registry.
-        assert mcp_props - {"acting_user_id"} == {p.name for p in spec.params}, spec.name
+        assert mcp_props == {p.name for p in spec.params}, spec.name
 
 
 def test_tham_so_bat_buoc_khop_nhau(mcp_tools):
@@ -96,9 +101,46 @@ def test_tham_so_bat_buoc_khop_nhau(mcp_tools):
         assert mcp_required == {p.name for p in spec.params if p.required}, spec.name
 
 
+def test_khong_tool_nao_con_tham_so_danh_tinh(mcp_tools):
+    """Danh tính phải đi bằng header, không bao giờ bằng tham số tool.
+
+    Chỉ cần một tool lỡ khai lại `acting_user_id` là LLM nhìn thấy nó và tự điền được
+    id của HR khác — chính lỗ hổng mà việc chuyển sang header dựng lên để đóng.
+    """
+    for name, tool in mcp_tools.items():
+        props = set(tool.inputSchema.get("properties") or {})
+        assert "acting_user_id" not in props, name
+
+
 # --------------------------------------------------------------------------- #
 # Các bất biến về an toàn
 # --------------------------------------------------------------------------- #
+def test_moi_tool_deu_chay_ngoai_event_loop(server):
+    """CHỐNG HỒI QUY LỖI CHẶN EVENT LOOP.
+
+    FastMCP gọi tool đồng bộ THẲNG trên event loop (mcp 1.12, func_metadata.py). Tool
+    của HireWise đều chặn (DB, gọi AI, sleep của rate limiter) nên một tool `def`
+    thường là đủ làm cả tiến trình MCP đứng im hàng chục giây: client thứ hai không
+    được phục vụ, `/healthz` không trả lời, stream Streamable HTTP đứt giữa chừng.
+    """
+    for tool in server.mcp._tool_manager.list_tools():
+        assert tool.is_async, (
+            f"Tool {tool.name} là hàm đồng bộ -> sẽ chặn event loop của MCP server. "
+            f"Dùng `async def` + anyio.to_thread.run_sync."
+        )
+
+
+def test_moi_resource_deu_chay_ngoai_event_loop(server):
+    """Resource cũng đụng DB nên cũng chặn loop y hệt tool nếu viết đồng bộ."""
+    rm = server.mcp._resource_manager
+    fns = [getattr(r, "fn", None) for r in rm._resources.values()]
+    fns += [getattr(t, "fn", None) for t in rm._templates.values()]
+    for fn in fns:
+        assert fn is None or inspect.iscoroutinefunction(fn), (
+            f"Resource {getattr(fn, '__name__', fn)} là hàm đồng bộ -> chặn event loop."
+        )
+
+
 def test_khong_lo_tham_so_tiem_ra_llm():
     """owner_id/created_by mà lọt vào schema thì LLM có thể tự điền -> đọc dữ liệu
     của HR khác, hoặc mạo danh người tạo."""

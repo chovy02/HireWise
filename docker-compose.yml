@@ -126,11 +126,18 @@ services:
       timeout: 5s
       retries: 6
       start_period: 15s
-    # CẢNH BÁO: publish cổng này là mở HireWise ra ngoài máy. An toàn được là nhờ
-    # MCP_AUTH_TOKEN — nếu không cần client MCP ngoài (Claude Desktop), hãy xoá khối
-    # `ports` này đi: service `api` gọi qua tên `mcp` trong network nội bộ.
-    ports:
-      - "8001:8001"
+    # CỐ Ý KHÔNG PUBLISH CỔNG 8001.
+    #
+    # Đây là service NỘI BỘ: chỉ `api` gọi nó, qua tên `mcp` trong network của Docker
+    # (container nói với nhau không cần publish port). Publish ra host là mở một cửa
+    # đi thẳng vào dữ liệu tuyển dụng, KHÔNG qua đăng nhập và KHÔNG qua JWT — chốt duy
+    # nhất còn lại là MCP_AUTH_TOKEN, mà một token nằm trong .env thì không đủ làm biên
+    # giới cho một sản phẩm bán cho người dùng. Bản trước bind 0.0.0.0:8001, nghĩa là cả
+    # mạng LAN với tay tới được.
+    #
+    # Chỉ mở lại nếu thật sự cần một client MCP ngoài, và khi đó bind localhost thôi
+    # ("127.0.0.1:8001:8001") kèm một MCP_DEFAULT_USER_EMAIL là tài khoản hr_staff
+    # riêng — đừng bao giờ là admin.
     volumes:
       - ./src/backend:/app
       - ./src/mcp_server:/mcpsrv

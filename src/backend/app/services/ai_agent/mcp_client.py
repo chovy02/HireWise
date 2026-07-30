@@ -7,8 +7,10 @@ mà: hỏi MCP server "có tool gì?" -> đưa danh sách cho LLM -> LLM chọn 
 
 Ba điểm đáng chú ý
 ------------------
-1. `acting_user_id` bị LỌC khỏi schema trước khi đưa cho LLM và được backend tiêm vào
-   lúc gọi -> model không thể mạo danh user. (Server vẫn xác minh lại danh tính đó.)
+1. DANH TÍNH ĐI THEO PHIÊN, KHÔNG THEO LỜI GỌI TOOL. Backend gắn header
+   `X-HireWise-Actor` khi mở phiên MCP, nên `acting_user_id` không còn là tham số của
+   tool nữa -> nó không nằm trong schema, LLM không nhìn thấy và không mạo danh được.
+   (Server vẫn xác minh lại danh tính đó với bảng users.)
 2. PHÂN BIỆT LỖI KẾT NỐI VỚI LỖI NGHIỆP VỤ. Lỗi nghiệp vụ ("không tìm thấy ứng viên")
    trả về cho LLM tự xử lý; lỗi kết nối ném `MCPUnavailable` để agent rơi về đường
    fallback. Bản trước gộp cả hai thành `{"error": ...}`, nên khi MCP chết GIỮA lượt
@@ -45,8 +47,20 @@ TOOL_TIMEOUT = float(os.getenv("MCP_TOOL_TIMEOUT", "150"))
 # list_tools mỗi lượt chat là một vòng round-trip thừa trước cả khi LLM chạy.
 TOOLS_CACHE_TTL = float(os.getenv("MCP_TOOLS_CACHE_TTL", "300"))
 
-# Tham số do backend tiêm, không bao giờ để LLM tự điền.
+# Header khai báo HR đang thao tác (server đọc bằng hằng ACTOR_HEADER cùng tên).
+ACTOR_HEADER = "X-HireWise-Actor"
+
+# Tham số do backend tiêm, không bao giờ để LLM tự điền. Từ khi danh tính chuyển sang
+# header thì server KHÔNG còn phơi tham số nào như vậy nữa; giữ bộ lọc lại làm lưới an
+# toàn cho trường hợp chạy với một MCP server bản cũ.
 _INJECTED_PARAMS = {"acting_user_id"}
+
+# Tool của riêng server, KHÔNG phải năng lực nghiệp vụ -> không đưa cho LLM.
+#
+# `health` chỉ có ý nghĩa với người vận hành và với client ngoài. Đưa nó vào danh sách
+# tool của model thì đường MCP có 15 tool còn đường fallback có 14 — đúng kiểu lệch mà
+# `tool_registry` sinh ra để dẹp, và model thỉnh thoảng gọi nó thay vì làm việc thật.
+_SERVER_ONLY_TOOLS = {"health"}
 
 # Các lỗi có nghĩa "không nói chuyện được với MCP server" (khác với "tool báo lỗi").
 _CONNECTION_ERRORS = (
@@ -64,13 +78,20 @@ class MCPUnavailable(Exception):
     """Không nói chuyện được với MCP server -> caller nên fallback sang tool nội bộ."""
 
 
-def _headers() -> dict[str, str]:
-    return {"Authorization": f"Bearer {MCP_AUTH_TOKEN}"} if MCP_AUTH_TOKEN else {}
+def _headers(acting_user_id=None) -> dict[str, str]:
+    headers = {"Authorization": f"Bearer {MCP_AUTH_TOKEN}"} if MCP_AUTH_TOKEN else {}
+    if acting_user_id:
+        headers[ACTOR_HEADER] = str(acting_user_id)
+    return headers
 
 
 @asynccontextmanager
-async def mcp_session():
+async def mcp_session(acting_user_id=None):
     """Mở 1 phiên MCP (dùng cho cả 1 lượt chat, không mở/đóng mỗi lần gọi tool).
+
+    `acting_user_id` là HR đang đăng nhập; nó đi kèm MỌI request của phiên này dưới
+    dạng header. Một phiên = một lượt chat của một người, nên buộc danh tính vào phiên
+    là đúng cấp: không lời gọi tool nào trong phiên có thể mang danh tính khác.
 
     Chỉ lỗi ở GIAI ĐOẠN KẾT NỐI (mở transport + handshake) mới thành `MCPUnavailable`.
     Sau khi bắt tay xong, mọi exception từ thân lệnh `with` được ném NGUYÊN VẸN: nếu
@@ -86,7 +107,7 @@ async def mcp_session():
     try:
         async with streamablehttp_client(
             MCP_URL,
-            headers=_headers(),
+            headers=_headers(acting_user_id),
             timeout=timedelta(seconds=CONNECT_TIMEOUT),
             sse_read_timeout=timedelta(seconds=TOOL_TIMEOUT + 30),
         ) as (read, write, _get_session_id):
@@ -139,8 +160,9 @@ async def fetch_tools(session: ClientSession) -> tuple[list[dict], set[str]]:
     except Exception as e:  # noqa: BLE001
         raise MCPUnavailable(f"Không lấy được danh sách tool từ MCP: {e}") from e
 
-    tools = [_to_llm_schema(t) for t in resp.tools]
-    names = {t.name for t in resp.tools}
+    usable = [t for t in resp.tools if t.name not in _SERVER_ONLY_TOOLS]
+    tools = [_to_llm_schema(t) for t in usable]
+    names = {t.name for t in usable}
     _tools_cache = (now, tools, names)
     return tools, names
 
@@ -185,15 +207,15 @@ def _parse_result(res) -> dict:
     return {"items": items}
 
 
-async def call_tool(session: ClientSession, name: str, args: dict, acting_user_id=None) -> dict:
+async def call_tool(session: ClientSession, name: str, args: dict) -> dict:
     """Gọi 1 tool qua MCP và parse kết quả về dict.
 
     Ném `MCPUnavailable` nếu MẤT KẾT NỐI (để agent fallback cả lượt); trả
     `{"error": ...}` nếu tool chạy được nhưng báo lỗi nghiệp vụ (để LLM tự xử lý).
+
+    Danh tính KHÔNG đi ở đây mà ở header của phiên — xem `mcp_session`.
     """
     payload = dict(args or {})
-    if acting_user_id:
-        payload["acting_user_id"] = str(acting_user_id)
 
     try:
         res = await session.call_tool(

@@ -390,7 +390,9 @@ async def _agent_loop(messages: list, tools: list, execute) -> dict:
 
 async def _run_via_mcp(messages: list, user_id) -> dict:
     """Đường CHÍNH: tool lấy động từ MCP server và thực thi qua MCP."""
-    async with mcp_session() as session:
+    # Danh tính gắn vào PHIÊN (header), không gắn vào từng lời gọi tool: mọi tool chạy
+    # trong lượt này đều thuộc về đúng HR đang đăng nhập, LLM không có đường can thiệp.
+    async with mcp_session(user_id) as session:
         tools, names = await fetch_tools(session)
 
         # Các tool GHI đã chạy XONG trong lượt này. Nếu MCP chết sau đó, chạy lại cả
@@ -400,7 +402,7 @@ async def _run_via_mcp(messages: list, user_id) -> dict:
         async def execute(name: str, args: dict) -> dict:
             if name not in names:
                 return {"error": f"Tool không tồn tại trên MCP server: {name}"}
-            result = await call_tool(session, name, args, acting_user_id=user_id)
+            result = await call_tool(session, name, args)
             spec = SPECS.get(name)
             if spec and not spec.read_only and not (isinstance(result, dict) and "error" in result):
                 applied.append(name)

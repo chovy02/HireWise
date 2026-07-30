@@ -2,9 +2,20 @@
 HireWise MCP Server (Streamable HTTP, cổng 8001)
 ================================================
 
-Phơi các năng lực tuyển dụng THẬT của HireWise ra cho client MCP: web Copilot của
-chính HireWise (qua `app.services.ai_agent.mcp_client`) và các client ngoài như
-Claude Desktop.
+Phơi các năng lực tuyển dụng THẬT của HireWise ra cho MỘT client duy nhất: web Copilot
+của chính HireWise (qua `app.services.ai_agent.mcp_client`).
+
+SERVICE NỘI BỘ, KHÔNG PHẢI CỔNG CÔNG KHAI. Cổng 8001 cố ý không publish ra host
+(xem docker-compose.yml) — chỉ container `api` gọi tới, qua tên `mcp` trong network của
+Docker. Đây là sản phẩm web: đường vào duy nhất của người dùng là đăng nhập ở `api`,
+không phải nói chuyện thẳng với MCP server.
+
+BỀ MẶT ĐÚNG BẰNG NHU CẦU CỦA SẢN PHẨM: chỉ `tools/list` + `tools/call`. Không resource,
+không prompt, không `instructions`, không danh tính dùng chung — những thứ đó chỉ có
+nghĩa với một client MCP ngoài (kiểu Claude Desktop) tự đi tìm dữ liệu và tự soạn prompt,
+mà HireWise không có luồng đó. Giữ chúng lại chỉ tạo ra code không ai gọi, và riêng
+`instructions` còn là một bản sao thứ hai của SYSTEM_PROMPT trong `agent.py` — đúng kiểu
+hai bản mô tả song song rồi trôi lệch mà `tool_registry` được dựng ra để dẹp.
 
 Server này KHÔNG mô tả tool lần thứ hai. Nó duyệt `app.services.ai_agent.tool_registry`
 — nguồn sự thật duy nhất — rồi tự dựng hàm có đúng chữ ký và đăng ký với FastMCP. Thêm
@@ -18,27 +29,40 @@ BA ĐIỂM AN TOÀN
 1. XÁC THỰC. Cổng này nói chuyện thẳng với DB tuyển dụng, nên mọi request phải mang
    `Authorization: Bearer $MCP_AUTH_TOKEN`. Thiếu biến môi trường -> server TỪ CHỐI
    khởi động (im lặng chạy tiếp là cách sinh ra một endpoint đọc/ghi ẩn danh).
-2. DANH TÍNH. `acting_user_id` được XÁC MINH với bảng users (tồn tại, đúng vai trò,
-   chưa bị khoá) chứ không tin suông. Bản trước, không có acting_user_id thì server
-   tự lấy tài khoản admin đầu tiên làm chủ thể — nghĩa là client ẩn danh thao tác
-   với quyền admin. Giờ danh tính mặc định phải được KHAI BÁO TƯỜNG MINH qua
-   MCP_DEFAULT_USER_EMAIL, không có thì từ chối.
+2. DANH TÍNH. Ai đang thao tác được khai qua HEADER `X-HireWise-Actor` của chính
+   request, KHÔNG phải qua tham số tool — xem `_actor_ref_from_request`. Danh tính đó
+   vẫn được XÁC MINH với bảng users (tồn tại, đúng vai trò, chưa bị khoá) chứ không
+   tin suông. KHÔNG CÓ ĐƯỜNG NÀO KHÁC: không header thì từ chối, không có danh tính
+   mặc định để mượn. Mọi thao tác phải thuộc về đúng HR đang đăng nhập ở `api`.
 3. PHẠM VI DỮ LIỆU. `owner_id` được tiêm vào MỌI tool ở `_run` (không chỉ tool ghi),
    nên một tool mới thêm sau này không thể vô tình đọc dữ liệu của HR khác.
+
+MỌI TOOL CHẠY TRONG WORKER THREAD
+---------------------------------
+FastMCP gọi tool đồng bộ THẲNG trên event loop (mcp 1.12: `func_metadata.py`,
+`if fn_is_async: await fn(...) else: fn(...)`). Mà tool ở đây là code chặn: query DB
+psycopg2, gọi Gemini/Groq, `time.sleep` của rate limiter. Để nguyên thì một lượt
+`generate_interview_questions` cho 8 ứng viên giữ loop hàng chục giây — cả tiến trình
+đứng im: client thứ hai không được đọc request, `/healthz` không trả lời (docker đánh
+dấu unhealthy), và stream Streamable HTTP không gửi nổi keep-alive nên phiên đứt giữa
+chừng. Vì vậy mọi tool ở đây là `async def` và đẩy phần chặn qua
+`anyio.to_thread.run_sync`.
 """
 
 import contextlib
 import hmac
 import inspect
-import json
 import logging
 import os
 import sys
 import uuid as uuid_mod
+from functools import partial
 from typing import Annotated, Any, Literal
 
+import anyio
 import uvicorn
 from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import Field
 from sqlalchemy import text as sql_text
@@ -46,7 +70,6 @@ from starlette.responses import JSONResponse
 
 from app.database import SessionLocal
 from app import models
-from app.services.ai_agent import agent_tools as T
 from app.services.ai_agent import tool_registry as R
 from app.services.logging import write_tool_log
 
@@ -56,28 +79,26 @@ log = logging.getLogger("hirewise.mcp")
 HOST = os.getenv("MCP_HOST", "0.0.0.0")
 PORT = int(os.getenv("MCP_PORT", "8001"))
 AUTH_TOKEN = (os.getenv("MCP_AUTH_TOKEN") or "").strip()
-# Danh tính dùng cho client MCP ngoài (không có phiên đăng nhập của web) và cho các
-# resource/prompt. Phải là email của một tài khoản hr_staff/admin có thật.
-DEFAULT_USER_EMAIL = (os.getenv("MCP_DEFAULT_USER_EMAIL") or "").strip()
 
-INSTRUCTIONS = """\
-Đây là hệ thống tuyển dụng HireWise. Các tool ở đây thao tác trên DỮ LIỆU THẬT của
-bộ phận nhân sự.
+# Header khai báo HR đang thao tác, do backend HireWise đặt khi mở phiên MCP.
+#
+# VÌ SAO LÀ HEADER CHỨ KHÔNG PHẢI THAM SỐ TOOL: bản trước nhận `acting_user_id` như
+# một tham số bình thường, nên nó nằm trong inputSchema mà LLM nhìn thấy — phải nhớ
+# lọc nó ở phía client, và chỉ cần quên một chỗ là model tự điền được id người khác.
+# Danh tính là thuộc tính của KẾT NỐI (ai đang đăng nhập), không phải của lời gọi tool,
+# nên chỗ đúng của nó là header. Lợi thêm: schema sạch, không còn tham số "nội bộ" nào
+# để lọc.
+#
+# LƯU Ý PHẠM VI: header này chỉ loại LLM ra khỏi việc chọn danh tính. Ai cầm được
+# MCP_AUTH_TOKEN vẫn tự đặt được header, nên token phải được coi là bí mật cấp hệ
+# thống; muốn chặt hơn thì phải cấp token riêng cho từng client và buộc token vào một
+# danh tính cố định.
+ACTOR_HEADER = "x-hirewise-actor"
 
-Quy ước bắt buộc:
-- KHÔNG hiển thị UUID cho người dùng và KHÔNG hỏi họ cung cấp id. Mọi tool nhận cả
-  TÊN: jd_id="Backend Developer", candidate_id="Nguyễn Minh Khoa".
-- Người dùng hỏi chung chung không nêu vị trí (vd "tìm người biết Python"): gọi
-  search_candidates với skill="python" và BỎ TRỐNG jd_id để tìm xuyên mọi vị trí.
-- Không bịa điểm số, tên ứng viên hay id. Chỉ nói những gì tool trả về.
-- send_interview_invite gửi email thật, KHÔNG THU HỒI ĐƯỢC: phải hỏi xác nhận rồi
-  mới gọi với confirm=true.
-- generate_interview_questions có thể trả error="needs_confirmation" khi ứng viên đã
-  có buổi phỏng vấn HR đang dùng dở: hỏi xác nhận rồi mới gọi lại với replace=true.
-- Ngôn ngữ làm việc là tiếng Việt.
-"""
-
-mcp = FastMCP("HireWise MCP Server", instructions=INSTRUCTIONS, host=HOST, port=PORT)
+# Không truyền `instructions`: client duy nhất của server này là web Copilot, và nó đã
+# có SYSTEM_PROMPT riêng trong `agent.py`. Khai lần nữa ở đây chỉ tạo bản sao thứ hai
+# của cùng một bộ quy ước, để rồi sửa một bên quên bên kia.
+mcp = FastMCP("HireWise MCP Server", host=HOST, port=PORT)
 
 
 # --------------------------------------------------------------------------- #
@@ -87,22 +108,41 @@ class IdentityError(Exception):
     """Không xác định được HR nào đang thao tác -> từ chối, KHÔNG đoán."""
 
 
-def _resolve_actor(db, acting_user_id: str) -> models.User:
-    """Đổi `acting_user_id` (hoặc danh tính mặc định) thành một User đã xác minh.
+def _actor_ref_from_request() -> str:
+    """Đọc `X-HireWise-Actor` của request đang xử lý; "" nếu client không khai.
 
-    Xác minh chứ không tin suông: id do CLIENT gửi lên. Client hợp lệ duy nhất trong
-    kiến trúc này là backend HireWise (đã kèm bearer token) nhưng vẫn kiểm tra vai trò
-    và trạng thái khoá — token bị lộ thì đây là lớp phòng thủ còn lại.
+    `request_context.request` là đối tượng Request của Starlette, do transport
+    Streamable HTTP đính kèm vào từng message. Ngoài ngữ cảnh một request (vd gọi
+    trực tiếp trong test, hay transport stdio) thì không có gì để đọc -> trả "" và
+    để `_resolve_actor` quyết định dùng danh tính mặc định hay từ chối.
+    """
+    try:
+        request = mcp.get_context().request_context.request
+    except (LookupError, ValueError, AttributeError):
+        return ""
+    headers = getattr(request, "headers", None)
+    if headers is None:
+        return ""
+    return (headers.get(ACTOR_HEADER) or "").strip()
+
+
+def _resolve_actor(db, acting_user_id: str) -> models.User:
+    """Đổi id HR (hoặc danh tính mặc định) thành một User đã xác minh.
+
+    Xác minh chứ không tin suông: id do CLIENT gửi lên qua header ACTOR_HEADER. Client
+    hợp lệ duy nhất trong kiến trúc này là backend HireWise (đã kèm bearer token)
+    nhưng vẫn kiểm tra vai trò và trạng thái khoá — token bị lộ thì đây là lớp phòng
+    thủ còn lại.
     """
     ref = (acting_user_id or "").strip()
     if ref:
         try:
             uid = uuid_mod.UUID(ref)
         except (ValueError, AttributeError, TypeError):
-            raise IdentityError(f"acting_user_id không phải UUID hợp lệ: {ref!r}")
+            raise IdentityError(f"{ACTOR_HEADER} không phải UUID hợp lệ: {ref!r}")
         user = db.get(models.User, uid)
         if user is None:
-            raise IdentityError("acting_user_id không ứng với tài khoản nào.")
+            raise IdentityError(f"{ACTOR_HEADER} không ứng với tài khoản nào.")
     elif DEFAULT_USER_EMAIL:
         user = db.query(models.User).filter(models.User.email == DEFAULT_USER_EMAIL).first()
         if user is None:
@@ -111,7 +151,7 @@ def _resolve_actor(db, acting_user_id: str) -> models.User:
             )
     else:
         raise IdentityError(
-            "Không xác định được người dùng. Client phải truyền acting_user_id, "
+            f"Không xác định được người dùng. Client phải gửi header {ACTOR_HEADER}, "
             "hoặc server phải đặt MCP_DEFAULT_USER_EMAIL."
         )
 
@@ -128,12 +168,25 @@ def _resolve_actor(db, acting_user_id: str) -> models.User:
 def _run(spec: R.ToolSpec, kwargs: dict, acting_user_id: str) -> dict[str, Any]:
     """Mở 1 session DB, xác minh danh tính, gọi tool, ghi audit trail, đóng session.
 
-    LUÔN trả `dict` — mọi tool khai `-> dict[str, Any]`, mà mcp>=1.10 validate kết quả
-    theo annotation đó. Trả list/str trần ở nhánh lỗi sẽ biến thành ToolError và LLM
-    chỉ nhận được stack trace pydantic thay vì thông báo đọc được.
+    Hàm này CHẶN (DB + gọi AI) nên luôn được chạy trong worker thread — xem docstring
+    đầu module.
+
+    HAI LOẠI LỖI, HAI CÁCH TRẢ:
+      - Lỗi NGHIỆP VỤ (tool chạy xong và tự trả `{"error": "Không tìm thấy JD."}`):
+        trả về như kết quả bình thường để LLM tự xử lý và nói lại cho HR.
+      - Lỗi HỆ THỐNG (không xác định được danh tính, exception ngoài dự liệu): ném
+        `ToolError` -> FastMCP đánh dấu `isError=True` trên CallToolResult. Bản trước
+        gộp cả hai thành một dict "thành công", nên client ngoài (Claude Desktop) nhìn
+        vào chỉ thấy tool chạy trót lọt trong khi thực ra nó đã nổ.
+
+    Nhánh thành công LUÔN trả `dict` — mọi tool khai `-> dict[str, Any]`, mà mcp>=1.10
+    validate kết quả theo annotation đó.
     """
     db = SessionLocal()
     actor_id = None
+    # Lời nhắn lỗi HỆ THỐNG; None nghĩa là tool đã chạy tới nơi tới chốn (dù kết quả
+    # của nó có thể là một lỗi nghiệp vụ).
+    failure: str | None = None
     try:
         actor = _resolve_actor(db, acting_user_id)
         actor_id = str(actor.id)
@@ -150,15 +203,17 @@ def _run(spec: R.ToolSpec, kwargs: dict, acting_user_id: str) -> dict[str, Any]:
             result = {"result": result}
     except IdentityError as e:
         db.rollback()
-        result = {"error": f"Không được phép: {e}"}
-    except Exception as e:  # noqa: BLE001 - trả lỗi có cấu trúc cho client MCP
+        failure = f"Không được phép: {e}"
+        result = {"error": failure}
+    except Exception as e:  # noqa: BLE001 - ghi log rồi mới ném lại dưới dạng ToolError
         db.rollback()
         log.exception("Tool %s thất bại", spec.name)
-        result = {"error": f"{type(e).__name__}: {e}"}
+        failure = f"{type(e).__name__}: {e}"
+        result = {"error": failure}
     finally:
         db.close()
 
-    failed = "error" in result
+    failed = failure is not None or "error" in result
     write_tool_log(
         tool_name=spec.name,
         input_params=kwargs,
@@ -166,6 +221,8 @@ def _run(spec: R.ToolSpec, kwargs: dict, acting_user_id: str) -> dict[str, Any]:
         status="error" if failed else "success",
         user_id=actor_id,
     )
+    if failure is not None:
+        raise ToolError(failure)
     return result
 
 
@@ -184,13 +241,17 @@ def _build_tool(spec: R.ToolSpec):
 
     FastMCP đọc chữ ký bằng `inspect.signature()` (tôn trọng `__signature__`) nên hàm
     dựng động vẫn sinh ra inputSchema đầy đủ: kiểu, mô tả, giá trị mặc định, required.
+
+    `async def` là BẮT BUỘC, không phải sở thích: FastMCP chỉ nhả event loop cho tool
+    async (`_is_async_callable` -> `inspect.iscoroutinefunction`). Xem docstring đầu
+    module về việc vì sao chạy tool đồng bộ trên loop làm chết cả tiến trình.
     """
 
-    def impl(**kwargs: Any) -> dict[str, Any]:
-        acting = kwargs.pop("acting_user_id", "") or ""
-        # Bỏ tham số LLM để trống: để hàm Python dùng default của chính nó thay vì
-        # nhận chuỗi rỗng (vd jd_id="" phải nghĩa là "mọi vị trí", không phải id rỗng).
-        return _run(spec, kwargs, acting)
+    async def impl(**kwargs: Any) -> dict[str, Any]:
+        # Đọc header TRƯỚC khi rời event loop: `request_context` là một ContextVar gắn
+        # với task đang xử lý request.
+        acting = _actor_ref_from_request()
+        return await anyio.to_thread.run_sync(partial(_run, spec, kwargs, acting))
 
     P = inspect.Parameter
     # Tham số bắt buộc trước, tuỳ chọn sau — không bắt buộc với KEYWORD_ONLY nhưng
@@ -205,18 +266,10 @@ def _build_tool(spec: R.ToolSpec):
         )
         for p in ordered
     ]
-    # Tham số TIÊM bởi client tin cậy (backend HireWise). Nó nằm trong schema MCP,
-    # nhưng mcp_client lọc khỏi schema trước khi đưa cho LLM -> model không mạo danh
-    # được; còn server thì vẫn xác minh lại ở `_resolve_actor`.
-    params.append(P(
-        "acting_user_id",
-        P.KEYWORD_ONLY,
-        default="",
-        annotation=Annotated[str, Field(
-            description="NỘI BỘ. Id HR đang thao tác, do backend HireWise tiêm. Client khác bỏ trống."
-        )],
-    ))
-
+    # KHÔNG có tham số danh tính ở đây: nó đi bằng header ACTOR_HEADER. Nhờ vậy
+    # inputSchema chỉ còn đúng những gì LLM được phép điền, và không chỗ nào phải nhớ
+    # lọc bớt trước khi đưa schema cho model. Client cũ còn gửi kèm `acting_user_id`
+    # thì pydantic bỏ qua (model tham số mặc định `extra='ignore'`), không vỡ.
     impl.__signature__ = inspect.Signature(params, return_annotation=dict[str, Any])
     impl.__name__ = spec.name
     impl.__doc__ = spec.description
@@ -248,17 +301,26 @@ log.info("Đã đăng ký %d tool từ tool_registry: %s",
     title="Kiểm tra tình trạng server",
     annotations=ToolAnnotations(title="Kiểm tra tình trạng server", readOnlyHint=True, idempotentHint=True),
 )
-def health() -> dict[str, Any]:
+async def health() -> dict[str, Any]:
     """Kiểm tra MCP server + kết nối DB + danh tính mặc định."""
+    return await anyio.to_thread.run_sync(_health_sync)
+
+
+def _health_sync() -> dict[str, Any]:
     db = SessionLocal()
     try:
         info: dict[str, Any] = {"status": "ok", "tools": len(R.REGISTRY) + 1}
         info["job_descriptions"] = db.query(models.JobDescription).count()
-        try:
-            info["default_identity"] = _resolve_actor(db, "").email
-        except IdentityError as e:
-            info["default_identity"] = None
-            info["default_identity_error"] = str(e)
+        # Danh tính dùng chung: không cấu hình là TRẠNG THÁI ĐÚNG của sản phẩm, nên
+        # đừng báo nó như một sự cố. Chỉ khi có cấu hình mà giải không ra mới là lỗi.
+        if not DEFAULT_USER_EMAIL:
+            info["shared_identity"] = "disabled"
+        else:
+            try:
+                info["shared_identity"] = _resolve_actor(db, "").email
+            except IdentityError as e:
+                info["shared_identity"] = None
+                info["shared_identity_error"] = str(e)
         return info
     except Exception as e:  # noqa: BLE001
         return {"status": "error", "error": f"{type(e).__name__}: {e}"}
@@ -269,15 +331,29 @@ def health() -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 # RESOURCES — dữ liệu để ĐỌC/đính kèm ngữ cảnh, không phải hành động
 #
-# Client ngoài (Claude Desktop) gắn resource vào hội thoại mà không tốn một lượt gọi
-# tool. Chúng chạy dưới DANH TÍNH MẶC ĐỊNH (MCP_DEFAULT_USER_EMAIL) vì giao thức
-# resource không có chỗ truyền acting_user_id.
+# Resource cho phép một client gắn dữ liệu vào hội thoại mà không tốn lượt gọi tool.
+# Chúng KHÔNG nằm trong luồng sản phẩm: web Copilot chỉ dùng tool. Giữ lại vì đây là
+# phần bề mặt chuẩn của MCP (`resources/list`, `resources/read`) và không tốn gì khi
+# không ai gọi.
+#
+# Danh tính đi qua ĐÚNG một đường với tool: header ACTOR_HEADER, không có thì bị từ
+# chối. Cố ý không cho resource "mượn" một danh tính riêng — làm vậy thì một HR đã
+# đăng nhập đọc resource sẽ nhận về dữ liệu của tài khoản khác.
 # --------------------------------------------------------------------------- #
-def _as_default_user(fn) -> str:
-    """Chạy `fn(db, owner_id)` dưới danh tính mặc định, trả JSON đã format."""
+async def _as_actor(fn) -> str:
+    """Chạy `fn(db, owner_id)` dưới danh tính của request, trả JSON đã format.
+
+    Resource cũng đụng DB nên cũng phải rời event loop như tool — xem docstring đầu
+    module.
+    """
+    acting = _actor_ref_from_request()
+    return await anyio.to_thread.run_sync(partial(_as_actor_sync, fn, acting))
+
+
+def _as_actor_sync(fn, acting_user_id: str) -> str:
     db = SessionLocal()
     try:
-        actor = _resolve_actor(db, "")
+        actor = _resolve_actor(db, acting_user_id)
         data = fn(db, str(actor.id))
     except IdentityError as e:
         data = {"error": f"Không được phép: {e}"}
@@ -295,8 +371,8 @@ def _as_default_user(fn) -> str:
     description="Toàn bộ vị trí tuyển dụng, dạng JSON.",
     mime_type="application/json",
 )
-def resource_jds() -> str:
-    return _as_default_user(lambda db, oid: T.list_jds(db, status="all", owner_id=oid))
+async def resource_jds() -> str:
+    return await _as_actor(lambda db, oid: T.list_jds(db, status="all", owner_id=oid))
 
 
 @mcp.resource(
@@ -305,8 +381,8 @@ def resource_jds() -> str:
     description="Yêu cầu đã cấu trúc + mô tả của một vị trí. jd_id nhận UUID hoặc tên.",
     mime_type="application/json",
 )
-def resource_jd(jd_id: str) -> str:
-    return _as_default_user(lambda db, oid: T.get_jd(db, jd_id, owner_id=oid))
+async def resource_jd(jd_id: str) -> str:
+    return await _as_actor(lambda db, oid: T.get_jd(db, jd_id, owner_id=oid))
 
 
 @mcp.resource(
@@ -315,8 +391,8 @@ def resource_jd(jd_id: str) -> str:
     description="Điểm, giải thích của AI, kỹ năng của một ứng viên. Nhận UUID hoặc tên.",
     mime_type="application/json",
 )
-def resource_candidate(candidate_id: str) -> str:
-    return _as_default_user(lambda db, oid: T.get_candidate(db, candidate_id, owner_id=oid))
+async def resource_candidate(candidate_id: str) -> str:
+    return await _as_actor(lambda db, oid: T.get_candidate(db, candidate_id, owner_id=oid))
 
 
 # --------------------------------------------------------------------------- #
@@ -392,18 +468,27 @@ class BearerAuthMiddleware:
         await self.app(scope, receive, send)
 
 
-@mcp.custom_route("/healthz", methods=["GET"])
-async def healthz(_request):
-    """Cho docker healthcheck: chỉ khẳng định tiến trình sống và DB nhận kết nối."""
+def _ping_db() -> None:
     db = SessionLocal()
     try:
         db.execute(sql_text("SELECT 1"))
-        return JSONResponse({"status": "ok", "tools": len(R.REGISTRY) + 1})
-    except Exception as e:  # noqa: BLE001
-        return JSONResponse({"status": "error", "detail": str(e)}, status_code=503)
     finally:
         with contextlib.suppress(Exception):
             db.close()
+
+
+@mcp.custom_route("/healthz", methods=["GET"])
+async def healthz(_request):
+    """Cho docker healthcheck: chỉ khẳng định tiến trình sống và DB nhận kết nối.
+
+    Cú `SELECT 1` cũng phải rời event loop: đây chính là endpoint cần trả lời ĐƯỢC
+    trong lúc một tool nặng đang chạy, nên nó không được góp thêm một lần chặn nữa.
+    """
+    try:
+        await anyio.to_thread.run_sync(_ping_db)
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"status": "error", "detail": str(e)}, status_code=503)
+    return JSONResponse({"status": "ok", "tools": len(R.REGISTRY) + 1})
 
 
 def main() -> None:
@@ -416,10 +501,15 @@ def main() -> None:
         sys.exit(1)
 
     if not DEFAULT_USER_EMAIL:
+        log.info(
+            "Danh tính dùng chung: TẮT (đúng cấu hình sản phẩm). Mọi request phải mang "
+            "header %s; request không có danh tính sẽ bị từ chối.", ACTOR_HEADER
+        )
+    else:
         log.warning(
-            "Chưa đặt MCP_DEFAULT_USER_EMAIL: client MCP ngoài (Claude Desktop) sẽ bị "
-            "từ chối vì không có danh tính. Web Copilot vẫn chạy bình thường vì nó tự "
-            "truyền acting_user_id."
+            "MCP_DEFAULT_USER_EMAIL=%s đang MỞ một danh tính dùng chung, không qua đăng "
+            "nhập. Chỉ nên bật khi cần nối client MCP ngoài, và không bao giờ dùng tài "
+            "khoản admin.", DEFAULT_USER_EMAIL
         )
 
     # Streamable HTTP (endpoint /mcp) — transport hiện hành của MCP; SSE đã bị đánh
