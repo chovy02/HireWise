@@ -7,7 +7,7 @@ from app.core.dependencies import get_current_user
 from app.database import get_db
 from app.utils import security
 from app.services.email import send_verification_email
-from app.services.logging import write_system_log
+from app.services.logging import write_system_log, write_audit_log
 from app.utils.security import generate_6_digit_code
 
 # Gửi SMTP mất ~3.4s (đo được), so với ~0.2s cho login. Chạy đồng bộ trong request
@@ -203,3 +203,72 @@ def login(user_credentials: schemas.UserLogin, db: Session = Depends(get_db)):
 def get_me(current_user: models.User = Depends(get_current_user)):
     """Trả thông tin + role của user đang đăng nhập, dùng để Frontend dựng UI theo RBAC."""
     return current_user
+
+
+# ---- Tự quản lý tài khoản (HR/Admin sửa CHÍNH tài khoản mình đang đăng nhập) ----
+# Tách hẳn khỏi router /users (chỉ admin vào được): ở đây `user_id` không phải tham
+# số — luôn là current_user — nên không có đường nào để sửa tài khoản người khác.
+
+
+@router.patch("/me", response_model=schemas.UserResponse)
+def update_me(
+    payload: schemas.ProfileUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Đổi tên hiển thị của chính mình."""
+    new_name = payload.username.strip()
+    if len(new_name) < 2:
+        raise HTTPException(status_code=400, detail="Tên hiển thị phải có ít nhất 2 ký tự.")
+
+    # Không đổi gì -> trả về luôn, đừng ghi một dòng audit rỗng.
+    if new_name == current_user.name:
+        return current_user
+
+    before = current_user.name
+    current_user.name = new_name
+    db.commit()
+    db.refresh(current_user)
+
+    write_audit_log(
+        db, user_id=current_user.id, action="UPDATE_PROFILE", entity_type="user",
+        entity_id=current_user.id,
+        old_data={"name": before},
+        new_data={"name": current_user.name},
+    )
+    return current_user
+
+
+@router.put("/me/password")
+def change_my_password(
+    payload: schemas.PasswordChange,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Tự đổi mật khẩu, có xác nhận bằng mật khẩu hiện tại.
+
+    LƯU Ý: token đang giữ VẪN còn hiệu lực tới khi hết hạn (JWT không có danh sách
+    thu hồi) — đổi mật khẩu ở đây không đá các phiên khác ra ngoài.
+    """
+    if not security.verify_password(payload.current_password, current_user.password_hash):
+        raise HTTPException(status_code=400, detail="Mật khẩu hiện tại không đúng.")
+
+    if security.verify_password(payload.new_password, current_user.password_hash):
+        raise HTTPException(status_code=400, detail="Mật khẩu mới phải khác mật khẩu hiện tại.")
+
+    current_user.password_hash = security.get_password_hash(payload.new_password)
+    db.commit()
+
+    write_system_log(
+        db, module="auth",
+        message=f"Đổi mật khẩu: {current_user.email}",
+        payload={"user_id": str(current_user.id)},
+    )
+    # Chỉ ghi NHẬN việc đã đổi — tuyệt đối không đưa mật khẩu/hash vào nhật ký.
+    write_audit_log(
+        db, user_id=current_user.id, action="CHANGE_PASSWORD", entity_type="user",
+        entity_id=current_user.id,
+        old_data={"password": "•••"},
+        new_data={"password": "••• (đã đổi)"},
+    )
+    return {"message": "Đổi mật khẩu thành công."}

@@ -47,3 +47,24 @@ export function login({ email, password }) {
 export function me() {
   return apiFetch('/auth/me', { auth: true })
 }
+
+// PATCH /auth/me  { username } -> UserResponse
+// Tự sửa tài khoản của MÌNH (trang "Quản lý tài khoản"). Chỉ đổi được tên hiển thị:
+// email là `sub` của JWT nên backend không cho đổi, còn role/khóa là việc của admin.
+export function updateProfile({ name }) {
+  return apiFetch('/auth/me', {
+    method: 'PATCH',
+    body: { username: name },
+    auth: true,
+  })
+}
+
+// PUT /auth/me/password  { current_password, new_password } -> { message }
+// Backend đòi mật khẩu hiện tại và trả 400 "Mật khẩu hiện tại không đúng." nếu sai.
+export function changePassword({ currentPassword, newPassword }) {
+  return apiFetch('/auth/me/password', {
+    method: 'PUT',
+    body: { current_password: currentPassword, new_password: newPassword },
+    auth: true,
+  })
+}

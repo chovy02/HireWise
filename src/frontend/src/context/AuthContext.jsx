@@ -62,12 +62,20 @@ export function AuthProvider({ children }) {
     setUser(null)
   }
 
+  // Trộn thông tin mới vào user đang cache (dùng sau khi tự đổi tên ở trang Quản lý
+  // tài khoản). Không gọi lại /auth/me: response của PATCH đã là bản mới nhất, và
+  // thiếu bước này thì Sidebar vẫn hiện tên cũ cho tới lần F5 kế tiếp.
+  function updateUser(patch) {
+    setUser((prev) => (prev ? { ...prev, ...patch } : prev))
+  }
+
   const value = {
     user,
     loading,
     isAuthenticated: Boolean(user),
     signIn,
     signOut,
+    updateUser,
   }
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

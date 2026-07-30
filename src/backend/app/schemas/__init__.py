@@ -8,6 +8,8 @@ from .user import (
     UserRole,
     UserCreateByAdmin,
     UserUpdateByAdmin,
+    ProfileUpdate,
+    PasswordChange,
 )
 
 from .jd import (

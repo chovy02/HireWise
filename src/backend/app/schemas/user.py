@@ -54,6 +54,23 @@ class UserCreateByAdmin(BaseModel):
     role: UserRole = UserRole.hr_staff
 
 
+class ProfileUpdate(BaseModel):
+    """Người dùng TỰ sửa thông tin của mình (trang "Quản lý tài khoản" của HR).
+
+    Chỉ có tên: email đang là `sub` của JWT nên đổi email là vé thông hành hiện tại
+    hết hiệu lực ngay giữa phiên, còn role/is_active/is_banned là quyền của admin —
+    để lọt vào đây thì HR tự nâng mình thành admin được.
+    """
+    username: str = Field(min_length=2, max_length=255)
+
+
+class PasswordChange(BaseModel):
+    """Tự đổi mật khẩu. BẮT BUỘC nhập lại mật khẩu hiện tại: chỉ có token thôi thì
+    ai ngồi vào máy chưa đăng xuất cũng đổi được mật khẩu và chiếm luôn tài khoản."""
+    current_password: str
+    new_password: str = Field(min_length=8, max_length=128)
+
+
 class UserUpdateByAdmin(BaseModel):
     """Admin sửa thông tin tài khoản. Field nào không gửi lên sẽ giữ nguyên giá trị cũ."""
     username: Optional[str] = None

@@ -8,6 +8,7 @@ import CreateProject from './pages/CreateProject.jsx'
 import ProjectDetail from './pages/ProjectDetail.jsx'
 import Shortlisting from './pages/Shortlisting.jsx'
 import EmailTemplates from './pages/EmailTemplates.jsx'
+import AccountSettings from './pages/AccountSettings.jsx'
 import Trash from './pages/Trash.jsx'
 import AdminGateway from './pages/AdminGateway.jsx'
 import { useAuth } from './context/AuthContext.jsx'
@@ -42,6 +43,11 @@ export default function App() {
             ứng dụng (đúng cái bẫy đã ghi trong vite.config.js ở mục '/admin'). */}
         <Route path="/settings/email-templates" element={<RoleRoute allow={['hr_staff']}><EmailTemplates /></RoleRoute>} />
         <Route path="/trash" element={<RoleRoute allow={['hr_staff']}><Trash /></RoleRoute>} />
+        {/* Quản lý tài khoản của CHÍNH mình (mở từ khối tên góc dưới sidebar). Cho cả
+            hai role: đổi tên/mật khẩu là việc của mọi người dùng, và mọi request đều
+            đi qua /auth/me nên không ai chạm được tài khoản khác. Đặt dưới /settings/
+            vì '/users' đã là prefix router backend (xem bẫy proxy ở vite.config.js). */}
+        <Route path="/settings/account" element={<AccountSettings />} />
         <Route path="/admin" element={<RoleRoute allow={['admin']}><AdminGateway /></RoleRoute>} />
       </Route>
 
