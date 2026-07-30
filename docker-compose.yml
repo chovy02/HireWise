@@ -135,9 +135,10 @@ services:
     # giới cho một sản phẩm bán cho người dùng. Bản trước bind 0.0.0.0:8001, nghĩa là cả
     # mạng LAN với tay tới được.
     #
-    # Chỉ mở lại nếu thật sự cần một client MCP ngoài, và khi đó bind localhost thôi
-    # ("127.0.0.1:8001:8001") kèm một MCP_DEFAULT_USER_EMAIL là tài khoản hr_staff
-    # riêng — đừng bao giờ là admin.
+    # Đường vào của người dùng là khung chat trên web: frontend -> `api` (JWT) -> MCP.
+    # Server này cũng không nhận nổi một client ngoài nữa dù có mở cổng: mọi request
+    # phải khai HR đang đăng nhập qua header X-HireWise-Actor, và không còn tài khoản
+    # dùng chung nào để mượn (xem `_resolve_actor` trong src/mcp_server/server.py).
     volumes:
       - ./src/backend:/app
       - ./src/mcp_server:/mcpsrv

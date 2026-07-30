@@ -57,7 +57,7 @@ _INJECTED_PARAMS = {"acting_user_id"}
 
 # Tool của riêng server, KHÔNG phải năng lực nghiệp vụ -> không đưa cho LLM.
 #
-# `health` chỉ có ý nghĩa với người vận hành và với client ngoài. Đưa nó vào danh sách
+# `health` chỉ có ý nghĩa với người vận hành (docker healthcheck, gỡ lỗi). Đưa nó vào danh sách
 # tool của model thì đường MCP có 15 tool còn đường fallback có 14 — đúng kiểu lệch mà
 # `tool_registry` sinh ra để dẹp, và model thỉnh thoảng gọi nó thay vì làm việc thật.
 _SERVER_ONLY_TOOLS = {"health"}

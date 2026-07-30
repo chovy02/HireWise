@@ -1,5 +1,7 @@
+import uuid
+
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app import models
@@ -15,10 +17,27 @@ router = APIRouter(
 )
 
 
+class PageContext(BaseModel):
+    """Trang mà HR đang xem lúc gõ tin nhắn (frontend gửi lên, xem PageContext.jsx).
+
+    CHỈ LÀ GỢI Ý, KHÔNG PHẢI QUYỀN. `jd_id` đi vào prompt để agent khỏi đoán vị trí,
+    nhưng mọi tool vẫn lọc theo `owner_id` của HR đang đăng nhập — một jd_id giả gửi
+    lên đây không mở được dữ liệu của tài khoản khác.
+
+    Khai schema chặt (thay vì nhận `dict` bất kỳ) để nội dung client gửi lên không
+    chảy tự do vào prompt của LLM.
+    """
+
+    page: str | None = None
+    jd_id: uuid.UUID | None = None
+    jd_title: str | None = Field(default=None, max_length=200)
+
+
 class ChatRequest(BaseModel):
     message: str
     # Phiên chat. Bỏ trống ở lượt đầu -> backend tạo mới và trả session_id về.
     session_id: str | None = None
+    context: PageContext | None = None
 
 
 @router.post("/chat")
@@ -40,7 +59,13 @@ def chat(
     history = chat_store.build_history(db, session.id)
     chat_store.save_message(db, session.id, "hr_staff", body.message)
 
-    out = run_agent(db, body.message, user_id=current_user.id, history=history)
+    out = run_agent(
+        db,
+        body.message,
+        user_id=current_user.id,
+        history=history,
+        page_context=body.context.model_dump() if body.context else None,
+    )
 
     usage = out.get("usage") or {}
     chat_store.save_message(

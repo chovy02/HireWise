@@ -216,12 +216,20 @@ Riêng về create_jd (tạo JD mới, GHI vào hệ thống):
 
 ID KỸ THUẬT LÀ CHUYỆN NỘI BỘ — HR KHÔNG BAO GIỜ ĐƯỢC THẤY:
 - TUYỆT ĐỐI KHÔNG in UUID/ID ra câu trả lời. Sai: "JD có ID là 8ad393c2-9819-...". Đúng: "Đã tạo JD Backend Python."
-- TUYỆT ĐỐI KHÔNG hỏi HR cung cấp jd_id / candidate_id. Các tool nhận cả TÊN (jd_id="Backend Developer", candidate_id="Nguyễn Minh Khoa") — hãy truyền tên.
+- TUYỆT ĐỐI KHÔNG hỏi HR cung cấp jd_id / candidate_id. Tool nhận cả tên, nhưng tên đó phải là tên THẬT vừa thấy trong kết quả tool hoặc do HR gõ — ưu tiên id mà tool vừa trả về, chính xác hơn tên.
+- Không biết vị trí nào đang được nói tới: xem NGỮ CẢNH GIAO DIỆN nếu có, nếu không thì gọi list_jds để lấy tên thật. Đừng suy ra tên vị trí từ nội dung câu hỏi.
 - HR hỏi chung chung không nêu vị trí (vd "tìm người biết Python"): gọi search_candidates với skill="python" và BỎ TRỐNG jd_id để tìm xuyên mọi vị trí.
 - Cần HR làm rõ thì hỏi bằng ngôn ngữ nghiệp vụ (tên vị trí, tên ứng viên), không hỏi ID.
 
+KHÔNG BAO GIỜ TỰ NGHĨ RA TÊN HAY ID — QUY TẮC QUAN TRỌNG NHẤT:
+- Mọi candidate_id/tên ứng viên bạn truyền vào tool PHẢI lấy nguyên văn từ kết quả một tool đã gọi TRONG hội thoại này (thường là search_candidates), hoặc do chính HR gõ ra.
+- TUYỆT ĐỐI KHÔNG dùng tên mẫu/giữ chỗ như "Nguyễn Văn A", "Trần Thị B", "Ứng viên 1". Chưa biết ai thì gọi search_candidates để biết, đừng điền tạm.
+- Một tool vừa báo lỗi KHÔNG cho phép bạn đoán tiếp. Hãy ĐỌC thông báo lỗi: nó thường liệt kê sẵn các vị trí/ứng viên có thật. Dùng đúng dữ liệu đó rồi gọi lại.
+- Nếu tool trả về error kèm "not_found": KHÔNG có gì được thực hiện cả. Đừng nói với HR là đã xong.
+
 LÀM VIỆC THEO LÔ — RẤT QUAN TRỌNG:
 - HR nói "tất cả những người...", "mỗi người...", "nhóm trên X điểm": TRƯỚC HẾT gọi search_candidates một lần để lấy danh sách, RỒI truyền TẤT CẢ tên đó vào MỘT lời gọi tool (add_to_shortlist, generate_interview_questions đều nhận candidate_ids là DANH SÁCH).
+- HR nói "N người điểm cao nhất" / "top N": gọi search_candidates với limit=N (kết quả ĐÃ sắp theo điểm giảm dần), rồi CHÉP NGUYÊN mảng candidate_ids trong kết quả sang các tool tiếp theo. Đừng dùng compare_candidates để lấy danh sách — nó chỉ để so sánh.
 - TUYỆT ĐỐI KHÔNG gọi cùng một tool lặp đi lặp lại cho từng người. Làm vậy vừa chậm, vừa dễ hết hạn mức giữa chừng và bỏ sót người.
 - HR nêu con số cụ thể (vd "mỗi người 3 câu hỏi"): PHẢI truyền num_questions=3, đừng để mặc định.
 
@@ -428,7 +436,41 @@ async def _run_local(messages: list, db: Session, user_id) -> dict:
     return out
 
 
-def run_agent(db: Session, message: str, user_id=None, history: list | None = None) -> dict:
+def _page_context_note(ctx: dict | None) -> str | None:
+    """Câu nhắc về trang HR đang mở, chèn ngay TRƯỚC tin nhắn của HR.
+
+    Vì sao cần: yêu cầu của HR thường tỉnh lược đúng phần quan trọng nhất — "lấy 3
+    người điểm cao nhất" không nêu vị trí nào, vì với HR thì hiển nhiên là vị trí đang
+    hiện trên màn hình. Không có câu này, agent chỉ còn cách ĐOÁN tên vị trí, và nó đã
+    đoán sai thật ("Backend Developer" trong khi đang mở "Backend Python") rồi bịa tiếp
+    cả danh sách ứng viên từ đó.
+
+    Đặt ở vị trí SÁT tin nhắn HR (không phải đầu hội thoại) vì ngữ cảnh này thuộc về
+    LƯỢT NÀY: HR có thể đổi trang giữa hai câu, và lượt trước đã lưu vào history với
+    ngữ cảnh của riêng nó.
+    """
+    if not ctx:
+        return None
+    title, jd_id = ctx.get("jd_title"), ctx.get("jd_id")
+    if not title and not jd_id:
+        return None
+    mo_ta = f"'{title}'" if title else "một vị trí"
+    return (
+        f"NGỮ CẢNH GIAO DIỆN: HR đang mở vị trí {mo_ta}"
+        + (f" (jd_id={jd_id})" if jd_id else "")
+        + ". Nếu yêu cầu KHÔNG nêu vị trí nào thì hiểu là vị trí này — dùng jd_id ở "
+        "trên, đừng đoán tên và đừng hỏi lại HR. Nếu HR nêu rõ một vị trí khác thì "
+        "làm theo HR."
+    )
+
+
+def run_agent(
+    db: Session,
+    message: str,
+    user_id=None,
+    history: list | None = None,
+    page_context: dict | None = None,
+) -> dict:
     """
     Chạy 1 lượt hội thoại. Ưu tiên đi qua MCP; MCP chết thì fallback gọi tool nội bộ.
 
@@ -436,10 +478,14 @@ def run_agent(db: Session, message: str, user_id=None, history: list | None = No
     Phiên MCP + list_tools được mở TRƯỚC khi gọi LLM, nên nếu MCP hỏng ngay từ đầu ta
     fallback mà không tốn token nào.
     """
+    ghi_chu = _page_context_note(page_context)
+
     def _messages() -> list:
         m = [{"role": "system", "content": SYSTEM_PROMPT}]
         if history:
             m += history
+        if ghi_chu:
+            m.append({"role": "system", "content": ghi_chu})
         m.append({"role": "user", "content": message})
         return m
 

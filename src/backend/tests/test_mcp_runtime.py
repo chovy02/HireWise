@@ -174,17 +174,29 @@ def test_tai_khoan_bi_khoa_thi_tu_choi(server):
         server._resolve_actor(FakeDB(by_id=u), str(u.id))
 
 
-def test_khong_header_va_khong_danh_tinh_mac_dinh_thi_tu_choi(server, monkeypatch):
-    """KHÔNG được âm thầm mượn một tài khoản nào đó — thà từ chối."""
-    monkeypatch.setattr(server, "DEFAULT_USER_EMAIL", "")
+def test_khong_header_thi_tu_choi(server):
+    """KHÔNG được âm thầm mượn một tài khoản nào đó — thà từ chối.
+
+    Không có nhánh "danh tính mặc định" nào để rơi vào: mọi thao tác phải thuộc về HR
+    đang đăng nhập ở `api`, và `api` là thứ duy nhất đặt header này.
+    """
     with pytest.raises(server.IdentityError):
         server._resolve_actor(FakeDB(), "")
 
 
-def test_khong_header_thi_dung_danh_tinh_mac_dinh(server, monkeypatch):
-    monkeypatch.setattr(server, "DEFAULT_USER_EMAIL", "hr@hirewise.vn")
+def test_khong_con_danh_tinh_dung_chung(server):
+    """CHỐNG HỒI QUY. Bản trước có MCP_DEFAULT_USER_EMAIL: một tài khoản dùng chung để
+    client MCP chạy ngoài web vẫn thao tác được. Đó là đường vào không qua đăng nhập,
+    và nó làm audit trail ghi tên tài khoản dùng chung thay vì người thật đã bấm.
+
+    Nếu nó quay lại, `_resolve_actor` sẽ trả về user dù không có header — test ở trên
+    đỏ; test này chặn cả việc cấu hình đó lặng lẽ bò về dưới một cái tên khác.
+    """
+    assert not hasattr(server, "DEFAULT_USER_EMAIL")
     u = _user()
-    assert server._resolve_actor(FakeDB(by_email=u), "") is u
+    # Có sẵn một tài khoản tra theo email vẫn KHÔNG được dùng khi thiếu header.
+    with pytest.raises(server.IdentityError):
+        server._resolve_actor(FakeDB(by_email=u), "")
 
 
 def test_khong_co_request_thi_khong_co_danh_tinh(server):
@@ -245,8 +257,8 @@ def test_user_bound_duoc_tiem_tu_danh_tinh(chay_tool):
 def test_loi_he_thong_thanh_ToolError(chay_tool):
     """Exception ngoài dự liệu -> ToolError -> FastMCP đánh dấu isError=True.
 
-    Bản trước trả về `{"error": ...}` như một kết quả THÀNH CÔNG, nên client ngoài
-    nhìn vào tưởng tool chạy trót lọt trong khi nó vừa nổ.
+    Bản trước trả về `{"error": ...}` như một kết quả THÀNH CÔNG, nên phía gọi nhìn
+    vào tưởng tool chạy trót lọt trong khi nó vừa nổ.
     """
 
     def fn(db, **_kwargs):
@@ -348,7 +360,11 @@ def test_header_danh_tinh_duoc_gan_vao_phien():
 
 
 def test_khong_co_danh_tinh_thi_khong_gan_header():
-    """Không bịa danh tính: không có user thì để server tự quyết (mặc định/từ chối)."""
+    """Không bịa danh tính: thiếu user thì gửi request KHÔNG header và để server từ chối.
+
+    Trên web thì `user_id` luôn có (router lấy từ `get_current_user`), nên nhánh này là
+    lưới an toàn: thà thất bại rõ ràng ở server còn hơn client tự điền một id nào đó.
+    """
     assert mcp_client.ACTOR_HEADER not in mcp_client._headers(None)
 
 

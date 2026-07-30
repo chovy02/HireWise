@@ -26,6 +26,7 @@ import {
 } from '../components/ui.jsx'
 import { useToast } from '../context/ToastContext.jsx'
 import { useProjects } from '../context/ProjectContext.jsx'
+import { usePublishPageContext } from '../context/PageContext.jsx'
 import { getCandidates, getJd, uploadCvs, retryCandidate, listUploads } from '../api/jds.js'
 import { listShortlists } from '../api/shortlists.js'
 import CandidateDetailModal from '../components/CandidateDetailModal.jsx'
@@ -399,6 +400,10 @@ export default function ProjectDetail() {
   // Ứng viên đang mở popup chi tiết đánh giá (ngay trên trang này).
   const [openCandidateId, setOpenCandidateId] = useState(null)
   const project = getProject(id)
+
+  // Cho AI Copilot biết HR đang mở vị trí nào -> yêu cầu không nêu vị trí ("tìm người
+  // biết Python", "lấy 3 người điểm cao nhất") được hiểu là của chính vị trí này.
+  usePublishPageContext({ page: 'project', jdId: id, jdTitle: project?.title })
 
   // AI Copilot điều khiển trang này qua query param:
   //   ?open=<candidateId>       -> LC1: bật popup chi tiết ứng viên

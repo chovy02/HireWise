@@ -130,15 +130,18 @@ def test_moi_tool_deu_chay_ngoai_event_loop(server):
         )
 
 
-def test_moi_resource_deu_chay_ngoai_event_loop(server):
-    """Resource cũng đụng DB nên cũng chặn loop y hệt tool nếu viết đồng bộ."""
+def test_be_mat_chi_gom_tool(server):
+    """BỀ MẶT ĐÚNG BẰNG NHU CẦU: chỉ `tools/*`, không resource, không prompt.
+
+    Client duy nhất của server này là agent loop trong `agent.py` — nó lấy dữ liệu
+    bằng tool đọc và đã có SYSTEM_PROMPT riêng. `resources/*` và `prompts/*` chỉ có ý
+    nghĩa với một app chat đa dụng ở ngoài; thêm chúng vào là thêm code không ai gọi,
+    và riêng resource còn là một đường đọc dữ liệu nữa phải tự canh phạm vi owner_id.
+    """
     rm = server.mcp._resource_manager
-    fns = [getattr(r, "fn", None) for r in rm._resources.values()]
-    fns += [getattr(t, "fn", None) for t in rm._templates.values()]
-    for fn in fns:
-        assert fn is None or inspect.iscoroutinefunction(fn), (
-            f"Resource {getattr(fn, '__name__', fn)} là hàm đồng bộ -> chặn event loop."
-        )
+    assert not rm._resources, f"Có resource không nằm trong luồng sản phẩm: {list(rm._resources)}"
+    assert not rm._templates, f"Có resource template không dùng tới: {list(rm._templates)}"
+    assert not server.mcp._prompt_manager._prompts, "Có prompt không nằm trong luồng sản phẩm"
 
 
 def test_khong_lo_tham_so_tiem_ra_llm():
@@ -161,7 +164,8 @@ def test_moi_tool_deu_tra_ve_dict(mcp_tools):
 
 
 def test_tool_ghi_khong_bi_danh_dau_read_only():
-    """readOnlyHint sai là nguy hiểm: client ngoài dùng nó để tự chạy tool không hỏi."""
+    """readOnlyHint sai là nguy hiểm: `agent.py` dựa vào nó để biết lượt vừa rồi đã có
+    tác dụng phụ nào chưa, tức có được phép chạy lại cả lượt ở đường fallback không."""
     for spec in R.REGISTRY:
         if spec.read_only:
             assert not spec.user_bound, f"{spec.name}: tool ghi (user_bound) không thể read_only"

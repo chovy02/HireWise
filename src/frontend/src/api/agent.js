@@ -2,13 +2,16 @@ import { apiFetch } from './client.js'
 
 // ---- AI Agent (copilot) API. Maps to src/backend/app/routers/agent.py ----
 
-// POST /agent/chat  { message, session_id } -> { reply, tool_calls, steps, ui_actions, session_id }
+// POST /agent/chat  { message, session_id, context } -> { reply, tool_calls, steps, ui_actions, session_id }
 // Lịch sử hội thoại do BACKEND lưu & dựng lại từ DB (chat_sessions/chat_messages),
 // nên frontend chỉ cần gửi session_id — không gửi lại cả cục history nữa.
-export function chatWithAgent(message, sessionId = null) {
+//
+// `context` = trang HR đang mở ({ page, jd_id, jd_title }), xem PageContext.jsx. Nó
+// chỉ là GỢI Ý cho agent; backend vẫn giới hạn dữ liệu theo tài khoản đang đăng nhập.
+export function chatWithAgent(message, sessionId = null, context = null) {
   return apiFetch('/agent/chat', {
     method: 'POST',
-    body: { message, session_id: sessionId },
+    body: { message, session_id: sessionId, context },
     auth: true,
   })
 }

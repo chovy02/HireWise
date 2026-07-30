@@ -8,6 +8,7 @@ import {
   deleteChatSession,
 } from '../api/agent.js'
 import { useProjects } from '../context/ProjectContext.jsx'
+import { usePageContext } from '../context/PageContext.jsx'
 import { formatShortDateTime } from '../utils/datetime.js'
 
 const SUGGESTIONS = [
@@ -29,6 +30,8 @@ const shortDate = (iso) => formatShortDateTime(iso)
 export default function CopilotChat({ open = false, onClose }) {
   const navigate = useNavigate()
   const { refreshProjects } = useProjects()
+  // Vị trí mà trang bên trái đang mở (do Shortlisting/ProjectDetail công bố).
+  const { pageContext } = usePageContext()
 
   const [messages, setMessages] = useState([WELCOME])
   const [input, setInput] = useState('')
@@ -123,7 +126,9 @@ export default function CopilotChat({ open = false, onClose }) {
     setLoading(true)
     try {
       // Backend tự dựng lịch sử từ DB theo session_id -> không gửi lại history.
-      const res = await chatWithAgent(content, sessionId)
+      // `pageContext` cho agent biết HR đang mở vị trí nào, để yêu cầu không nêu vị
+      // trí ("lấy 3 người điểm cao nhất") không bị agent đoán sai sang vị trí khác.
+      const res = await chatWithAgent(content, sessionId, pageContext)
       if (res.session_id) setSessionId(res.session_id)
       // Chỉ giữ phần TEXT trả lời. `tool_calls`/`steps` là chuyện nội bộ của agent —
       // HR không cần biết mình vừa gọi tool nào, hiện ra chỉ làm rối khung chat.

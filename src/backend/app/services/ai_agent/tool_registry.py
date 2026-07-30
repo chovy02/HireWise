@@ -23,9 +23,11 @@ file canh giữ điều đó.
 
 Annotation an toàn (read_only / destructive / idempotent / open_world)
 ---------------------------------------------------------------------
-Đây là hint chuẩn của MCP. Client ngoài (vd Claude Desktop) dùng chính chúng để quyết
-định tool nào chạy thẳng, tool nào phải hỏi người dùng trước. Không khai thì với client
-`create_jd` và `list_jds` nguy hiểm ngang nhau.
+Đây là hint chuẩn của MCP, và ở HireWise chúng được DÙNG THẬT chứ không phải khai cho
+đủ bộ: `agent.py` đọc `read_only` để biết trong lượt vừa rồi đã có tool GHI nào chạy
+xong hay chưa — nếu MCP đứt giữa lượt sau một tool ghi thì KHÔNG được chạy lại cả lượt
+ở đường fallback (sẽ tạo JD lần hai, gửi email lần hai). Không khai thì `create_jd` và
+`list_jds` nguy hiểm ngang nhau dưới mắt tầng gọi.
 """
 
 from dataclasses import dataclass
@@ -122,8 +124,18 @@ def llm_tool_schemas() -> list[dict]:
 # --------------------------------------------------------------------------- #
 # REGISTRY
 # --------------------------------------------------------------------------- #
-_JD_REF = "UUID của vị trí HOẶC tên vị trí, vd 'Backend Developer'."
-_CAND_REF = "UUID HOẶC tên ứng viên, vd 'Nguyễn Minh Khoa'."
+# KHÔNG đặt tên ví dụ cụ thể ở đây. Bản trước ghi "vd 'Backend Developer'" và
+# "vd 'Nguyễn Minh Khoa'" — model đã lấy ĐÚNG chuỗi "Backend Developer" trong mô tả
+# này làm jd_id thật (log agent_tool_logs còn ghi), trong khi vị trí thật tên khác.
+# Ví dụ đặt trong schema không phải minh hoạ vô hại: với model yếu nó là dữ liệu mồi.
+_JD_REF = (
+    "UUID của vị trí (ưu tiên, lấy từ kết quả list_jds/search_candidates) HOẶC tên vị "
+    "trí ĐÚNG NHƯ hệ thống đang có. Không tự nghĩ ra tên vị trí."
+)
+_CAND_REF = (
+    "UUID của ứng viên (ưu tiên, lấy từ kết quả search_candidates) HOẶC tên đầy đủ "
+    "đúng như tool đã trả về. Không tự nghĩ ra tên."
+)
 # Với thao tác theo lô, TÊN là không đủ: một người có thể ứng tuyển nhiều vị trí và
 # mỗi lần là một hồ sơ RIÊNG. Tra theo tên chỉ ra được một hồ sơ, nên nếu agent truyền
 # tên thì các hồ sơ còn lại bị bỏ sót lặng lẽ (đã gặp thật: 7 hồ sơ chỉ xử lý được 4).
@@ -201,8 +213,10 @@ REGISTRY: tuple[ToolSpec, ...] = (
         fn=T.compare_candidates,
         title="So sánh ứng viên",
         description=(
-            "So sánh 2+ ứng viên CÙNG 1 vị trí. QUAN TRỌNG: nếu HR nói kiểu 'so sánh top 3' "
-            "thì ĐỪNG tự liệt kê id — hãy truyền jd_id + top_n=3, tool sẽ tự lấy đúng N người "
+            "So sánh 2+ ứng viên CÙNG 1 vị trí, trả về phân tích của AI. "
+            "CHỈ dùng khi HR muốn SO SÁNH — đây KHÔNG phải cách để lấy danh sách top N mang "
+            "sang tool khác; việc đó dùng search_candidates với limit=N. "
+            "Nếu HR nói 'so sánh top 3' thì truyền jd_id + top_n=3, tool tự lấy đúng N người "
             "điểm cao nhất. Chỉ dùng candidate_ids khi HR gọi đích danh từng người."
         ),
         params=(
@@ -243,7 +257,10 @@ REGISTRY: tuple[ToolSpec, ...] = (
             "gọi, TUYỆT ĐỐI không gọi lặp lại từng người. "
             "Nếu HR nói rõ số câu (vd 'mỗi người 3 câu') thì PHẢI đặt num_questions. "
             "Ai đã có buổi phỏng vấn mà HR nhập dữ liệu sẽ nằm trong 'needs_confirmation' — hỏi "
-            "HR rồi mới gọi lại CHỈ với những người đó kèm replace=true."
+            "HR rồi mới gọi lại CHỈ với những người đó kèm replace=true. "
+            "CẢ LÔ HOẶC KHÔNG GÌ CẢ: chỉ cần một ứng viên trong danh sách không tra ra được là "
+            "tool KHÔNG sinh câu hỏi cho ai và trả về 'not_found'. Khi đó hãy gọi "
+            "search_candidates để lấy candidate_ids đúng rồi gọi lại."
         ),
         params=(
             Param(
@@ -283,9 +300,11 @@ REGISTRY: tuple[ToolSpec, ...] = (
         description=(
             "Đưa MỘT HOẶC NHIỀU ứng viên vào shortlist của vị trí họ ứng tuyển (tự tạo shortlist "
             "nếu chưa có, chống trùng). Dùng khi HR muốn 'đưa/thêm ứng viên vào shortlisting'. "
-            "QUAN TRỌNG: HR nói 'tất cả những người ...' thì dùng search_candidates để lấy danh "
-            "sách trước, rồi truyền HẾT tên vào candidate_ids trong MỘT lời gọi — TUYỆT ĐỐI "
-            "không gọi lặp lại từng người."
+            "QUAN TRỌNG: HR nói 'tất cả những người ...' hay 'N người điểm cao nhất' thì dùng "
+            "search_candidates để lấy danh sách trước, rồi CHÉP NGUYÊN candidate_ids vào MỘT "
+            "lời gọi — TUYỆT ĐỐI không gọi lặp lại từng người và không tự gõ tên. "
+            "CẢ LÔ HOẶC KHÔNG GÌ CẢ: chỉ cần một ứng viên không tra ra được là tool KHÔNG thêm "
+            "ai vào shortlist và trả về 'not_found' — đừng báo với HR là đã thêm xong."
         ),
         params=(
             Param(
@@ -316,9 +335,10 @@ REGISTRY: tuple[ToolSpec, ...] = (
         open_world=True,  # chạm ra ngoài hệ thống (SMTP)
     ),
     # -------------------------- ĐIỀU HƯỚNG GIAO DIỆN ------------------------ #
-    # Chỉ có ý nghĩa khi client là web Copilot của HireWise: trả 'ui_action' để
-    # frontend nhảy trang. Client ngoài (Claude Desktop) gọi vẫn an toàn, chỉ là
-    # nhận về một directive mà nó không dùng tới.
+    # Các tool này trả về 'ui_action' — một directive để khung chat trên web tự điều
+    # khiển giao diện bên phải (nhảy trang, làm mới danh sách). Chúng chỉ có nghĩa với
+    # client duy nhất của hệ thống: Copilot trên web. Xem `_agent_loop` trong agent.py,
+    # chỗ gom 'ui_action' từ kết quả tool rồi gửi kèm câu trả lời cho frontend.
     ToolSpec(
         name="open_jd",
         fn=T.open_jd,

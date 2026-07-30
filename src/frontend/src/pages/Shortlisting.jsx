@@ -53,6 +53,7 @@ import Markdown from '../components/Markdown.jsx'
 import { formatName } from '../utils/formatName.js'
 import { useToast } from '../context/ToastContext.jsx'
 import { useProjects } from '../context/ProjectContext.jsx'
+import { usePublishPageContext } from '../context/PageContext.jsx'
 import { getCandidates } from '../api/jds.js'
 import { compareCandidates } from '../api/compare.js'
 import { formatDateTime } from '../utils/datetime.js'
@@ -221,6 +222,15 @@ export default function Shortlisting() {
   const [confirmSend, setConfirmSend] = useState(false)
   const [sending, setSending] = useState(false)
   const [sentTick, setSentTick] = useState(0)
+
+  // Cho AI Copilot biết HR đang xem vị trí nào. `projectId` là state CỤC BỘ của trang
+  // này (HR chọn từ dropdown), nên không có nó thì khung chat ở cột phải không thể
+  // biết — và agent sẽ đoán tên vị trí.
+  usePublishPageContext({
+    page: 'shortlisting',
+    jdId: projectId,
+    jdTitle: projects.find((p) => p.id === projectId)?.title,
+  })
 
   useEffect(() => {
     if (!projectId) {

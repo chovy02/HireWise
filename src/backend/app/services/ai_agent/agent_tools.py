@@ -20,6 +20,7 @@ Tất cả hàm nhận `db` là tham số đầu tiên (Session), phần còn l�
 """
 
 import asyncio
+import unicodedata
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
@@ -85,32 +86,93 @@ def _owner_filter(q, owner_id):
     return q.filter(models.JobDescription.created_by == _uuid(owner_id))
 
 
-def _resolve_jd(db: Session, ref, owner_id=None) -> models.JobDescription | None:
+def _norm(text) -> str:
+    """Chuẩn hoá để so tên: bỏ dấu, hạ chữ, gộp khoảng trắng.
+
+    LLM viết lại tên rất tuỳ tiện ("TRẦN THỊ BẢO NGỌC", "tran thi bao ngoc"), nên so
+    thô sẽ trượt những trường hợp hoàn toàn hợp lệ.
     """
-    Tìm JD từ `ref` là UUID HOẶC tên vị trí. Model đôi khi truyền tên thay vì id;
-    resolve theo tên giúp khỏi crash và đỡ 1 lượt gọi list_jds (tiết kiệm token).
-    Nếu trùng tên, ưu tiên JD có NHIỀU ứng viên nhất (thường là cái HR đang test).
-    Luôn chỉ nhìn trong phạm vi JD của `owner_id`.
+    s = unicodedata.normalize("NFD", str(text or "")).casefold()
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    return " ".join(s.replace("đ", "d").split())
+
+
+def _tokens(text) -> list[str]:
+    return _norm(text).split()
+
+
+def _name_matches(ref: str, full_name) -> bool:
+    """`ref` có chỉ đúng người/vị trí tên `full_name` không?
+
+    QUY TẮC: MỌI token của `ref` phải là một token ĐẦY ĐỦ trong `full_name`.
+
+    Đây là chỗ đã gây ra lỗi ghi sai dữ liệu. Bản trước so bằng `ILIKE %ref%`, nên khi
+    LLM bịa ra tên mẫu "Trần Thị B" thì chuỗi đó lại là TIỀN TỐ của "Trần Thị Bảo
+    Ngọc" -> tool ghi thẳng một người thật vào shortlist mà HR không hề nhắc tới. Với
+    quy tắc token đầy đủ, "b" không phải là token nào của "tran thi bao ngoc" nên
+    không khớp — đúng như mong đợi, vì "Nguyễn Văn A"/"Trần Thị B"/"Lê Văn C" là tên
+    giữ chỗ chứ không phải người.
+
+    Vẫn giữ được các cách gọi tắt hợp lệ: "Khoa" hay "Minh Khoa" đều khớp
+    "Nguyễn Minh Khoa", vì mỗi token đều xuất hiện nguyên vẹn.
+    """
+    ref_tokens = _tokens(ref)
+    if not ref_tokens:
+        return False
+    name_tokens = set(_tokens(full_name))
+    return all(t in name_tokens for t in ref_tokens)
+
+
+def _find_jd(db: Session, ref, owner_id=None) -> tuple[models.JobDescription | None, str | None]:
+    """Tìm JD từ UUID HOẶC tên. Trả `(jd, lý_do_thất_bại)`.
+
+    Thất bại thì KHÔNG trả None trơ trọi mà kèm lời giải thích có DỮ LIỆU THẬT (danh
+    sách vị trí đang có). Đây là điểm khác biệt đáng giá nhất: LLM đoán sai tên vị trí
+    ("Backend Developer" trong khi thật ra là "Backend Python") sẽ đọc được danh sách
+    đúng ngay trong kết quả tool và tự gọi lại — thay vì bịa tiếp như đã xảy ra.
     """
     base = _owner_filter(db.query(models.JobDescription), owner_id)
 
     try:
         jd = base.filter(models.JobDescription.id == uuid.UUID(str(ref))).first()
         if jd is not None:
-            return jd
+            return jd, None
     except (ValueError, AttributeError, TypeError):
         pass
 
-    matches = base.filter(
-        models.JobDescription.title.ilike(f"%{str(ref).strip()}%")
-    ).all()
-    if not matches:
-        return None
-    return max(matches, key=lambda j: len(j.cvs))
+    rows = base.all()
+    if not rows:
+        return None, "HR này chưa có vị trí tuyển dụng nào."
+
+    def _co_the_chon(ds):
+        # Cùng một tên nhưng nhiều JD (HR tạo trùng): chọn cái có nhiều ứng viên nhất.
+        # Đây KHÔNG phải nhập nhằng cần hỏi lại — chính HR cũng không phân biệt được
+        # hai vị trí trùng tên, và cái đang dùng thật gần như luôn là cái có hồ sơ.
+        if len({_norm(j.title) for j in ds}) == 1:
+            return max(ds, key=lambda j: len(j.cvs)), None
+        ten = ", ".join(sorted({j.title for j in ds}))
+        return None, f"Tên '{ref}' khớp nhiều vị trí: {ten}. Hãy nêu rõ một vị trí."
+
+    chinh_xac = [j for j in rows if _norm(j.title) == _norm(ref)]
+    if chinh_xac:
+        return _co_the_chon(chinh_xac)
+
+    gan_dung = [j for j in rows if _name_matches(ref, j.title)]
+    if gan_dung:
+        return _co_the_chon(gan_dung)
+
+    dang_co = ", ".join(f"'{j.title}'" for j in rows[:10])
+    return None, f"Không tìm thấy vị trí '{ref}'. Các vị trí đang có: {dang_co}."
 
 
-def _resolve_candidate(db: Session, ref, owner_id=None) -> models.Candidate | None:
-    """Tìm ứng viên từ UUID HOẶC tên, chỉ trong các JD thuộc `owner_id`."""
+def _find_candidate(db: Session, ref, owner_id=None) -> tuple[models.Candidate | None, str | None]:
+    """Tìm ứng viên từ UUID HOẶC tên, chỉ trong JD của `owner_id`. Trả `(c, lý_do)`.
+
+    NHẬP NHẰNG LÀ LỖI, KHÔNG PHẢI CHUYỆN TỰ QUYẾT. Bản trước lấy `.first()` theo
+    `created_at` giảm dần, nên "Khoa" khớp ba người thì tool âm thầm chọn một —
+    và HR không có cách nào biết mình vừa thao tác lên ai. Giờ trả lỗi kèm tên các
+    ứng viên khớp để agent hỏi lại hoặc dùng candidate_id.
+    """
     base = _owner_filter(
         db.query(models.Candidate).join(
             models.JobDescription,
@@ -121,14 +183,73 @@ def _resolve_candidate(db: Session, ref, owner_id=None) -> models.Candidate | No
     try:
         c = base.filter(models.Candidate.id == uuid.UUID(str(ref))).first()
         if c is not None:
-            return c
+            return c, None
+        # Chuỗi ĐÚNG là UUID nhưng không có trong DB: đây là id bịa hoặc id của người
+        # khác, không phải tên viết tắt -> đừng đem đi so tên.
+        uuid.UUID(str(ref))
+        return None, f"Không có ứng viên nào với id {ref}."
     except (ValueError, AttributeError, TypeError):
         pass
-    return (
-        base.filter(models.Candidate.name.ilike(f"%{str(ref).strip()}%"))
-        .order_by(models.Candidate.created_at.desc())
-        .first()
-    )
+
+    rows = base.all()
+    khop = [c for c in rows if _norm(c.name) == _norm(ref)] or [
+        c for c in rows if _name_matches(ref, c.name)
+    ]
+    if not khop:
+        return None, f"Không tìm thấy ứng viên '{ref}'."
+    if len(khop) > 1:
+        ds = ", ".join(f"{c.name} ({c.jd.title if c.jd else '?'})" for c in khop[:6])
+        return None, (
+            f"Tên '{ref}' khớp {len(khop)} hồ sơ: {ds}. Hãy dùng candidate_id từ "
+            f"search_candidates thay vì tên."
+        )
+    return khop[0], None
+
+
+def _resolve_refs(
+    db: Session, refs: list[str], owner_id=None
+) -> tuple[list[models.Candidate], list[str], list[str]]:
+    """Resolve CẢ danh sách ứng viên TRƯỚC khi làm bất cứ việc gì.
+
+    Trả `(ứng_viên_đã_khử_trùng, các_ref_hỏng, lý_do_từng_cái)`.
+
+    Tách riêng khỏi vòng lặp xử lý để tool ghi có thể kiểm tra trọn danh sách rồi mới
+    quyết định làm hay không — xem `_TU_CHOI_DANH_SACH_HONG`.
+    """
+    ok: list[models.Candidate] = []
+    hong: list[str] = []
+    ly_do: list[str] = []
+    seen: set = set()
+    for ref in refs:
+        c, err = _find_candidate(db, ref, owner_id)
+        if c is None:
+            hong.append(str(ref))
+            ly_do.append(err or f"Không tìm thấy '{ref}'.")
+            continue
+        if c.id in seen:  # LLM có thể truyền trùng dưới 2 dạng tên/id
+            continue
+        seen.add(c.id)
+        ok.append(c)
+    return ok, hong, ly_do
+
+
+# Vì sao tool GHI từ chối cả lô khi có một ref không resolve được, thay vì làm phần
+# tìm được rồi cảnh báo:
+#
+# Một ref không resolve được nghĩa là agent đang ĐOÁN — nó chưa tra cứu, hoặc tra rồi
+# mà tự gõ lại tên. Đã xảy ra thật: `compare_candidates` lỗi vì sai tên vị trí, agent
+# bèn tự nghĩ ra ["Nguyễn Văn A", "Trần Thị B", "Lê Văn C"] rồi gọi add_to_shortlist.
+# Tool cũ thêm 1 người (khớp nhầm) và cảnh báo 2 người "không tìm thấy" — nhưng tác
+# dụng phụ ĐÃ xảy ra và không rút lại được, còn HR thì nhận một câu trả lời vừa đúng
+# vừa sai. Chặn cả lô thì agent buộc phải gọi search_candidates rồi làm lại cho đúng,
+# và dữ liệu không hề bị đụng tới.
+#
+# Tool ĐỌC (compare_candidates) vẫn xử lý phần tìm được kèm cảnh báo: không có tác
+# dụng phụ nào để mất, và một bản so sánh thiếu người vẫn hữu ích hơn là không có gì.
+_TU_CHOI_DANH_SACH_HONG = (
+    "Danh sách ứng viên không hợp lệ nên CHƯA thao tác gì cả. Hãy gọi search_candidates "
+    "để lấy đúng candidate_ids rồi gọi lại tool này với mảng đó."
+)
 
 
 def _candidate_brief(c: models.Candidate) -> dict:
@@ -159,9 +280,9 @@ def list_jds(db: Session, status: str = "active", owner_id=None) -> dict:
 
 
 def get_jd(db: Session, jd_id: str, owner_id=None) -> dict:
-    jd = _resolve_jd(db, jd_id, owner_id)
+    jd, err = _find_jd(db, jd_id, owner_id)
     if jd is None:
-        return {"error": "Không tìm thấy JD."}
+        return {"error": err}
     md = jd.jd_markdown or ""
     truncated = len(md) > _JD_MARKDOWN_MAX
     return {
@@ -192,9 +313,9 @@ def search_candidates(
     """
     jd = None
     if jd_id:
-        jd = _resolve_jd(db, jd_id, owner_id)
+        jd, err = _find_jd(db, jd_id, owner_id)
         if jd is None:
-            return {"error": f"Không tìm thấy vị trí: {jd_id}"}
+            return {"error": err}
 
     # Không có jd_id -> tìm xuyên MỌI vị trí, nhưng vẫn phải chỉ trong vị trí của
     # chính người đang hỏi, nếu không Copilot sẽ trả ứng viên của tài khoản khác.
@@ -243,9 +364,9 @@ def search_candidates(
 
 
 def get_candidate(db: Session, candidate_id: str, owner_id=None) -> dict:
-    c = _resolve_candidate(db, candidate_id, owner_id)
+    c, err = _find_candidate(db, candidate_id, owner_id)
     if c is None:
-        return {"error": "Không tìm thấy ứng viên."}
+        return {"error": err}
     ev = c.evaluation
     return {
         **_candidate_brief(c),
@@ -286,25 +407,16 @@ def compare_candidates(
     """
     cands: list[models.Candidate] = []
     missing: list[str] = []
+    ly_do: list[str] = []
 
     if candidate_ids:
-        for cid in candidate_ids:
-            c = _resolve_candidate(db, cid, owner_id)
-            if c is None:
-                missing.append(str(cid))
-            else:
-                cands.append(c)
-        # Khử trùng (LLM có thể truyền cùng 1 người 2 lần dưới 2 dạng tên/id).
-        seen, uniq = set(), []
-        for c in cands:
-            if c.id not in seen:
-                seen.add(c.id)
-                uniq.append(c)
-        cands = uniq
+        # Tool ĐỌC: so phần tìm được rồi cảnh báo, không chặn cả lô như tool ghi —
+        # xem `_TU_CHOI_DANH_SACH_HONG`.
+        cands, missing, ly_do = _resolve_refs(db, candidate_ids, owner_id)
     elif jd_id and top_n:
-        jd = _resolve_jd(db, jd_id, owner_id)
+        jd, err = _find_jd(db, jd_id, owner_id)
         if jd is None:
-            return {"error": f"Không tìm thấy vị trí: {jd_id}"}
+            return {"error": err}
         cands = (
             db.query(models.Candidate)
             .join(models.Evaluation, models.Evaluation.cv_id == models.Candidate.id)
@@ -321,6 +433,7 @@ def compare_candidates(
             "error": "Không đủ ứng viên hợp lệ để so sánh (cần ít nhất 2).",
             "found": [c.name for c in cands],
             "not_found": missing,
+            "details": ly_do,
         }
 
     jd_ref = cands[0].jd_id
@@ -341,6 +454,7 @@ def compare_candidates(
     result["compared_count"] = len(cands)
     if missing:
         result["not_found"] = missing
+        result["details"] = ly_do
         result["warning"] = (
             f"Chỉ so sánh được {len(cands)} người; không tìm thấy: {', '.join(missing)}. "
             "PHẢI báo điều này cho HR."
@@ -467,16 +581,22 @@ def generate_interview_questions(
             "requested": len(refs),
         }
 
-    results, not_found, seen = [], [], set()
-    for ref in refs:
-        c = _resolve_candidate(db, ref, owner_id)
-        if c is None:
-            not_found.append(str(ref))
-            continue
-        if c.id in seen:  # LLM có thể truyền trùng dưới 2 dạng tên/id
-            continue
-        seen.add(c.id)
-        results.append(_generate_questions_for(db, c, aspect, num_questions, replace))
+    # Resolve TRỌN danh sách trước khi gọi AI lần nào. Ngoài chuyện không ghi dữ liệu
+    # trên một danh sách đoán (xem `_TU_CHOI_DANH_SACH_HONG`), việc này còn tiết kiệm
+    # thật: mỗi ứng viên là một lượt gọi Gemini, chặn sớm thì không đốt hạn mức cho
+    # một lô sai.
+    cands, not_found, ly_do = _resolve_refs(db, refs, owner_id)
+    if not_found:
+        return {
+            "error": _TU_CHOI_DANH_SACH_HONG,
+            "not_found": not_found,
+            "details": ly_do,
+            "resolved": [c.name for c in cands],
+        }
+
+    results = [
+        _generate_questions_for(db, c, aspect, num_questions, replace) for c in cands
+    ]
 
     cho_xac_nhan = [r["candidate"] for r in results if r["status"] == "needs_confirmation"]
     out = {
@@ -488,8 +608,6 @@ def generate_interview_questions(
             "skipped": sum(1 for r in results if r["status"] in ("skipped", "failed")),
         },
     }
-    if not_found:
-        out["not_found"] = not_found
     if cho_xac_nhan:
         out["needs_confirmation"] = cho_xac_nhan
         out["how_to_proceed"] = (
@@ -506,9 +624,9 @@ def create_shortlist(
     db: Session, jd_id: str, name: str, created_by: str, owner_id=None
 ) -> dict:
     """Tạo 1 shortlist mới cho 1 vị trí."""
-    jd = _resolve_jd(db, jd_id, owner_id)
+    jd, err = _find_jd(db, jd_id, owner_id)
     if jd is None:
-        return {"error": "Không tìm thấy vị trí."}
+        return {"error": err}
     sl = models.Shortlist(jd_id=jd.id, name=name.strip(), created_by=_uuid(created_by))
     db.add(sl)
     db.commit()
@@ -518,9 +636,9 @@ def create_shortlist(
 
 def list_shortlists(db: Session, jd_id: str, owner_id=None) -> dict:
     """Liệt kê các shortlist của 1 vị trí (kèm số ứng viên)."""
-    jd = _resolve_jd(db, jd_id, owner_id)
+    jd, err = _find_jd(db, jd_id, owner_id)
     if jd is None:
-        return {"error": "Không tìm thấy vị trí."}
+        return {"error": err}
     return {
         "jd": jd.title,
         "shortlists": [
@@ -574,18 +692,23 @@ def add_to_shortlist(
         return {"error": "Cần ít nhất 1 ứng viên."}
 
     name = (shortlist_name or "AI Shortlist").strip() or "AI Shortlist"
-    added, already_in, not_found, seen = [], [], [], set()
+
+    # Resolve TRỌN danh sách trước, chưa ghi gì. Đây là tool đã từng thêm nhầm một
+    # người thật vào shortlist vì LLM bịa tên "Trần Thị B" — xem `_TU_CHOI_DANH_SACH_HONG`
+    # và `_name_matches`. Chặn ở đây thì cả shortlist lẫn dữ liệu đều không bị đụng.
+    cands, not_found, ly_do = _resolve_refs(db, refs, owner_id)
+    if not_found:
+        return {
+            "error": _TU_CHOI_DANH_SACH_HONG,
+            "not_found": not_found,
+            "details": ly_do,
+            "resolved": [c.name for c in cands],
+        }
+
+    added, already_in = [], []
     theo_vi_tri: dict[str, int] = {}
 
-    for ref in refs:
-        c = _resolve_candidate(db, ref, owner_id)
-        if c is None:
-            not_found.append(str(ref))
-            continue
-        if c.id in seen:  # LLM có thể truyền trùng dưới 2 dạng tên/id
-            continue
-        seen.add(c.id)
-
+    for c in cands:
         sl = _shortlist_for(db, c.jd_id, name, created_by)
         exists = (
             db.query(models.ShortlistItem)
@@ -614,9 +737,6 @@ def add_to_shortlist(
     }
     if already_in:
         out["already_in"] = already_in
-    if not_found:
-        out["not_found"] = not_found
-        out["warning"] = f"Không tìm thấy: {', '.join(not_found)}. PHẢI báo điều này cho HR."
     # Điều hướng sang màn hình Shortlisting để HR thấy ngay kết quả.
     if added:
         out["ui_action"] = {"type": "navigate", "path": "/shortlisting"}
@@ -636,9 +756,11 @@ def send_interview_invite(
     BẢN XEM TRƯỚC, KHÔNG gửi thật. Chỉ khi HR xác nhận rõ ràng, agent mới đặt
     confirm=true để gửi.
     """
-    c = _resolve_candidate(db, candidate_id, owner_id)
-    if c is None or not c.email:
-        return {"error": "Ứng viên không tồn tại hoặc chưa có email."}
+    c, err = _find_candidate(db, candidate_id, owner_id)
+    if c is None:
+        return {"error": err}
+    if not c.email:
+        return {"error": f"Ứng viên {c.name} chưa có email nên không gửi được thư mời."}
 
     preview = {
         "to": c.email,
@@ -670,9 +792,9 @@ def send_interview_invite(
 # --------------------------------------------------------------------------- #
 def open_jd(db: Session, jd_id: str, owner_id=None) -> dict:
     """Mở trang chi tiết 1 vị trí (project) ở phần giao diện bên phải."""
-    jd = _resolve_jd(db, jd_id, owner_id)
+    jd, err = _find_jd(db, jd_id, owner_id)
     if jd is None:
-        return {"error": "Không tìm thấy JD."}
+        return {"error": err}
     return {
         "opened": jd.title,
         "ui_action": {"type": "navigate", "path": f"/projects/{jd.id}"},
