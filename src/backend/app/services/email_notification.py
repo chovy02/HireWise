@@ -1,6 +1,7 @@
 import html
 import re
 import smtplib
+from dataclasses import dataclass
 from email.message import EmailMessage
 import os
 from typing import List, Optional
@@ -25,6 +26,106 @@ SMTP_PASSWORD = os.getenv("SMTP_PASSWORD") or os.getenv("MAIL_PASSWORD")
 # phụ (gửi mail báo kết quả) chưa cấu hình KHÔNG được phép làm sập đăng nhập, upload
 # CV và bảng xếp hạng. Thiếu cấu hình thì báo lỗi đúng lúc gửi, ở dưới.
 SMTP_CONFIGURED = bool(SMTP_USER and SMTP_PASSWORD)
+
+
+# ────────────────────────────────────────────────────────────
+# Kết quả gửi mail
+# ────────────────────────────────────────────────────────────
+# Trước đây hàm gửi chỉ trả True/False, nên người gọi không thể phân biệt "email trong
+# CV sai định dạng" với "Gmail chặn mật khẩu ứng dụng" hay "mạng của server chết" — cả
+# ba đều thành một dấu lặng giống nhau trên UI, và HR không biết phải sửa gì để gửi
+# lại. Mỗi mã lỗi dưới đây trả lời đúng một câu hỏi: LỖI Ở ĐÂU, VÀ AI SỬA ĐƯỢC.
+ERR_SMTP_NOT_CONFIGURED = "smtp_not_configured"  # thiếu .env -> admin sửa
+ERR_NO_EMAIL = "no_email"                        # CV không có email -> không gửi được
+ERR_INVALID_EMAIL = "invalid_email"              # sai định dạng -> phải sửa dữ liệu
+ERR_RECIPIENT_REFUSED = "recipient_refused"      # máy chủ nhận từ chối địa chỉ này
+ERR_SENDER_REFUSED = "sender_refused"            # máy chủ từ chối địa chỉ gửi
+ERR_AUTH_FAILED = "auth_failed"                  # sai user/mật khẩu ứng dụng
+ERR_CONNECTION_FAILED = "connection_failed"      # không nối được / timeout
+ERR_SMTP_ERROR = "smtp_error"                    # lỗi giao thức khác
+ERR_BUILD_FAILED = "build_failed"                # mẫu mail/đính kèm dựng không nổi
+ERR_UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class EmailSendResult:
+    """Kết quả một lượt gửi: thành công, hoặc thất bại KÈM lý do đọc được."""
+    ok: bool
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+
+    # Giữ tương thích với lối viết cũ `if send_shortlist_email(...):` — dataclass
+    # thường luôn truthy, nên không có __bool__ thì mọi lần gửi thất bại đều bị hiểu
+    # thành thành công.
+    def __bool__(self) -> bool:
+        return self.ok
+
+
+# Kiểm tra định dạng email ở mức "đủ dùng", KHÔNG theo RFC 5322 đầy đủ.
+#
+# Địa chỉ ở đây do AI trích từ CV nên hay dính rác: thiếu phần sau @, nuốt luôn dòng
+# kế tiếp ("an@gmail.comSĐT: 09..."), hay lẫn dấu phẩy khi CV ghi hai email. Chặn
+# trước khi mở kết nối SMTP thì HR biết ngay là dữ liệu sai, thay vì đợi máy chủ mail
+# trả về một mã 5xx khó hiểu vài giây sau.
+_EMAIL_RE = re.compile(r"^[^@\s,;:<>()\[\]\\\"]+@[^@\s,;:<>()\[\]\\\"]+\.[A-Za-z]{2,}$")
+
+
+def is_valid_email(email: Optional[str]) -> bool:
+    return bool(email and _EMAIL_RE.match(email.strip()))
+
+
+def _describe_smtp_error(exc: Exception) -> tuple[str, str]:
+    """Đổi một exception của smtplib thành (mã lỗi, câu giải thích cho HR).
+
+    THỨ TỰ QUAN TRỌNG: các lớp con phải được kiểm tra trước lớp cha
+    (SMTPAuthenticationError/SMTPConnectError đều là con của SMTPException), nếu không
+    mọi lỗi đều rơi vào nhánh chung và mã lỗi mất hết ý nghĩa.
+    """
+    if isinstance(exc, smtplib.SMTPRecipientsRefused):
+        detail = "; ".join(
+            f"{addr}: {msg.decode(errors='replace') if isinstance(msg, bytes) else msg}"
+            for addr, (_code, msg) in (exc.recipients or {}).items()
+        )
+        return (
+            ERR_RECIPIENT_REFUSED,
+            "Máy chủ mail từ chối địa chỉ người nhận (địa chỉ không tồn tại hoặc bị "
+            f"khoá). {detail}".strip(),
+        )
+    if isinstance(exc, smtplib.SMTPAuthenticationError):
+        return (
+            ERR_AUTH_FAILED,
+            "Máy chủ mail từ chối đăng nhập: sai MAIL_USERNAME/MAIL_PASSWORD, hoặc mật "
+            "khẩu ứng dụng Gmail đã bị thu hồi. Cần cập nhật cấu hình rồi gửi lại.",
+        )
+    if isinstance(exc, smtplib.SMTPSenderRefused):
+        return (
+            ERR_SENDER_REFUSED,
+            f"Máy chủ mail từ chối địa chỉ gửi ({exc.sender}). Kiểm tra lại tài khoản "
+            "SMTP của hệ thống.",
+        )
+    if isinstance(exc, smtplib.SMTPNotSupportedError):
+        return (
+            ERR_SMTP_ERROR,
+            f"Máy chủ mail không hỗ trợ thao tác cần thiết: {exc}",
+        )
+    if isinstance(exc, (smtplib.SMTPConnectError, smtplib.SMTPServerDisconnected)):
+        return (
+            ERR_CONNECTION_FAILED,
+            f"Không giữ được kết nối tới máy chủ mail ({SMTP_HOST}:{SMTP_PORT}): {exc}. "
+            "Thường là lỗi tạm thời — thử lại được.",
+        )
+    if isinstance(exc, smtplib.SMTPException):
+        return (ERR_SMTP_ERROR, f"Lỗi giao thức SMTP: {exc}")
+    # socket.timeout, socket.gaierror, ConnectionRefusedError… đều là OSError. Đây là
+    # nhóm lỗi mạng/DNS: gửi lại sau thường thành công.
+    if isinstance(exc, OSError):
+        return (
+            ERR_CONNECTION_FAILED,
+            f"Không kết nối được tới máy chủ mail ({SMTP_HOST}:{SMTP_PORT}): {exc}. "
+            "Thường là lỗi tạm thời — thử lại được.",
+        )
+    return (ERR_UNKNOWN, f"Lỗi không xác định khi gửi mail: {exc}")
+
 
 DEFAULT_EMAIL_TEMPLATES = {
     "accepted": {
@@ -218,16 +319,34 @@ def send_shortlist_email(
     status: str,
     custom_template: Optional[object] = None, # Thêm tham số nhận template
     attachments: Optional[List[object]] = None, # File/ảnh HR gắn vào mẫu
-):
-    """Gửi email qua SMTP hệ thống, set Reply-To về mail HR và dùng custom template."""
+) -> EmailSendResult:
+    """Gửi email qua SMTP hệ thống, set Reply-To về mail HR và dùng custom template.
+
+    Trả về EmailSendResult: thành công, hoặc thất bại kèm mã lỗi + câu giải thích để
+    người gọi lưu lại và hiển thị cho HR (xem shortlist_items.notify_error).
+    """
     # Kiểm tra cấu hình TẠI ĐÂY chứ không phải lúc import: chưa cấu hình thì chỉ
     # riêng việc gửi mail hỏng, phần còn lại của hệ thống vẫn chạy bình thường.
     if not SMTP_CONFIGURED:
-        print(
-            "[ERROR] Chưa cấu hình SMTP (cần SMTP_USER/SMTP_PASSWORD hoặc "
-            f"MAIL_USERNAME/MAIL_PASSWORD trong .env) — không gửi được mail tới {to_email}."
+        message = (
+            "Hệ thống chưa cấu hình SMTP (cần SMTP_USER/SMTP_PASSWORD hoặc "
+            "MAIL_USERNAME/MAIL_PASSWORD trong .env) — không gửi được mail nào."
         )
-        return False
+        print(f"[ERROR] {message} Người nhận bị bỏ qua: {to_email}.")
+        return EmailSendResult(False, ERR_SMTP_NOT_CONFIGURED, message)
+
+    # Chặn địa chỉ rác NGAY: không mở kết nối SMTP cho một địa chỉ chắc chắn sai.
+    if not (to_email or "").strip():
+        return EmailSendResult(
+            False, ERR_NO_EMAIL,
+            "CV không trích được địa chỉ email nên không thể gửi thông báo.",
+        )
+    if not is_valid_email(to_email):
+        return EmailSendResult(
+            False, ERR_INVALID_EMAIL,
+            f"Địa chỉ email “{to_email.strip()}” không đúng định dạng nên không gửi được. "
+            "Hãy sửa email của ứng viên rồi thử lại.",
+        )
 
     subject, body, body_format = get_email_content(
         status, candidate_name, jd_title, hr_name, custom_template
@@ -237,15 +356,22 @@ def send_shortlist_email(
     if custom_template is None or not getattr(custom_template, "is_active", False):
         attachments = None
 
-    msg = _build_message(
-        subject=subject,
-        body=body,
-        body_format=body_format,
-        to_email=to_email,
-        hr_email=hr_email,
-        hr_name=hr_name,
-        attachments=attachments,
-    )
+    # Dựng mail cũng có thể nổ (content_type rác, tên file lạ trong mẫu của HR). Bọc
+    # riêng để lỗi mẫu mail không bị ghi thành "lỗi SMTP" — hai bên sửa khác nhau.
+    try:
+        msg = _build_message(
+            subject=subject,
+            body=body,
+            body_format=body_format,
+            to_email=to_email,
+            hr_email=hr_email,
+            hr_name=hr_name,
+            attachments=attachments,
+        )
+    except Exception as e:
+        message = f"Không dựng được nội dung mail (mẫu email hoặc file đính kèm lỗi): {e}"
+        print(f"[ERROR] {message}")
+        return EmailSendResult(False, ERR_BUILD_FAILED, message)
 
     try:
         # Cổng 465 dùng SSL ngay từ đầu kết nối; 587 mới là kết nối thường rồi nâng
@@ -260,7 +386,8 @@ def send_shortlist_email(
                 server.starttls()
                 server.login(SMTP_USER, SMTP_PASSWORD)
                 server.send_message(msg)
-        return True
+        return EmailSendResult(True)
     except Exception as e:
-        print(f"[ERROR] Lỗi gửi mail tới {to_email}: {str(e)}")
-        return False
+        code, message = _describe_smtp_error(e)
+        print(f"[ERROR] Lỗi gửi mail tới {to_email} [{code}]: {e}")
+        return EmailSendResult(False, code, message)

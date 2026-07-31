@@ -14,6 +14,7 @@ from app.core.ownership import (
     get_owned_jd,
     owned_jds,
 )
+from app.core.ranking import score_sort_key
 from app.database import get_db
 from app.services import jd_deletion
 from app.services.ai_agent import pipeline
@@ -317,11 +318,15 @@ def get_leaderboard(
             skills=list(dict.fromkeys(s.skill_name for s in c.skills))[:15],
             is_overridden=c.evaluation.is_overridden if c.evaluation else False,
             error_message=c.error_message,
+            created_at=c.created_at,
         )
         for c in candidates
     ]
     # Ứng viên có điểm xếp trước, điểm cao xếp trước; chưa có điểm (None) xếp cuối.
-    items.sort(key=lambda x: (x.score is None, -(x.score or 0)))
+    # score_sort_key phá hoà bằng (created_at, id): thiếu chốt phá hoà thì hai ứng viên
+    # TRÙNG ĐIỂM lấy đúng thứ tự heap của Postgres, và chỉ một lần UPDATE lên hàng nào đó
+    # là chúng đổi chỗ nhau sau khi HR nạp lại trang.
+    items.sort(key=score_sort_key)
     return items
 
 

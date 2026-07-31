@@ -41,6 +41,10 @@ class CandidateListItem(BaseModel):
     skills: list[str] = []          # tên kỹ năng để hiển thị chip trên bảng xếp hạng
     is_overridden: bool = False     # HR đã chỉnh điểm chưa
     error_message: Optional[str] = None   # lý do khi status=FAILED (để HR bấm xem)
+    # Thời điểm tải CV lên. Dùng làm CHỐT PHÁ HOÀ khi sắp theo điểm — cả backend và
+    # frontend đều cần: hai ứng viên trùng điểm phải luôn ra cùng một thứ tự, và khi
+    # HR đổi sang "điểm thấp → cao" thì thứ tự đó phải ĐẢO lại chứ không giữ nguyên.
+    created_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

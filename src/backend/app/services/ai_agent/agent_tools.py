@@ -336,7 +336,19 @@ def search_candidates(
             models.CandidateSkill, models.CandidateSkill.cv_id == models.Candidate.id
         ).filter(models.CandidateSkill.normalized_name.ilike(f"%{skill.strip().lower()}%"))
 
-    rows = q.order_by(models.Evaluation.score.desc()).limit(min(limit, 50)).all()
+    # Chốt phá hoà (created_at, id) — cùng thứ tự với bảng xếp hạng trên UI
+    # (app/core/ranking.py). Chỉ ORDER BY score với một LIMIT là thứ tự giữa các ứng viên
+    # TRÙNG ĐIỂM do Postgres tự quyết: agent hỏi lại y nguyên câu hỏi có thể nhận danh
+    # sách khác, và ở mốc cắt limit thì thậm chí là người khác.
+    rows = (
+        q.order_by(
+            models.Evaluation.score.desc(),
+            models.Candidate.created_at,
+            models.Candidate.id,
+        )
+        .limit(min(limit, 50))
+        .all()
+    )
     briefs = [_candidate_brief(c) for c in rows]
 
     result = {
@@ -421,7 +433,12 @@ def compare_candidates(
             db.query(models.Candidate)
             .join(models.Evaluation, models.Evaluation.cv_id == models.Candidate.id)
             .filter(models.Candidate.jd_id == jd.id)
-            .order_by(models.Evaluation.score.desc())
+            # Chốt phá hoà như ở find_top_candidates: "top 3" phải luôn ra cùng 3 người.
+            .order_by(
+                models.Evaluation.score.desc(),
+                models.Candidate.created_at,
+                models.Candidate.id,
+            )
             .limit(max(2, int(top_n)))
             .all()
         )

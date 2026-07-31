@@ -38,6 +38,7 @@ from .shortlist import (
     ShortlistItemResponse,
     ShortlistListItem,
     ShortlistResponse,
+    ShortlistNotifyResponse,
 )
 
 from .compare import (

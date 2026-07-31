@@ -31,7 +31,9 @@ import {
   Send,
   MailCheck,
   MailWarning,
+  MailX,
   Mail,
+  RotateCcw,
   Settings2,
 } from 'lucide-react'
 import Topbar from '../components/Topbar.jsx'
@@ -66,6 +68,7 @@ import {
   updateShortlistItemStatus,
   removeShortlistItem,
   sendShortlistNotifications,
+  resendShortlistNotification,
 } from '../api/shortlists.js'
 
 const STATUS_BADGE = {
@@ -81,44 +84,171 @@ const INTERVIEW_BADGE = {
   completed: { variant: 'completed', label: 'Đã phỏng vấn' },
 }
 
+// Nhãn NGẮN cho từng mã lỗi gửi mail (backend: app/services/email_notification.py).
+//
+// Câu giải thích dài đã có sẵn ở item.notify_error và được đưa vào tooltip; ở đây chỉ
+// cần đủ để HR nhìn một cái là biết lỗi thuộc về DỮ LIỆU ỨNG VIÊN (tự sửa được) hay về
+// HỆ THỐNG (phải gọi admin) — hai loại đó dẫn tới hai hành động khác nhau.
+const NOTIFY_ERROR_LABELS = {
+  no_email: 'Thiếu email',
+  invalid_email: 'Email sai định dạng',
+  recipient_refused: 'Địa chỉ bị từ chối',
+  sender_refused: 'Lỗi địa chỉ gửi',
+  auth_failed: 'Lỗi đăng nhập SMTP',
+  connection_failed: 'Lỗi kết nối',
+  smtp_error: 'Lỗi máy chủ mail',
+  smtp_not_configured: 'Chưa cấu hình SMTP',
+  build_failed: 'Lỗi mẫu email',
+  unknown: 'Gửi lỗi',
+}
+
+// Mã lỗi mà HR sửa được ngay trên dữ liệu ứng viên; còn lại là việc của admin/hệ thống.
+const CANDIDATE_DATA_ERRORS = new Set(['no_email', 'invalid_email', 'recipient_refused'])
+
+// PHẢI khớp _EMAIL_RE ở backend (app/services/email_notification.py). Frontend kiểm tra
+// lại để con số trên nút "Gửi email kết quả" bằng đúng số mail backend sẽ gửi — một
+// địa chỉ rác kiểu "an@gmail.comSĐT:09..." bị backend loại mà UI vẫn đếm thì HR sẽ ngồi
+// đợi một cái mail không bao giờ được gửi.
+const EMAIL_RE = /^[^@\s,;:<>()[\]\\"]+@[^@\s,;:<>()[\]\\"]+\.[A-Za-z]{2,}$/
+
+function isValidEmail(email) {
+  return !!email && EMAIL_RE.test(email.trim())
+}
+
+// Sau mốc này, một item còn mắc ở "sending" coi như lô gửi đã chết (API restart giữa
+// BackgroundTasks) và được phép gửi lại. Khớp SENDING_STALE_AFTER ở backend.
+const SENDING_STALE_MS = 10 * 60 * 1000
+
 // Trạng thái gửi mail kết quả của MỘT ứng viên trong shortlist.
 //
-// Phải khớp đúng điều kiện lọc của backend (POST /shortlists/{id}/send-notifications):
-// chỉ gửi khi quyết định là accepted/rejected, ứng viên có email, và chưa gửi lần nào
-// HOẶC quyết định đã đổi so với lần gửi trước (notified_status != candidate_status).
-// Lệch điều kiện ở đây là UI hứa một con số mà backend gửi một con số khác.
+// `queued` PHẢI khớp đúng điều kiện lọc của backend (POST .../send-notifications): chỉ
+// gửi khi quyết định là accepted/rejected, email có và đúng định dạng, chưa gửi thành
+// công cho đúng quyết định hiện tại, và không đang nằm trong lô gửi khác. Lệch điều kiện
+// ở đây là UI hứa một con số mà backend gửi một con số khác.
 //
-// `queued: true` = ứng viên này sẽ nằm trong lô gửi nếu HR bấm nút.
-function notifyState(item) {
+// `canRetry` = hiện nút "Thử lại" trên dòng đó. Rộng hơn `queued`: một ứng viên email
+// sai định dạng KHÔNG được tự động xếp vào lô gửi (gửi lại y nguyên thì vẫn lỗi), nhưng
+// HR vẫn phải bấm gửi lại được sau khi sửa dữ liệu — nếu không thì trạng thái "Gửi lỗi"
+// là một ngõ cụt.
+function notifyState(item, now = Date.now()) {
   const decided = item.candidate_status === 'accepted' || item.candidate_status === 'rejected'
+  const email = item.candidate?.email
+  const code = item.notify_error_code
+  const attempts = item.notify_attempts || 0
+
+  // Phần đuôi tooltip: số lượt đã thử + mốc thử gần nhất. "Gửi lỗi" một mình không trả
+  // lời được "đã thử mấy lần rồi?" — câu hỏi quyết định việc HR nên đợi hay đi sửa.
+  const attemptNote = attempts
+    ? ` (đã thử ${attempts} lượt, lần cuối ${formatDateTime(item.notify_last_attempt_at)})`
+    : ''
+
   if (!decided) {
-    return { queued: false, variant: 'neutral', icon: null, label: '—',
+    return { queued: false, canRetry: false, variant: 'neutral', icon: null, label: '—',
       title: 'Chưa chốt quyết định — chưa gửi mail' }
   }
-  if (!item.candidate?.email) {
-    return { queued: false, variant: 'error', icon: MailWarning, label: 'Thiếu email',
-      title: 'Không trích được email từ CV nên không thể gửi thông báo' }
+
+  // Đang trong hàng đợi nền. Quá SENDING_STALE_MS thì coi như treo và cho gửi lại.
+  const lastAttempt = item.notify_last_attempt_at
+    ? new Date(item.notify_last_attempt_at).getTime()
+    : 0
+  const inFlight =
+    item.notify_state === 'sending' &&
+    lastAttempt > 0 &&
+    now - lastAttempt < SENDING_STALE_MS
+  if (inFlight) {
+    return { queued: false, canRetry: false, spin: true, variant: 'info', icon: Loader2,
+      label: 'Đang gửi…',
+      title: `Đã xếp hàng lúc ${formatDateTime(item.notify_last_attempt_at)}, tiến trình nền đang gửi.` }
   }
+  if (item.notify_state === 'sending') {
+    return { queued: true, canRetry: true, variant: 'warning', icon: MailWarning,
+      label: 'Gửi bị treo',
+      title:
+        `Đã xếp hàng lúc ${formatDateTime(item.notify_last_attempt_at)} nhưng chưa có kết quả ` +
+        '— tiến trình gửi có thể đã bị ngắt. Bấm thử lại.' }
+  }
+
+  // Thất bại: nói rõ lỗi gì. Đây là trạng thái mà bản trước KHÔNG có — mọi lần gửi lỗi
+  // đều hiện y như "chưa gửi", nên HR bấm gửi lại mãi mà không hiểu vì sao im lặng.
+  if (item.notify_state === 'failed') {
+    const label = NOTIFY_ERROR_LABELS[code] || NOTIFY_ERROR_LABELS.unknown
+    return {
+      // Lỗi do dữ liệu (thiếu/sai email) thì backend KHÔNG xếp vào lô kế tiếp; lỗi hệ
+      // thống (SMTP, kết nối) thì có -> chỉ cần soi lại email là biết thuộc nhóm nào.
+      queued: isValidEmail(email),
+      // Không có địa chỉ nào thì không có gì để thử lại — nút chỉ hiện lại sau khi CV
+      // của ứng viên đã có email.
+      canRetry: !!email,
+      variant: 'error',
+      icon: MailX,
+      label,
+      title:
+        (item.notify_error || 'Gửi mail thất bại.') +
+        attemptNote +
+        (!email
+          ? ' Chưa có địa chỉ nào để gửi — hãy bổ sung email cho ứng viên này.'
+          : CANDIDATE_DATA_ERRORS.has(code)
+            ? ' Sửa email của ứng viên (mở chi tiết ứng viên) rồi bấm thử lại.'
+            : ' Bấm thử lại sau, hoặc liên hệ quản trị viên nếu lặp lại.'),
+    }
+  }
+
+  // Chưa từng gửi mà CV không có email / email rác: backend không gửi được, nên phải
+  // nói ngay thay vì để HR chờ một cái mail sẽ không bao giờ đi.
+  if (!email) {
+    return { queued: false, canRetry: false, variant: 'error', icon: MailX,
+      label: 'Thiếu email',
+      title: 'Không trích được email từ CV nên không thể gửi thông báo. Hãy kiểm tra lại CV của ứng viên.' }
+  }
+  if (!isValidEmail(email)) {
+    return { queued: false, canRetry: true, variant: 'error', icon: MailX,
+      label: 'Email sai định dạng',
+      title: `Địa chỉ “${email}” không đúng định dạng nên không gửi được. Sửa email của ứng viên rồi thử lại.` }
+  }
+
   if (item.notified_at && item.notified_status === item.candidate_status) {
-    return { queued: false, variant: 'success', icon: MailCheck, label: 'Đã gửi',
-      title: `Đã gửi lúc ${formatDateTime(item.notified_at)}` }
+    return { queued: false, canRetry: true, variant: 'success', icon: MailCheck,
+      label: 'Đã gửi',
+      title: `Đã gửi lúc ${formatDateTime(item.notified_at)}${attemptNote}. Bấm để gửi lại nếu ứng viên chưa nhận.` }
   }
   if (item.notified_at) {
-    return { queued: true, variant: 'warning', icon: MailWarning, label: 'Cần gửi lại',
+    return { queued: true, canRetry: true, variant: 'warning', icon: MailWarning,
+      label: 'Cần gửi lại',
       title:
         `Đã gửi thông báo "${item.notified_status}" lúc ` +
         `${formatDateTime(item.notified_at)}, nhưng quyết định đã đổi ` +
         `thành "${item.candidate_status}" — cần gửi lại.` }
   }
-  return { queued: true, variant: 'info', icon: Mail, label: 'Chưa gửi',
+  return { queued: true, canRetry: true, variant: 'info', icon: Mail, label: 'Chưa gửi',
     title: 'Sẽ được gửi ở lần bấm “Gửi email kết quả” tiếp theo' }
+}
+
+// So hai mốc thời gian ISO (có thể thiếu) — thiếu thì xếp trước.
+function compareTime(a, b) {
+  const ta = a ? new Date(a).getTime() : 0
+  const tb = b ? new Date(b).getTime() : 0
+  return ta - tb
+}
+
+// THỨ TỰ CHUẨN của bảng xếp hạng: điểm cao trước; chưa có điểm (PENDING/FAILED) xếp cuối.
+//
+// CHỐT PHÁ HOÀ (created_at rồi id) là phần bắt buộc, không phải cho đẹp: `Array.sort`
+// tuy ổn định nhưng chỉ giữ nguyên thứ tự ĐẦU VÀO, mà đầu vào là thứ tự backend trả về.
+// Không có chốt phá hoà rõ ràng thì hai ứng viên TRÙNG ĐIỂM đổi chỗ nhau mỗi lần dữ liệu
+// được nạp lại, và hạng của họ nhảy qua nhảy lại. Khoá này khớp score_sort_key ở backend
+// (app/core/ranking.py) để hạng ở mọi bảng là một.
+function compareByScore(a, b) {
+  return (
+    (a.score == null) - (b.score == null) ||
+    (b.score ?? 0) - (a.score ?? 0) ||
+    compareTime(a.created_at, b.created_at) ||
+    String(a.id).localeCompare(String(b.id))
+  )
 }
 
 // COMPLETED (có điểm) xếp trước theo điểm giảm dần; PENDING/FAILED (không điểm) xếp cuối.
 function sortRows(rows) {
-  return [...rows].sort(
-    (a, b) => (a.score == null) - (b.score == null) || (b.score ?? 0) - (a.score ?? 0)
-  )
+  return [...rows].sort(compareByScore)
 }
 
 // So tên tiếng Việt theo bảng chữ cái tiếng Việt, KHÔNG theo mã ký tự: 'Đ' là
@@ -149,33 +279,46 @@ const SORT_MODES = {
   score_asc: {
     label: 'Điểm AI: thấp → cao',
     icon: ArrowUpNarrowWide,
-    // Ứng viên chưa có điểm vẫn nằm cuối, không nhảy lên đầu chỉ vì score = null.
-    fn: (rows) =>
-      [...rows].sort(
-        (a, b) => (a.score == null) - (b.score == null) || (a.score ?? 0) - (b.score ?? 0)
-      ),
+    // "Thấp → cao" là ẢNH GƯƠNG của "cao → thấp": ĐẢO danh sách đã xếp hạng, chứ không
+    // sắp lại bằng một phép so sánh ngược dấu.
+    //
+    // Vì sao phải làm vậy: đảo dấu phép so sánh chỉ đảo phần ĐIỂM, còn hai ứng viên
+    // TRÙNG ĐIỂM vẫn giữ nguyên thứ tự cũ. Hạng 4 và hạng 5 bằng điểm nhau thì ở cả hai
+    // chiều đều ra "4 rồi 5" — người đọc thấy danh sách chạy từ dưới lên nhưng riêng cặp
+    // trùng điểm lại chạy từ trên xuống, đúng chỗ trông "hơi kì". Đảo cả dãy thì hạng 5
+    // đứng trước hạng 4 như mong đợi.
+    //
+    // Ứng viên chưa có điểm (PENDING/FAILED) vẫn nằm cuối ở CẢ HAI chiều: đó là nhóm ít
+    // giá trị nhất với HR, đảo lên đầu chỉ làm mất chỗ của dữ liệu thật.
+    fn: (rows) => {
+      const ranked = sortRows(rows)
+      const scored = ranked.filter((r) => r.score != null)
+      const unscored = ranked.filter((r) => r.score == null)
+      return [...scored.reverse(), ...unscored]
+    },
   },
+  // Trùng tên (hoặc cùng nhóm chưa trích được tên) thì lùi về thứ tự xếp hạng — cần một
+  // chốt phá hoà cố định, nếu không hai người cùng tên đổi chỗ nhau mỗi lần nạp lại.
   name_asc: {
     label: 'Tên: A → Z',
     icon: ArrowDownAZ,
-    fn: (rows) => [...rows].sort(compareName),
+    fn: (rows) => [...rows].sort((a, b) => compareName(a, b) || compareByScore(a, b)),
   },
   name_desc: {
     label: 'Tên: Z → A',
     icon: ArrowUpAZ,
-    fn: (rows) => [...rows].sort((a, b) => compareName(a, b, -1)),
+    fn: (rows) => [...rows].sort((a, b) => compareName(a, b, -1) || compareByScore(a, b)),
   },
   status: {
     label: 'Trạng thái xử lý',
     icon: ListFilter,
     // Lỗi lên đầu: đây là thứ HR cần xử lý ngay (bấm "Thử lại"), còn CV đã xong thì
-    // để yên cũng được.
+    // để yên cũng được. Trong cùng một nhóm trạng thái thì theo đúng thứ tự xếp hạng.
     fn: (rows) => {
       const order = { FAILED: 0, PENDING: 1, COMPLETED: 2 }
       return [...rows].sort(
         (a, b) =>
-          (order[a.status] ?? 3) - (order[b.status] ?? 3) ||
-          (b.score ?? 0) - (a.score ?? 0)
+          (order[a.status] ?? 3) - (order[b.status] ?? 3) || compareByScore(a, b)
       )
     },
   },
@@ -222,6 +365,8 @@ export default function Shortlisting() {
   const [confirmSend, setConfirmSend] = useState(false)
   const [sending, setSending] = useState(false)
   const [sentTick, setSentTick] = useState(0)
+  // id của item đang gửi lại (nút "Thử lại" trên một dòng) — chỉ khoá đúng dòng đó.
+  const [resendingId, setResendingId] = useState(null)
 
   // Cho AI Copilot biết HR đang xem vị trí nào. `projectId` là state CỤC BỘ của trang
   // này (HR chọn từ dropdown), nên không có nó thì khung chat ở cột phải không thể
@@ -381,13 +526,46 @@ export default function Shortlisting() {
       const res = await sendShortlistNotifications(activeSlId)
       setConfirmSend(false)
       toast(res?.message || 'Đã xếp hàng gửi email thông báo.')
-      // Chỉ đánh thức vòng nạp lại khi thực sự có mail được xếp hàng: gọi lúc
-      // total_queued = 0 thì không có gì đổi, nạp lại chỉ tốn request.
-      if (res?.total_queued) setSentTick((n) => n + 1)
+      if (res?.total_queued) {
+        // Có mail đang bay -> nạp lại hai nhịp để cột "Email" tự chuyển sang "Đã gửi"
+        // hoặc sang lý do lỗi.
+        setSentTick((n) => n + 1)
+      } else if (res?.skipped_no_email || res?.skipped_invalid_email) {
+        // Không gửi được ai, nhưng backend VỪA ghi lý do lên các item đó -> nạp một
+        // lần để những dòng ấy hiện đúng trạng thái lỗi thay vì vẫn "Chưa gửi".
+        refreshShortlist()
+      }
     } catch (e) {
       toast(e.message || 'Không gửi được email thông báo.')
     } finally {
       setSending(false)
+    }
+  }
+
+  // Gửi lại mail cho MỘT ứng viên. Endpoint này chạy đồng bộ nên item trả về đã mang
+  // kết quả thật — thay đúng dòng đó và toast theo trạng thái, không cần vòng nạp lại.
+  //
+  // LƯU Ý: gửi thất bại KHÔNG làm promise reject (backend trả 200 kèm lý do), nên phải
+  // đọc notify_state; chỉ bắt catch là mọi lần lỗi sẽ hiện thành "đã gửi".
+  async function handleResend(itemId) {
+    if (!activeSlId || resendingId) return
+    setResendingId(itemId)
+    try {
+      const updated = await resendShortlistNotification(activeSlId, itemId)
+      setSlDetail((prev) =>
+        prev
+          ? { ...prev, items: prev.items.map((i) => (i.id === itemId ? updated : i)) }
+          : prev
+      )
+      if (updated.notify_state === 'sent') {
+        toast(`Đã gửi email tới ${updated.candidate?.email}.`)
+      } else {
+        toast(updated.notify_error || 'Không gửi được email cho ứng viên này.')
+      }
+    } catch (e) {
+      toast(e.message || 'Không gửi được email cho ứng viên này.')
+    } finally {
+      setResendingId(null)
     }
   }
 
@@ -502,13 +680,18 @@ export default function Shortlisting() {
   // Lô sẽ được gửi ở lần bấm nút tiếp theo, tính bằng ĐÚNG điều kiện của backend.
   const slItems = slDetail?.items || []
   const notifyQueue = slItems.filter((i) => notifyState(i).queued)
-  // Ứng viên đã chốt nhưng CV không trích được email: backend bỏ qua im lặng, nên
-  // phải nói ra ở hộp xác nhận, không thì HR tưởng đã thông báo cho tất cả.
-  const missingEmailCount = slItems.filter(
-    (i) =>
-      (i.candidate_status === 'accepted' || i.candidate_status === 'rejected') &&
-      !i.candidate?.email
+  // Ứng viên đã chốt nhưng KHÔNG gửi được vì dữ liệu: backend không gửi cho họ, nên
+  // phải nói ra ở hộp xác nhận — không thì HR tưởng đã thông báo cho tất cả.
+  const decidedItems = slItems.filter(
+    (i) => i.candidate_status === 'accepted' || i.candidate_status === 'rejected'
+  )
+  const missingEmailCount = decidedItems.filter((i) => !i.candidate?.email).length
+  const invalidEmailCount = decidedItems.filter(
+    (i) => i.candidate?.email && !isValidEmail(i.candidate.email)
   ).length
+  // Số dòng đang ở trạng thái lỗi — hiện ở chân bảng để HR không phải quét từng dòng.
+  const failedCount = slItems.filter((i) => i.notify_state === 'failed').length
+  const sendingCount = slItems.filter((i) => notifyState(i).spin).length
 
   function toggleSelect(id) {
     setSelected((l) => (l.includes(id) ? l.filter((x) => x !== id) : [...l, id]))
@@ -918,9 +1101,11 @@ export default function Shortlisting() {
                     disabled={sending || notifyQueue.length === 0}
                     onClick={() => setConfirmSend(true)}
                     title={
-                      notifyQueue.length === 0
-                        ? 'Không có ứng viên nào cần gửi: hãy chốt “Chọn”/“Từ chối” trước, hoặc tất cả đã được gửi.'
-                        : `Gửi email kết quả cho ${notifyQueue.length} ứng viên`
+                      notifyQueue.length > 0
+                        ? `Gửi email kết quả cho ${notifyQueue.length} ứng viên`
+                        : missingEmailCount + invalidEmailCount > 0
+                          ? `Không còn ai gửi được: ${missingEmailCount + invalidEmailCount} ứng viên đã chốt nhưng email không dùng được — xem lý do ở cột “Email”.`
+                          : 'Không có ứng viên nào cần gửi: hãy chốt “Chọn”/“Từ chối” trước, hoặc tất cả đã được gửi.'
                     }
                   >
                     {sending ? (
@@ -1078,29 +1263,58 @@ export default function Shortlisting() {
                                 </button>
                               </div>
                             </td>
-                            {/* Trạng thái gửi mail kết quả. `title` mang mốc thời gian
-                                cụ thể — nhãn "Đã gửi" một mình không trả lời được câu
-                                hỏi hay gặp nhất: "gửi hồi nào?". */}
+                            {/* Trạng thái gửi mail kết quả. `title` mang lý do + mốc
+                                thời gian cụ thể — nhãn "Đã gửi"/"Gửi lỗi" một mình
+                                không trả lời được hai câu hỏi hay gặp nhất: "gửi hồi
+                                nào?" và "lỗi vì cái gì?". */}
                             <td className="px-6 py-4">
-                              {notify.icon ? (
-                                <Badge
-                                  variant={notify.variant}
-                                  upper={false}
-                                  className="cursor-default"
-                                >
-                                  <span title={notify.title} className="inline-flex items-center gap-1">
-                                    <notify.icon size={12} />
+                              <div className="flex items-center gap-1.5">
+                                {notify.icon ? (
+                                  <Badge
+                                    variant={notify.variant}
+                                    upper={false}
+                                    className="cursor-default"
+                                  >
+                                    <span title={notify.title} className="inline-flex items-center gap-1">
+                                      <notify.icon
+                                        size={12}
+                                        className={notify.spin ? 'animate-spin' : ''}
+                                      />
+                                      {notify.label}
+                                    </span>
+                                  </Badge>
+                                ) : (
+                                  <span
+                                    title={notify.title}
+                                    className="text-xs text-slate-300"
+                                  >
                                     {notify.label}
                                   </span>
-                                </Badge>
-                              ) : (
-                                <span
-                                  title={notify.title}
-                                  className="text-xs text-slate-300"
-                                >
-                                  {notify.label}
-                                </span>
-                              )}
+                                )}
+                                {/* Thử lại cho ĐÚNG ứng viên này. Có mặt cả khi đã gửi
+                                    thành công (mail vào spam, ứng viên báo chưa thấy) —
+                                    còn khi lỗi thì đây là đường ra duy nhất, thiếu nó
+                                    thì "Gửi lỗi" thành một ngõ cụt. */}
+                                {notify.canRetry && (
+                                  <button
+                                    onClick={() => handleResend(it.id)}
+                                    disabled={resendingId !== null}
+                                    title={
+                                      notify.variant === 'success'
+                                        ? 'Gửi lại email kết quả cho ứng viên này'
+                                        : 'Thử gửi lại email kết quả cho ứng viên này'
+                                    }
+                                    className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-1.5 py-1 text-[11px] font-medium text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                  >
+                                    {resendingId === it.id ? (
+                                      <Loader2 size={12} className="animate-spin" />
+                                    ) : (
+                                      <RotateCcw size={12} />
+                                    )}
+                                    {resendingId === it.id ? 'Đang gửi' : 'Thử lại'}
+                                  </button>
+                                )}
+                              </div>
                             </td>
                             <td className="px-6 py-4">
                               <div className="flex justify-end gap-2">
@@ -1160,10 +1374,38 @@ export default function Shortlisting() {
                     {slDetail.items.filter((i) => i.candidate_status === 'rejected').length}{' '}
                     từ chối
                   </span>
-                  <span className="flex items-center gap-1.5">
-                    <MailCheck size={14} className="text-emerald-600" />
-                    {slDetail.items.filter((i) => i.notified_at).length} đã gửi mail
-                    {notifyQueue.length > 0 && ` • ${notifyQueue.length} chờ gửi`}
+                  {/* Tổng kết theo trạng thái gửi. "Đã gửi" đếm theo notified_status
+                      khớp quyết định HIỆN TẠI, không phải "có notified_at": người đã
+                      nhận thư nhận việc rồi bị đổi sang từ chối thì CHƯA được thông báo
+                      đúng, đếm họ vào "đã gửi" là báo cáo sai. */}
+                  <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <span className="flex items-center gap-1.5">
+                      <MailCheck size={14} className="text-emerald-600" />
+                      {
+                        slDetail.items.filter(
+                          (i) => i.notified_at && i.notified_status === i.candidate_status
+                        ).length
+                      }{' '}
+                      đã gửi mail
+                    </span>
+                    {sendingCount > 0 && (
+                      <span className="flex items-center gap-1.5 text-sky-600">
+                        <Loader2 size={14} className="animate-spin" />
+                        {sendingCount} đang gửi
+                      </span>
+                    )}
+                    {failedCount > 0 && (
+                      <span className="flex items-center gap-1.5 text-red-600">
+                        <MailX size={14} />
+                        {failedCount} gửi lỗi
+                      </span>
+                    )}
+                    {notifyQueue.length > 0 && (
+                      <span className="flex items-center gap-1.5 text-slate-500">
+                        <Mail size={14} />
+                        {notifyQueue.length} chờ gửi
+                      </span>
+                    )}
                   </span>
                 </div>
               </>
@@ -1254,10 +1496,16 @@ export default function Shortlisting() {
                   • {missingEmailCount} ứng viên bị bỏ qua vì CV không có email
                 </li>
               )}
+              {invalidEmailCount > 0 && (
+                <li className="text-amber-700">
+                  • {invalidEmailCount} ứng viên bị bỏ qua vì email sai định dạng — cột
+                  “Email” ghi rõ từng người
+                </li>
+              )}
             </ul>
             <p className="text-slate-500">
               Ứng viên đã nhận thông báo đúng với quyết định hiện tại sẽ không bị gửi
-              lại.
+              lại. Người nào gửi lỗi sẽ hiện lý do ở cột “Email” kèm nút thử lại.
             </p>
           </div>
         }

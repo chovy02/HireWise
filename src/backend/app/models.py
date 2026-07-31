@@ -314,8 +314,23 @@ class ShortlistItem(Base):
     cv_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("candidates.id"), nullable=False)
     candidate_status: Mapped[str] = mapped_column(String(50), default="pending") # pending, accepted, rejected
     added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    # notified_at / notified_status: dấu vết của lần gửi THÀNH CÔNG gần nhất. Chỉ được
+    # ghi khi mail thực sự ra khỏi máy chủ, nên "có notified_at" = "ứng viên đã nhận".
     notified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
     notified_status: Mapped[str] = mapped_column(String(50), nullable=True)
+    # Còn 4 cột dưới đây theo dõi LƯỢT GỬI hiện tại, kể cả khi nó thất bại.
+    #
+    # Vì sao cần tách khỏi notified_at: trước đây thất bại không để lại dấu vết nào,
+    # nên một ứng viên "email sai định dạng" và một ứng viên "chưa tới lượt gửi" trông
+    # y hệt nhau trên UI — HR bấm gửi lại vô số lần mà không hiểu vì sao im lặng.
+    #
+    # notify_state: None (chưa gửi lần nào) | "sending" (đã xếp hàng, tiến trình nền
+    # đang chạy) | "sent" | "failed".
+    notify_state: Mapped[str] = mapped_column(String(20), nullable=True)
+    notify_error_code: Mapped[str] = mapped_column(String(50), nullable=True)
+    notify_error: Mapped[str] = mapped_column(Text, nullable=True)
+    notify_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    notify_last_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
 
     shortlist = relationship("Shortlist", back_populates="items")
     cv = relationship("Candidate", back_populates="shortlist_items")
