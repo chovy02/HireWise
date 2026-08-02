@@ -110,18 +110,52 @@ def _client_for(key_id: str, api_key: str) -> Groq:
 SMART_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 FAST_MODEL = os.getenv("GROQ_MODEL_FAST", "llama-3.1-8b-instant")
 
+# Model DỰ PHÒNG cùng đẳng cấp với SMART_MODEL (không phải model rút gọn như
+# FAST_MODEL). Ngân sách của nó hoàn toàn tách biệt: đo trên header của Groq thì
+# gpt-oss-120b có TPM riêng 8.000, cộng thêm vào 12.000 của llama-3.3-70b.
+BACKUP_MODEL = os.getenv("GROQ_MODEL_BACKUP", "openai/gpt-oss-120b")
+
 # Agent được phép rớt xuống model nhanh khi model chính hết chỗ.
 # Để trống (LLM_FALLBACK_AGENTS=) nếu muốn mọi việc chạy hết bằng SMART_MODEL.
 _FALLBACK_AGENTS = {
     a.strip() for a in os.getenv("LLM_FALLBACK_AGENTS", "cv_parser").split(",") if a.strip()
 }
 
+# Agent được phép rớt xuống BACKUP_MODEL khi model chính hết chỗ.
+#
+# VÌ SAO CẦN: các việc dưới đây chạy ĐỒNG BỘ ngay trong lượt chat của HR — HR gõ
+# "chấm câu trả lời này" rồi ngồi đợi. Khoá cứng ở một model nghĩa là hễ model đó dính
+# cooldown (đã gặp thật: chờ ~21 phút) thì cả tính năng đứng im, và HR chỉ nhận được
+# "AI đang không chấm được". Trong khi Groq tính hạn mức theo TỪNG MODEL, tức luôn còn
+# một ngân sách khác chưa hề đụng tới.
+#
+# CỐ Ý KHÔNG CÓ cv_scorer Ở ĐÂY. Điểm số tạo ra bảng xếp hạng, chấm mỗi ứng viên bằng
+# một model khác nhau là so sánh không công bằng — việc đó thà xếp hàng chờ. Các agent
+# dưới đây thì mỗi lượt là một sản phẩm độc lập (một bộ câu hỏi, một bản nhận xét), đổi
+# model không làm ai bị so sánh lệch với ai.
+_BACKUP_AGENTS = {
+    a.strip()
+    for a in os.getenv(
+        "LLM_BACKUP_AGENTS",
+        "interview_questions,interview_evaluate,interview_summary,comparator,jd_processor,evidence",
+    ).split(",")
+    if a.strip()
+}
+
 
 def _models_for(agent_name: str) -> list[str]:
-    """Danh sách model theo thứ tự ưu tiên cho 1 agent."""
-    if agent_name in _FALLBACK_AGENTS and FAST_MODEL and FAST_MODEL != SMART_MODEL:
-        return [SMART_MODEL, FAST_MODEL]
-    return [SMART_MODEL]
+    """Danh sách model theo thứ tự ưu tiên cho 1 agent.
+
+    Thứ tự = NĂNG LỰC giảm dần: model chính -> model dự phòng cùng đẳng cấp -> model
+    rút gọn. `_acquire_slot` duyệt đúng thứ tự này và lấy chỗ đầu tiên còn ngân sách,
+    nên chất lượng chỉ giảm khi thực sự không còn lựa chọn nào tốt hơn.
+    """
+    chain = [SMART_MODEL]
+    if agent_name in _BACKUP_AGENTS and BACKUP_MODEL and BACKUP_MODEL not in chain:
+        chain.append(BACKUP_MODEL)
+    if agent_name in _FALLBACK_AGENTS and FAST_MODEL and FAST_MODEL not in chain:
+        chain.append(FAST_MODEL)
+    return chain
 
 # Số token output dự kiến theo từng agent, dùng để ĐẶT CHỖ trước cho sát thực tế.
 _EXPECTED_OUTPUT = {

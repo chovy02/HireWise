@@ -183,7 +183,13 @@ def test_annotation_len_toi_mcp(mcp_tools):
 
 def test_hanh_dong_khong_dao_nguoc_deu_co_rao_xac_nhan():
     """Mọi tool `destructive` phải có một cờ để agent buộc phải hỏi HR trước."""
-    rao = {"send_interview_invite": "confirm", "generate_interview_questions": "replace"}
+    rao = {
+        "send_interview_invite": "confirm",
+        "generate_interview_questions": "replace",
+        "record_interview_answers": "replace",
+        "finish_interview": "confirm",
+        "send_decision_emails": "confirm",
+    }
     for spec in R.REGISTRY:
         if not spec.destructive:
             continue

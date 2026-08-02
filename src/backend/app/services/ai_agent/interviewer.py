@@ -108,6 +108,21 @@ _NO_EXPECTED_ANSWER = (
 )
 
 
+# Dấu hiệu "lượt chấm này KHÔNG có kết quả thật".
+#
+# Hàm dưới đây nuốt mọi lỗi và trả về một dict trông y như kết quả bình thường, chỉ
+# khác ở chỗ evaluation là câu này và score là 0. Người gọi PHẢI kiểm tra dấu hiệu này
+# trước khi lưu: 0 điểm vì AI hết quota mà ghi vào DB thì về sau không ai phân biệt
+# được với 0 điểm vì ứng viên trả lời sai — và ứng viên có thể bị loại vì một con số
+# chưa từng được chấm.
+EVAL_FAILED = "Lỗi phân tích AI"
+
+
+def eval_failed(result: dict) -> bool:
+    """Kết quả chấm này có phải là bản giữ chỗ do AI hỏng không?"""
+    return not result or result.get("evaluation") == EVAL_FAILED
+
+
 def evaluate_interview_answer_ai(question: str, expected: str, answer: str, allow_follow_up: bool = True) -> dict:
     if not allow_follow_up:
         guidance = "- LƯU Ý HỆ THỐNG: Đã đạt giới hạn tối đa số câu hỏi phụ cho chủ đề này. BẮT BUỘC để follow_up_question là chuỗi rỗng \"\"."
@@ -124,7 +139,7 @@ def evaluate_interview_answer_ai(question: str, expected: str, answer: str, allo
     try:
         return json.loads(_clean_json(generate_text(INTERVIEW_MODEL, prompt, agent_name="interview_evaluate")))
     except Exception as e:
-        return {"evaluation": "Lỗi phân tích AI", "score": 0, "follow_up_question": ""}
+        return {"evaluation": EVAL_FAILED, "score": 0, "follow_up_question": "", "error": str(e)}
     
 def summarize_interview_ai(transcript: str) -> str:
     prompt = SUMMARIZE_INTERVIEW_PROMPT.replace("{interview_transcript}", transcript)

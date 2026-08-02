@@ -113,17 +113,38 @@ def _quota_wait_hint(err: Exception) -> str:
     return " Bạn thử lại sau ít phút nhé."
 
 
-def _friendly_error(err: Exception) -> str:
+def _friendly_error(err: Exception, da_lam: list[str] | None = None) -> str:
     """Câu trả lời cho HR khi lượt LLM thất bại.
 
     Trước đây mọi lỗi đều thành "mình gặp trục trặc, bạn thử diễn đạt lại" — với lỗi
     cạn hạn mức thì đó là lời khuyên SAI: diễn đạt lại bao nhiêu lần cũng hỏng, mà HR
     lại tưởng do mình gõ chưa rõ.
+
+    `da_lam` = tên các tool GHI đã chạy XONG trong lượt này. BẮT BUỘC phải nói ra.
+    Lỗi thật đã gặp: HR gõ "lấy 4 người cao nhất bỏ vào shortlist, mỗi người 3 câu
+    hỏi"; tool thêm shortlist xong, sinh câu hỏi xong, rồi tới lượt gọi LLM CUỐI (để
+    viết câu trả lời) mới cạn hạn mức. Câu xin lỗi chung chung khiến HR đọc xong tưởng
+    chưa có gì, gõ lại lần nữa — và lần này hệ thống làm thật lần hai.
     """
-    if _is_quota_error(err):
+    het_han_muc = _is_quota_error(err)
+    goi_y = _quota_wait_hint(err) if het_han_muc else ""
+
+    if da_lam:
+        # Tên tiếng Việt lấy từ chính registry (`title`), khử trùng nhưng giữ thứ tự
+        # đã làm — HR đọc là hình dung được đúng những gì vừa xảy ra với dữ liệu.
+        viec = ", ".join(dict.fromkeys(SPECS[t].title.lower() for t in da_lam if t in SPECS))
+        ly_do = ("hệ thống hết hạn mức AI cho hôm nay" if het_han_muc
+                 else "mình gặp trục trặc kỹ thuật")
         return (
-            "Hệ thống đã dùng hết hạn mức AI cho hôm nay nên mình chưa xử lý được yêu cầu "
-            "này." + _quota_wait_hint(err)
+            f"Mình ĐÃ kịp thực hiện: {viec}. Nhưng {ly_do} nên chưa tổng hợp được câu "
+            f"trả lời. Bạn kiểm tra lại trên màn hình giúp mình, ĐỪNG gửi lại yêu cầu "
+            f"để tránh bị làm hai lần.{goi_y}"
+        )
+
+    if het_han_muc:
+        return (
+            "Hệ thống đã dùng hết hạn mức AI cho hôm nay nên mình chưa xử lý được yêu "
+            f"cầu này.{goi_y}"
         )
     return "Xin lỗi, mình gặp trục trặc khi xử lý yêu cầu này. Bạn thử diễn đạt lại giúp mình nhé."
 
@@ -217,9 +238,13 @@ Riêng về create_jd (tạo JD mới, GHI vào hệ thống):
 ID KỸ THUẬT LÀ CHUYỆN NỘI BỘ — HR KHÔNG BAO GIỜ ĐƯỢC THẤY:
 - TUYỆT ĐỐI KHÔNG in UUID/ID ra câu trả lời. Sai: "JD có ID là 8ad393c2-9819-...". Đúng: "Đã tạo JD Backend Python."
 - TUYỆT ĐỐI KHÔNG hỏi HR cung cấp jd_id / candidate_id. Tool nhận cả tên, nhưng tên đó phải là tên THẬT vừa thấy trong kết quả tool hoặc do HR gõ — ưu tiên id mà tool vừa trả về, chính xác hơn tên.
-- Không biết vị trí nào đang được nói tới: xem NGỮ CẢNH GIAO DIỆN nếu có, nếu không thì gọi list_jds để lấy tên thật. Đừng suy ra tên vị trí từ nội dung câu hỏi.
-- HR hỏi chung chung không nêu vị trí (vd "tìm người biết Python"): gọi search_candidates với skill="python" và BỎ TRỐNG jd_id để tìm xuyên mọi vị trí.
 - Cần HR làm rõ thì hỏi bằng ngôn ngữ nghiệp vụ (tên vị trí, tên ứng viên), không hỏi ID.
+
+YÊU CẦU KHÔNG NÊU VỊ TRÍ — LÀM ĐÚNG THEO THỨ TỰ NÀY, KHÔNG ĐƯỢC BỎ QUA BƯỚC 1:
+1. CÓ "NGỮ CẢNH GIAO DIỆN" trong hội thoại (HR đang mở một vị trí)? -> BẮT BUỘC truyền jd_id chính là id đó vào search_candidates / compare_candidates. HR đang nhìn màn hình vị trí đó nên "4 người cao nhất" LUÔN có nghĩa là 4 người cao nhất CỦA VỊ TRÍ ĐANG MỞ. Bỏ trống jd_id ở đây là SAI NGHIÊM TRỌNG: nó gom cả ứng viên của những vị trí khác, và các tool sau (add_to_shortlist, generate_interview_questions) sẽ thao tác lan sang những vị trí HR không hề mở.
+2. KHÔNG có ngữ cảnh giao diện, mà HR hỏi kiểu tra cứu chung ("tìm người biết Python", "ai điểm trên 80"): bỏ trống jd_id để tìm xuyên mọi vị trí.
+3. KHÔNG có ngữ cảnh giao diện, mà HR yêu cầu HÀNH ĐỘNG (thêm vào shortlist, tạo câu hỏi, chốt nhận/loại) nhưng không nêu vị trí: gọi list_jds rồi HỎI LẠI HR làm cho vị trí nào. Đừng tự chọn, và đừng làm cho tất cả.
+- HR nói rõ một vị trí khác, hoặc nói "tất cả vị trí"/"mọi vị trí": làm theo HR, ngữ cảnh giao diện nhường chỗ.
 
 KHÔNG BAO GIỜ TỰ NGHĨ RA TÊN HAY ID — QUY TẮC QUAN TRỌNG NHẤT:
 - Mọi candidate_id/tên ứng viên bạn truyền vào tool PHẢI lấy nguyên văn từ kết quả một tool đã gọi TRONG hội thoại này (thường là search_candidates), hoặc do chính HR gõ ra.
@@ -230,8 +255,18 @@ KHÔNG BAO GIỜ TỰ NGHĨ RA TÊN HAY ID — QUY TẮC QUAN TRỌNG NHẤT:
 LÀM VIỆC THEO LÔ — RẤT QUAN TRỌNG:
 - HR nói "tất cả những người...", "mỗi người...", "nhóm trên X điểm": TRƯỚC HẾT gọi search_candidates một lần để lấy danh sách, RỒI truyền TẤT CẢ tên đó vào MỘT lời gọi tool (add_to_shortlist, generate_interview_questions đều nhận candidate_ids là DANH SÁCH).
 - HR nói "N người điểm cao nhất" / "top N": gọi search_candidates với limit=N (kết quả ĐÃ sắp theo điểm giảm dần), rồi CHÉP NGUYÊN mảng candidate_ids trong kết quả sang các tool tiếp theo. Đừng dùng compare_candidates để lấy danh sách — nó chỉ để so sánh.
+- HR nói "N người điểm THẤP nhất" / "kém nhất" / "cuối bảng": gọi search_candidates với order="asc" và limit=N. ĐỪNG lấy danh sách giảm dần rồi tự chọn ra mấy người cuối, và đừng hỏi HR tên từng người — tool làm được việc này.
+- "Điểm" mặc định là ĐIỂM SÀNG LỌC CV (thang 100, từ search_candidates). Chỉ khi HR nói rõ "điểm phỏng vấn" thì mới dùng list_interview_results (thang 10).
 - TUYỆT ĐỐI KHÔNG gọi cùng một tool lặp đi lặp lại cho từng người. Làm vậy vừa chậm, vừa dễ hết hạn mức giữa chừng và bỏ sót người.
 - HR nêu con số cụ thể (vd "mỗi người 3 câu hỏi"): PHẢI truyền num_questions=3, đừng để mặc định.
+
+SAU PHỎNG VẤN — ĐI ĐÚNG THỨ TỰ NÀY:
+- HR thuật lại ứng viên trả lời thế nào: gọi get_interview TRƯỚC để lấy danh sách câu hỏi có đánh số, rồi record_interview_answers với answers xếp ĐÚNG theo thứ tự đó (câu HR không nhắc tới thì để chuỗi rỗng ở đúng vị trí, đừng dồn lên). AI sẽ tự chấm điểm từng câu.
+- Chấm xong, HR muốn đóng buổi phỏng vấn: finish_interview (mặc định chỉ xem trước; HR đồng ý thì gọi lại confirm=true).
+- HR hỏi "ai phỏng vấn trên X điểm", "điểm trung bình": dùng list_interview_results, KHÔNG dùng search_candidates. Điểm phỏng vấn thang 10, điểm sàng lọc CV thang 100 — nhầm thang là chốt nhầm người.
+- HR nói "đồng ý/nhận/loại/từ chối những người ...": set_candidate_decision (chỉ GHI quyết định, ứng viên chưa biết gì), rồi send_decision_emails để báo cho họ.
+- send_decision_emails gửi thư THẬT, không thu hồi được: gọi lần đầu KHÔNG có confirm để lấy bản xem trước, đọc cho HR nghe sẽ gửi cho ai, rồi mới gọi lại với confirm=true khi HR đồng ý.
+- Yêu cầu gộp kiểu "chốt nhận và gửi mail cho người trên 7 điểm" vẫn phải tách đúng 3 bước: list_interview_results -> set_candidate_decision -> send_decision_emails (xem trước -> HR xác nhận -> gửi).
 
 VĂN PHONG TRẢ LỜI — NGẮN GỌN:
 - Tối đa 1-2 câu. Chỉ nói KẾT QUẢ, không thuật lại các bước đã làm, không nhắc lại yêu cầu của HR.
@@ -312,9 +347,97 @@ def _trim_step_result(result):
     return {"_truncated": True, "preview": text[:_STEP_RESULT_CHARS]}
 
 
+# Trần độ dài kết quả tool ĐƯA VÀO NGỮ CẢNH LLM.
+#
+# VÌ SAO CẦN: kết quả tool được nối vào `messages` rồi GỬI LẠI TOÀN BỘ ở mọi bước sau
+# của lượt. Một `search_candidates` limit=20 nặng ~3.000 token; hai ba tool như vậy là
+# lượt chat chạm 10.000 token. Hậu quả đo được:
+#   - cạn trần NGÀY của model chính rất nhanh (100k TPD ≈ chỉ hơn chục lượt chat);
+#   - và khi rơi xuống model dự phòng thì prompt KHÔNG VỪA trần PHÚT của nó
+#     (gpt-oss-120b: 8.000 TPM) -> 413 Request too large -> Copilot chết hẳn thay vì
+#     chạy chậm hơn. Tức đường dự phòng chỉ tồn tại trên giấy.
+#
+# Cắt ở đây KHÔNG làm agent mù: các trường ĐIỀU KHIỂN (id, lỗi, cảnh báo, hướng dẫn
+# bước tiếp theo) luôn được giữ nguyên; thứ bị cắt là phần liệt kê dài dòng mà model
+# chỉ cần đọc lướt.
+_LLM_RESULT_CHARS = int(os.getenv("AGENT_TOOL_RESULT_CHARS", "2500"))
+
+# Những trường agent BUỘC phải thấy đầy đủ để đi tiếp cho đúng: id để chuyển sang tool
+# sau, lỗi/cảnh báo để nói lại với HR, cờ xác nhận để biết phải hỏi trước khi làm.
+_FIELDS_KHONG_CAT = (
+    "error", "warning", "message", "how_to_proceed", "next_step", "note", "status",
+    "candidate_ids", "count", "scope", "sorted_by", "by_jd", "not_found", "details",
+    "needs_confirmation", "already_in", "already_set", "not_in_shortlist", "added",
+    "updated", "recorded", "average_score", "question_count", "answered_count",
+    "jd_id", "jd", "shortlist", "title", "candidate", "failed", "skipped",
+    "will_send_count", "summary", "feedback_summary",
+)
+
+
+def _trim_for_llm(result):
+    """Rút gọn kết quả tool trước khi đưa vào ngữ cảnh LLM.
+
+    Giữ TRỌN các trường điều khiển, rồi nhét thêm các trường còn lại chừng nào chưa
+    chạm trần. Trường bị bỏ được liệt kê tên trong `_omitted` để model biết là có, chứ
+    không tưởng tool trả về thiếu.
+    """
+    if not isinstance(result, dict):
+        return result
+    try:
+        text = json.dumps(result, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        return {"error": "Kết quả tool không đọc được."}
+    if len(text) <= _LLM_RESULT_CHARS:
+        return result
+
+    gon = {k: v for k, v in result.items() if k in _FIELDS_KHONG_CAT}
+    con_lai = _LLM_RESULT_CHARS - len(json.dumps(gon, ensure_ascii=False, default=str))
+    bo_qua = []
+    for k, v in result.items():
+        if k in gon:
+            continue
+        doan = json.dumps(v, ensure_ascii=False, default=str)
+        chi_phi = len(doan) + len(k) + 4
+        if chi_phi <= con_lai:
+            gon[k] = v
+            con_lai -= chi_phi
+            continue
+        # Danh sách quá dài thì CẮT BỚT ĐUÔI chứ đừng bỏ cả trường: `candidates` đã
+        # được sắp theo điểm, nên vài mục đầu chính là phần agent cần để gọi tên người
+        # cho HR. Bỏ trắng cả mảng thì nó chỉ còn con số, và một agent biết "có 20
+        # người" mà không biết tên ai là một agent sắp bịa ra vài cái tên.
+        if isinstance(v, list) and v:
+            giu = []
+            for item in v:
+                s = json.dumps(item, ensure_ascii=False, default=str)
+                if len(s) + 2 > con_lai:
+                    break
+                giu.append(item)
+                con_lai -= len(s) + 2
+            if giu:
+                gon[k] = giu
+                if len(giu) < len(v):
+                    gon[f"_{k}_da_cat"] = f"chỉ hiện {len(giu)}/{len(v)} mục đầu danh sách"
+                continue
+        bo_qua.append(k)
+    if bo_qua:
+        gon["_omitted"] = bo_qua
+    if bo_qua or any(k.endswith("_da_cat") for k in gon):
+        gon["_note"] = (
+            "Kết quả dài nên đã rút gọn. Mọi id, lỗi và cảnh báo đều còn ĐỦ ở trên — "
+            "riêng phần liệt kê bị cắt bớt. TUYỆT ĐỐI không bịa nội dung phần đã cắt; "
+            "cần thêm thì gọi lại tool với bộ lọc hẹp hơn."
+        )
+    return gon
+
+
 async def _agent_loop(messages: list, tools: list, execute) -> dict:
     """`execute`: async callable (name, args) -> dict kết quả tool."""
     used: list[str] = []
+    # Tool GHI đã chạy XONG và không báo lỗi. Khác `used` (gồm cả tool đọc lẫn tool
+    # hỏng): đây là danh sách những TÁC DỤNG PHỤ đã thật sự xảy ra, và nếu lượt này
+    # chết giữa chừng thì HR bắt buộc phải được biết đúng danh sách đó.
+    da_ghi: list[str] = []
     steps: list[dict] = []
     ui_actions: list[dict] = []
     usage = {"prompt_tokens": 0, "completion_tokens": 0}
@@ -339,7 +462,9 @@ async def _agent_loop(messages: list, tools: list, execute) -> dict:
         try:
             resp = await _complete(messages, tools)
         except Exception as e:  # noqa: BLE001 - trả lời nhẹ nhàng thay vì 500
-            return _out(_friendly_error(e), error=str(e))
+            # `da_ghi` là phần bắt buộc: lượt LLM cuối (viết câu trả lời) hỏng KHÔNG
+            # xoá đi những gì các tool trước đó đã ghi vào DB.
+            return _out(_friendly_error(e, da_ghi), error=str(e))
 
         if getattr(resp, "usage", None):
             usage["prompt_tokens"] += resp.usage.prompt_tokens or 0
@@ -378,6 +503,14 @@ async def _agent_loop(messages: list, tools: list, execute) -> dict:
             used.append(name)
             steps.append({"tool": name, "args": args, "result": _trim_step_result(result)})
 
+            # Ghi nhận tác dụng phụ ĐÃ xảy ra. `spec.read_only` là nguồn sự thật (khai
+            # trong tool_registry), nên tool mới thêm sau này tự động được tính đúng.
+            spec = SPECS.get(name)
+            if spec and not spec.read_only and not (
+                isinstance(result, dict) and "error" in result
+            ):
+                da_ghi.append(name)
+
             # Directive điều hướng giao diện cho frontend.
             if isinstance(result, dict):
                 if isinstance(result.get("ui_action"), dict):
@@ -390,7 +523,9 @@ async def _agent_loop(messages: list, tools: list, execute) -> dict:
             messages.append({
                 "role": "tool",
                 "tool_call_id": tc.id,
-                "content": json.dumps(result, default=str, ensure_ascii=False),
+                # Rút gọn TRƯỚC khi vào ngữ cảnh: chuỗi này được gửi lại cho LLM ở
+                # MỌI bước còn lại của lượt, nên mỗi ký tự thừa ở đây bị nhân lên.
+                "content": json.dumps(_trim_for_llm(result), default=str, ensure_ascii=False),
             })
 
     return _out("Xin lỗi, yêu cầu cần quá nhiều bước để xử lý. Bạn thử tách nhỏ giúp mình nhé.")

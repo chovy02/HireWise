@@ -39,6 +39,12 @@ SAFETY_RATIO = float(os.getenv("LLM_SAFETY_RATIO", "0.85"))
 _DEFAULT_LIMITS = {
     "llama-3.3-70b-versatile": {"rpm": 30, "tpm": 12_000, "rpd": 1_000, "tpd": 100_000},
     "llama-3.1-8b-instant": {"rpm": 30, "tpm": 6_000, "rpd": 14_400, "tpd": 500_000},
+    # Model dự phòng cùng đẳng cấp (xem BACKUP_MODEL trong gemini_client). rpm/tpm lấy
+    # từ chính header `x-ratelimit-limit-*` của Groq; tpd để mức thận trọng vì header
+    # không nói gì về trần ngày — ước thấp thì cùng lắm là chờ sớm hơn cần thiết, ước
+    # cao thì đâm thẳng vào 429 và ăn cooldown.
+    "openai/gpt-oss-120b": {"rpm": 30, "tpm": 8_000, "rpd": 1_000, "tpd": 100_000},
+    "openai/gpt-oss-20b": {"rpm": 30, "tpm": 8_000, "rpd": 1_000, "tpd": 100_000},
 }
 
 # Hạn mức cho model lạ (không có trong bảng trên): lấy mức thấp nhất cho an toàn.

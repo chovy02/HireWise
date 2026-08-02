@@ -13,7 +13,12 @@ from app.core.ownership import (
     get_owned_question,
 )
 from app.services.ai_agent.evaluation_view import weakness_context
-from app.services.ai_agent.interviewer import generate_interview_questions_ai, evaluate_interview_answer_ai, summarize_interview_ai
+from app.services.ai_agent.interviewer import (
+    eval_failed,
+    evaluate_interview_answer_ai,
+    generate_interview_questions_ai,
+    summarize_interview_ai,
+)
 
 router = APIRouter(
     prefix="/interviews",
@@ -255,6 +260,21 @@ def evaluate_answer(
         answer=payload.answer_text,
         allow_follow_up=can_follow_up
     )
+
+    # AI HỎNG THÌ KHÔNG GHI GÌ CẢ.
+    #
+    # `evaluate_interview_answer_ai` nuốt mọi lỗi và trả về một bản giữ chỗ 0 điểm.
+    # Lưu nó xuống là biến "chưa chấm được" thành "bị 0 điểm" — mà 0 điểm chính là con
+    # số HR dùng để loại người, và về sau không ai phân biệt lại được. Thà báo lỗi để
+    # HR bấm chấm lại: câu trả lời họ vừa gõ vẫn còn nguyên trên màn hình.
+    if eval_failed(ai_eval):
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "AI đang không chấm được câu trả lời (thường do hết hạn mức trong ngày) "
+                "nên chưa lưu gì cả. Bạn thử lại sau ít phút nhé."
+            ),
+        )
 
     # Cập nhật kết quả cho câu hỏi hiện tại
     question.answer_text = payload.answer_text
