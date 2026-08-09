@@ -20,11 +20,14 @@ Tất cả hàm nhận `db` là tham số đầu tiên (Session), phần còn l�
 """
 
 import asyncio
+import itertools
 import unicodedata
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
+from urllib.parse import urlencode
 
-from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app import models
@@ -66,6 +69,33 @@ def _uuid(value) -> uuid.UUID:
         return uuid.UUID(str(value))
     except (ValueError, AttributeError, TypeError):
         raise ValueError(f"ID không hợp lệ: {value!r}")
+
+
+# Bộ đếm nonce điều hướng. `itertools.count` chứ không phải dấu thời gian giây: một
+# lượt agent gọi vài tool trong CÙNG một giây, mà hai directive trùng hệt nhau thì cái
+# sau không làm gì cả.
+_dem_dieu_huong = itertools.count(1)
+
+
+def dieu_huong(path: str, **query) -> dict:
+    """Directive bảo giao diện mở `path`, LUÔN kèm nonce `t`.
+
+    MỌI đường điều hướng phải đi qua đây. Lý do là lỗi HR gặp nhiều nhất: agent làm
+    xong việc nhưng màn hình bên trái đứng im, phải F5 mới thấy. Agent thường điều
+    hướng tới ĐÚNG trang HR đang đứng, mà React Router coi "cùng một URL" là không có
+    gì xảy ra — component không remount, effect nạp dữ liệu không chạy lại, nên HR nhìn
+    thấy y nguyên dữ liệu cũ. `t` đổi mỗi lần khiến URL luôn khác đi, và các trang đặt
+    nó trong deps của effect sẽ nạp lại.
+
+    Trước đây `t` chỉ được gắn tay ở hai chỗ (shortlist, phỏng vấn); 5 đường còn lại
+    (`open_jd`, `open_dashboard`, `open_shortlisting`, highlight kết quả tìm kiếm, mở
+    chi tiết ứng viên) đều thiếu — nên đúng những thao tác hay dùng nhất lại là những
+    thao tác không làm màn hình động đậy.
+    """
+    q = {k: str(v) for k, v in query.items() if v not in (None, "")}
+    # mốc giây + số đếm trong tiến trình: đọc log biết được lúc nào, mà vẫn không trùng.
+    q["t"] = f"{int(datetime.now(timezone.utc).timestamp())}-{next(_dem_dieu_huong)}"
+    return {"type": "navigate", "path": f"{path}?{urlencode(q)}"}
 
 
 def _owner_filter(q, owner_id):
@@ -276,7 +306,9 @@ def list_jds(db: Session, status: str = "active", owner_id=None) -> dict:
         q = q.filter(models.JobDescription.status == status)
     rows = q.order_by(models.JobDescription.created_at.desc()).all()
     jds = [{"jd_id": str(j.id), "title": j.title, "status": j.status} for j in rows]
-    return {"count": len(jds), "jds": jds}
+    # Dashboard CHÍNH LÀ danh sách vị trí — HR hỏi "đang tuyển những vị trí nào" thì mở
+    # ra cho họ nhìn, đừng bắt đọc lại y hệt trong khung chat rồi tự bấm sang.
+    return {"count": len(jds), "jds": jds, "ui_action": dieu_huong("/")}
 
 
 def get_jd(db: Session, jd_id: str, owner_id=None) -> dict:
@@ -294,6 +326,8 @@ def get_jd(db: Session, jd_id: str, owner_id=None) -> dict:
         "jd_markdown": md[:_JD_MARKDOWN_MAX],
         "jd_markdown_truncated": truncated,
         "status": jd.status,
+        # HR xin "xem chi tiết vị trí X" -> mở đúng trang vị trí đó ra.
+        "ui_action": dieu_huong(f"/projects/{jd.id}"),
     }
 
 
@@ -375,11 +409,10 @@ def search_candidates(
         jd_ids = {c.jd_id for c in rows}
         if len(jd_ids) == 1:
             target = jd.id if jd else next(iter(jd_ids))
-            ids = ",".join(b["candidate_id"] for b in briefs)
-            result["ui_action"] = {
-                "type": "navigate",
-                "path": f"/projects/{target}?highlight={ids}",
-            }
+            result["ui_action"] = dieu_huong(
+                f"/projects/{target}",
+                highlight=",".join(b["candidate_id"] for b in briefs),
+            )
     return result
 
 
@@ -396,7 +429,7 @@ def get_candidate(db: Session, candidate_id: str, owner_id=None) -> dict:
         # skills / evaluation / interview), nên `c.projects` ném AttributeError và
         # tool này hỏng ở MỌI lượt gọi. Kỹ năng đã nằm trong _candidate_brief.
         # LC1: mở popup chi tiết đánh giá ứng viên này trên app (query ?open=).
-        "ui_action": {"type": "navigate", "path": f"/projects/{c.jd_id}?open={c.id}"},
+        "ui_action": dieu_huong(f"/projects/{c.jd_id}", open=c.id),
     }
 
 
@@ -407,51 +440,74 @@ def create_jd(db: Session, raw_text: str, created_by: str, owner_id=None) -> dic
     """created_by do agent loop tiêm vào (user đang đăng nhập), LLM không điền.
     `owner_id` nhận cho đồng nhất với các tool khác — ở đây chính là created_by."""
     jd = create_jd_from_text(db, raw_text, _uuid(created_by))
-    return {"jd_id": str(jd.id), "title": jd.title, "status": jd.status}
+    return {
+        "jd_id": str(jd.id),
+        "title": jd.title,
+        "status": jd.status,
+        # Mở luôn vị trí vừa tạo. Directive nằm ở ĐÂY chứ không phải trong agent loop:
+        # ở đó nó là một câu `if name == "create_jd"` đặc cách theo tên tool, mà luật
+        # "tool tự khai màn hình của mình" chỉ giữ được nếu không có ngoại lệ nào.
+        # (Agent loop vẫn phải tự thêm `refresh` cho danh sách dự án ở cột trái — JD
+        # mới chưa có trong `projects` của frontend.)
+        "ui_action": dieu_huong(f"/projects/{jd.id}"),
+    }
 
 
 def compare_candidates(
     db: Session,
     candidate_ids: list[str] | None = None,
     jd_id: str | None = None,
-    top_n: int | None = None,
+    count: int | None = None,
+    order: str = "",
     aspect: str = "",
     owner_id=None,
 ) -> dict:
     """
     So sánh ứng viên. Hai cách dùng:
       1) HR chỉ đích danh  -> truyền candidate_ids (UUID HOẶC tên).
-      2) HR nói "top N"    -> truyền jd_id + top_n, TOOL tự lấy N người điểm cao nhất
-         từ DB (không bắt LLM phải nhớ/đọc ra từng UUID -> hết cảnh "bảo 3 mà so 2").
+      2) HR nói "N người X nhất" -> truyền jd_id + count + order, TOOL tự lấy đúng N
+         người đó từ DB (không bắt LLM phải nhớ/đọc ra từng UUID -> hết cảnh "bảo 3
+         mà so 2").
     Thiếu người thì BÁO RÕ, không âm thầm bỏ qua.
+
+    `order` KHÔNG PHẢI tuỳ chọn phụ. Trước đây tham số này tên là `top_n` và câu truy
+    vấn hard-code `score.desc()`, nên "so sánh 3 ứng viên có điểm THẤP NHẤT" là việc
+    KHÔNG LÀM ĐƯỢC: tool luôn trả về 3 người đứng đầu bảng, rồi LLM viết lại thành
+    "ba ứng viên điểm thấp nhất là …". Không có gì trong hệ thống báo sai, mà đó lại
+    đúng là câu HR hỏi khi cần quyết định LOẠI ai — tin vào nó là loại nhầm đúng
+    những người giỏi nhất. Đã xảy ra thật hai lần.
     """
     cands: list[models.Candidate] = []
     missing: list[str] = []
     ly_do: list[str] = []
+    chieu: str | None = None
 
     if candidate_ids:
         # Tool ĐỌC: so phần tìm được rồi cảnh báo, không chặn cả lô như tool ghi —
         # xem `_TU_CHOI_DANH_SACH_HONG`.
         cands, missing, ly_do = _resolve_refs(db, candidate_ids, owner_id)
-    elif jd_id and top_n:
+    elif jd_id and count:
         jd, err = _find_jd(db, jd_id, owner_id)
         if jd is None:
             return {"error": err}
+        tang_dan = str(order or "").strip().lower() == "asc"
+        chieu = "điểm THẤP nhất" if tang_dan else "điểm CAO nhất"
+        diem = (
+            models.Evaluation.score.asc() if tang_dan
+            else models.Evaluation.score.desc()
+        )
         cands = (
             db.query(models.Candidate)
             .join(models.Evaluation, models.Evaluation.cv_id == models.Candidate.id)
             .filter(models.Candidate.jd_id == jd.id)
-            # Chốt phá hoà như ở find_top_candidates: "top 3" phải luôn ra cùng 3 người.
-            .order_by(
-                models.Evaluation.score.desc(),
-                models.Candidate.created_at,
-                models.Candidate.id,
-            )
-            .limit(max(2, int(top_n)))
+            # Chốt phá hoà: "3 người cao nhất" phải luôn ra cùng 3 người, kể cả khi có
+            # ứng viên trùng điểm ngay tại mốc cắt.
+            .order_by(diem, models.Candidate.created_at, models.Candidate.id)
+            .limit(max(2, int(count)))
             .all()
         )
     else:
-        return {"error": "Cần truyền candidate_ids, hoặc jd_id + top_n."}
+        return {"error": "Cần truyền candidate_ids, hoặc jd_id + count + order."}
 
     if len(cands) < 2:
         return {
@@ -477,6 +533,16 @@ def compare_candidates(
     # Cho LLM biết chính xác đã so ai, và ai không tìm thấy -> nó phải nói ra cho HR.
     result["compared"] = [c.name for c in cands]
     result["compared_count"] = len(cands)
+    if chieu:
+        # Nói thẳng đã lấy đầu nào của bảng. Cùng một bộ 3 người, hiểu nhầm chiều là
+        # báo với HR "3 người kém nhất" trong khi đó là 3 người giỏi nhất.
+        result["selected"] = f"{len(cands)} người {chieu} của vị trí {jd.title}"
+    # Tô sáng đúng những người vừa được đem ra so trên bảng xếp hạng, để HR đối chiếu
+    # được bài so sánh với điểm số thật. Mọi ứng viên ở đây chắc chắn cùng một vị trí —
+    # khác vị trí thì đã thoát ở nhánh trên.
+    result["ui_action"] = dieu_huong(
+        f"/projects/{jd_ref}", highlight=",".join(str(c.id) for c in cands)
+    )
     if missing:
         result["not_found"] = missing
         result["details"] = ly_do
@@ -639,7 +705,28 @@ def generate_interview_questions(
             "Những người này đã có dữ liệu phỏng vấn HR nhập. Hỏi HR xác nhận, nếu đồng "
             "ý thì gọi lại CHỈ với các tên đó kèm replace=true. PHẢI báo cho HR biết."
         )
+
+    # CHỈ mở màn hình phỏng vấn khi làm cho ĐÚNG MỘT người: cả lô 5 người mà nhảy vào
+    # buổi của một người thì HR tưởng 4 người kia bị bỏ sót. Lô nhiều người cứ để HR
+    # đứng yên và đọc câu trả lời của agent.
+    xong = [c for c, r in zip(cands, results) if r["status"] in ("created", "replaced")]
+    if len(cands) == 1 and xong:
+        out["ui_action"] = _mo_phong_van(xong[0])
     return out
+
+
+def _mo_phong_van(c: models.Candidate) -> dict:
+    """Directive mở màn hình phỏng vấn CỦA ĐÚNG ứng viên này.
+
+    Vì sao không dùng `/projects/{jd}?open={cv}` như trước: đường đó mở trang tổng quan
+    vị trí rồi bật popup chi tiết ĐÁNH GIÁ — HR nhờ "chấm câu trả lời của Nguyễn Minh
+    Khoa" xong lại bị ném ra màn hình tổng quan "Backend Python", không thấy buổi phỏng
+    vấn mình vừa nhờ agent làm việc trên đó. Đúng lỗi đã gặp.
+
+    Màn hình phỏng vấn KHÔNG có route riêng: nó là chế độ xem thứ ba của /shortlisting
+    (`view === 'interview'` + `interviewFor`), nên phải đi qua query param.
+    """
+    return dieu_huong("/shortlisting", jd=c.jd_id, view="interview", cv=c.id)
 
 
 # --------------------------------------------------------------------------- #
@@ -648,15 +735,34 @@ def generate_interview_questions(
 def create_shortlist(
     db: Session, jd_id: str, name: str, created_by: str, owner_id=None
 ) -> dict:
-    """Tạo 1 shortlist mới cho 1 vị trí."""
+    """Tạo 1 shortlist rỗng cho 1 vị trí; đã có shortlist cùng tên thì DÙNG LẠI.
+
+    Bản trước INSERT thẳng, không tra gì cả — nên chỉ cần agent gọi tool này rồi gọi
+    tiếp add_to_shortlist với cùng cái tên (hoặc HR nhờ tạo lại lần nữa) là vị trí đó
+    có hai shortlist trùng tên. Dùng chung `_shortlist_for` với add_to_shortlist để
+    hai đường vào không thể cho ra hai kết quả khác nhau.
+    """
     jd, err = _find_jd(db, jd_id, owner_id)
     if jd is None:
         return {"error": err}
-    sl = models.Shortlist(jd_id=jd.id, name=name.strip(), created_by=_uuid(created_by))
-    db.add(sl)
-    db.commit()
-    db.refresh(sl)
-    return {"status": "created", "shortlist_id": str(sl.id), "name": sl.name, "jd": jd.title}
+    ten = _ten_shortlist(name)
+    if not ten:
+        return {"error": "Cần tên shortlist."}
+
+    da_co = _norm(ten) in {_norm(s.name) for s in jd.shortlists}
+    sl = _shortlist_for(db, jd.id, ten, created_by)
+    return {
+        # "exists" chứ không im lặng báo "created": agent phải nói đúng cho HR là danh
+        # sách đó có sẵn, thay vì để HR tưởng vừa có thêm một danh sách mới.
+        "status": "exists" if da_co else "created",
+        "shortlist_id": str(sl.id),
+        "name": sl.name,
+        "jd": jd.title,
+        "count": len(sl.items),
+        # Mở luôn danh sách vừa tạo. Không có dòng này thì HR nhờ "tạo shortlist tên X"
+        # xong ngồi nhìn màn hình cũ, không có gì chứng tỏ nó đã được tạo.
+        "ui_action": _mo_shortlist(sl),
+    }
 
 
 def list_shortlists(db: Session, jd_id: str, owner_id=None) -> dict:
@@ -664,33 +770,93 @@ def list_shortlists(db: Session, jd_id: str, owner_id=None) -> dict:
     jd, err = _find_jd(db, jd_id, owner_id)
     if jd is None:
         return {"error": err}
-    return {
+    ds = sorted(jd.shortlists, key=lambda s: s.created_at)
+    out = {
         "jd": jd.title,
         "shortlists": [
             {"shortlist_id": str(s.id), "name": s.name, "count": len(s.items)}
-            for s in jd.shortlists
+            for s in ds
         ],
     }
+    # Mở màn hình shortlist của ĐÚNG vị trí đó, và chọn sẵn danh sách đầu tiên. Không
+    # có shortlist nào thì vẫn mở — HR thấy ngay "chưa có" kèm nút tạo, đỡ phải hỏi lại.
+    out["ui_action"] = (
+        _mo_shortlist(ds[0]) if ds
+        else dieu_huong("/shortlisting", jd=jd.id, view="shortlist")
+    )
+    return out
+
+
+def _mo_shortlist(sl: models.Shortlist) -> dict:
+    """Directive mở ĐÚNG shortlist này trên giao diện.
+
+    Vì sao không chỉ trả `/shortlisting`: trang đó mặc định mở chế độ Leaderboard của
+    một vị trí nào đó, nên HR vừa bảo "thêm 3 người vào shortlist" xong lại nhìn thấy
+    bảng xếp hạng toàn bộ ứng viên — tưởng agent chưa làm gì.
+
+    Nonce `t` do `dieu_huong` lo.
+    """
+    return dieu_huong("/shortlisting", jd=sl.jd_id, view="shortlist", sl=sl.id)
+
+
+def _ten_shortlist(name) -> str:
+    """Dạng chuẩn của tên shortlist để LƯU vào DB (vẫn giữ dấu và chữ hoa của HR).
+
+    Chỉ gộp khoảng trắng và đưa về NFC. NFC không thừa: chữ "ề" có hai cách mã hoá
+    (một ký tự dựng sẵn, hoặc "e" + dấu rời), LLM lượt này trả cách này lượt sau trả
+    cách kia — hai chuỗi HIỆN RA GIỐNG HỆT NHAU nhưng `==` là False.
+    """
+    return unicodedata.normalize("NFC", " ".join(str(name or "").split()))
 
 
 def _shortlist_for(db: Session, jd_id, name: str, created_by: str) -> models.Shortlist:
     """Lấy shortlist tên `name` của một vị trí, chưa có thì tạo.
 
-    So tên KHÔNG PHÂN BIỆT HOA/THƯỜNG: HR gõ "điểm cao" nhưng LLM hay viết hoa lại
-    thành "Điểm cao", và khớp chính xác sẽ đẻ ra hai shortlist khác nhau cho cùng một
-    ý định — HR mở màn hình lên thấy danh sách bị xé đôi mà không hiểu vì sao.
+    SO TÊN BẰNG `_norm` (bỏ dấu, hạ chữ, gộp khoảng trắng) chứ không so thô, vì cùng
+    MỘT Ý ĐỊNH của HR đến đây dưới rất nhiều mặt chữ khác nhau: HR gõ "tiềm năng",
+    LLM viết lại "Tiềm Năng" / "tiem nang" / "tiềm  năng", có lượt còn dùng dấu rời
+    (NFD) nên chuỗi trông y hệt mà `==` vẫn False. Mỗi biến thể trượt là một shortlist
+    mới — đúng lỗi HR gặp: dropdown hiện hai dòng "tiềm năng (3)" giống hệt nhau.
+
+    Trong nhóm khớp thì lấy bản CŨ NHẤT, để hai lượt agent gọi cách nhau vẫn rơi vào
+    cùng một shortlist thay vì tuỳ thứ tự Postgres trả về.
+
+    Lọc bằng Python (mỗi vị trí chỉ có vài shortlist) thay vì trong SQL: so bỏ dấu
+    trong Postgres cần extension `unaccent`, không có sẵn trong image đang dùng.
     """
-    sl = (
-        db.query(models.Shortlist)
-        .filter(models.Shortlist.jd_id == jd_id, func.lower(models.Shortlist.name) == name.lower())
-        .first()
-    )
-    if sl is None:
-        sl = models.Shortlist(jd_id=jd_id, name=name, created_by=_uuid(created_by))
-        db.add(sl)
+    name = _ten_shortlist(name)
+    khoa = _norm(name)
+
+    def tim() -> models.Shortlist | None:
+        ds = (
+            db.query(models.Shortlist)
+            .filter(models.Shortlist.jd_id == jd_id)
+            .order_by(models.Shortlist.created_at, models.Shortlist.id)
+            .all()
+        )
+        return next((s for s in ds if _norm(s.name) == khoa), None)
+
+    sl = tim()
+    if sl is not None:
+        return sl
+
+    # Tra-rồi-ghi vẫn còn khe hở khi hai lượt chạy chồng nhau: cả hai cùng thấy "chưa
+    # có" rồi cùng INSERT. Unique index uq_shortlists_jd_ten (models.Shortlist) là
+    # chốt cuối; ở đây chỉ cần nhận lỗi đó rồi tra lại để dùng bản mà lượt kia vừa tạo.
+    # begin_nested() để INSERT hỏng chỉ cuộn lại SAVEPOINT này, không giết cả session.
+    try:
+        with db.begin_nested():
+            sl = models.Shortlist(jd_id=jd_id, name=name, created_by=_uuid(created_by))
+            db.add(sl)
         db.commit()
         db.refresh(sl)
-    return sl
+        return sl
+    except IntegrityError:
+        db.rollback()
+        sl = tim()
+        if sl is None:  # không phải va chạm tên -> để lỗi thật nổi lên
+            raise
+        return sl
 
 
 def add_to_shortlist(
@@ -717,7 +883,7 @@ def add_to_shortlist(
     if not refs:
         return {"error": "Cần ít nhất 1 ứng viên."}
 
-    name = (shortlist_name or "AI Shortlist").strip() or "AI Shortlist"
+    name = _ten_shortlist(shortlist_name) or "AI Shortlist"
 
     # Resolve TRỌN danh sách trước, chưa ghi gì. Đây là tool đã từng thêm nhầm một
     # người thật vào shortlist vì LLM bịa tên "Trần Thị B" — xem `_TU_CHOI_DANH_SACH_HONG`
@@ -756,8 +922,17 @@ def add_to_shortlist(
     added, already_in = [], []
     theo_vi_tri: dict[str, int] = {}
 
+    # LLM hay kể trùng một người trong cùng danh sách ("Nam", rồi "Nguyễn Văn Nam");
+    # `_resolve_refs` giải ra cùng một Candidate nên phải lọc, không thì `added` đếm
+    # người đó hai lần và agent báo lại cho HR con số sai.
+    da_thay: set = set()
+    cands = [c for c in cands if not (c.id in da_thay or da_thay.add(c.id))]
+
+    dich: models.Shortlist | None = None  # shortlist để MỞ RA cho HR xem ngay
     for c in cands:
         sl = _shortlist_for(db, c.jd_id, name, created_by)
+        if dich is None:
+            dich = sl
         exists = (
             db.query(models.ShortlistItem)
             .filter(
@@ -778,16 +953,19 @@ def add_to_shortlist(
     db.commit()
 
     out = {
-        "shortlist": name,
+        # Tên THẬT của shortlist đang dùng, không phải tên LLM vừa gõ: "Tiềm Năng" có
+        # thể rơi vào danh sách "tiềm năng" đã có sẵn, và agent phải nhắc lại cho HR
+        # đúng cái tên HR nhìn thấy trên màn hình.
+        "shortlist": dich.name if dich is not None else name,
         "added": added,
         "added_count": len(added),
         "by_jd": theo_vi_tri,
     }
     if already_in:
         out["already_in"] = already_in
-    # Điều hướng sang màn hình Shortlisting để HR thấy ngay kết quả.
-    if added:
-        out["ui_action"] = {"type": "navigate", "path": "/shortlisting"}
+    # Mở ĐÚNG shortlist vừa thao tác, không chỉ mở màn hình Shortlisting.
+    if dich is not None:
+        out["ui_action"] = _mo_shortlist(dich)
     return out
 
 
@@ -832,7 +1010,10 @@ def send_interview_invite(
         _run_async(send_interview_email(c.email, preview["name"], when, location))
     except Exception as e:  # noqa: BLE001 - SMTP hỏng phải nói rõ, không giả vờ đã gửi
         return {"error": f"Gửi email thất bại: {type(e).__name__}: {e}", **preview}
-    return {"status": "sent", **preview}
+    # Thư đã ra khỏi máy chủ -> mở buổi phỏng vấn của đúng người đó, vì việc kế tiếp
+    # của HR luôn là chuẩn bị câu hỏi cho họ. Chỉ mở khi GỬI THẬT: bản xem trước
+    # (confirm=False) và ca gửi hỏng đều thoát ở trên, chưa có gì đổi để mà xem.
+    return {"status": "sent", **preview, "ui_action": _mo_phong_van(c)}
 
 
 # --------------------------------------------------------------------------- #
@@ -921,7 +1102,7 @@ def get_interview(db: Session, candidate_id: str, owner_id=None) -> dict:
             }
             for i, q in enumerate(_questions_in_order(interview), start=1)
         ],
-        "ui_action": {"type": "navigate", "path": f"/projects/{c.jd_id}?open={c.id}"},
+        "ui_action": _mo_phong_van(c),
     }
 
 
@@ -1079,6 +1260,10 @@ def record_interview_answers(
             f"{len(cham_hong)} câu KHÔNG chấm được (AI lỗi) nên KHÔNG được lưu — chúng vẫn "
             "trống chứ không phải bị 0 điểm. PHẢI nói rõ điều này với HR."
         )
+    # Mở thẳng biên bản phỏng vấn của ĐÚNG người vừa chấm, để HR đọc lại được nhận xét
+    # từng câu. Trước đây tool này không trả ui_action nào nên HR ngồi lại nguyên màn
+    # hình cũ (thường là trang tổng quan vị trí) và tưởng agent chưa làm gì.
+    out["ui_action"] = _mo_phong_van(c)
     return out
 
 
@@ -1108,6 +1293,8 @@ def finish_interview(
             "status": "already_completed",
             "average_score": trung_binh,
             "feedback_summary": interview.feedback_summary,
+            # Không kết thúc lại được, nhưng bản tổng kết cũ vẫn là thứ HR đang hỏi tới.
+            "ui_action": _mo_phong_van(c),
         }
 
     tat_ca = _questions_in_order(interview)
@@ -1155,6 +1342,8 @@ def finish_interview(
         "scored_count": da_cham,
         "average_score": trung_binh,
         "feedback_summary": interview.feedback_summary,
+        # Bản tổng kết vừa viết nằm trên chính màn hình này — mở ra để HR đọc ngay.
+        "ui_action": _mo_phong_van(c),
     }
 
 
@@ -1221,6 +1410,16 @@ def list_interview_results(
             f"{len(chua_cham)} ứng viên đã có buổi phỏng vấn nhưng CHƯA chấm câu nào nên "
             "không nằm trong danh sách trên. PHẢI nói điều này cho HR trước khi chốt."
         )
+
+    # Đúng MỘT người -> mở thẳng biên bản của họ, đó chắc chắn là thứ HR đang hỏi tới.
+    #
+    # Nhiều người thì KHÔNG điều hướng: hệ thống không có màn hình nào bày bảng điểm
+    # phỏng vấn của cả nhóm. Kéo HR sang một trang chỉ khớp một phần còn tệ hơn để họ
+    # đứng yên đọc câu trả lời — họ sẽ tưởng trang đó là câu trả lời đầy đủ.
+    if len(rows) == 1:
+        c = db.query(models.Candidate).get(_uuid(rows[0]["candidate_id"]))
+        if c is not None:
+            out["ui_action"] = _mo_phong_van(c)
     return out
 
 
@@ -1261,6 +1460,7 @@ def set_candidate_decision(
     from app.services.logging import write_audit_log
 
     updated, khong_trong_shortlist, giu_nguyen = [], [], []
+    sl_dau_tien = None  # shortlist để mở ra cho HR xem kết quả
     for c in cands:
         items = (
             db.query(models.ShortlistItem)
@@ -1270,6 +1470,8 @@ def set_candidate_decision(
         if not items:
             khong_trong_shortlist.append(c.name)
             continue
+        if sl_dau_tien is None:
+            sl_dau_tien = items[0].shortlist
         doi = False
         for item in items:
             cu = item.candidate_status
@@ -1312,7 +1514,8 @@ def set_candidate_decision(
             "Quyết định mới chỉ được LƯU, ứng viên chưa biết gì. Muốn báo cho họ thì gọi "
             "send_decision_emails."
         )
-        out["ui_action"] = {"type": "navigate", "path": "/shortlisting"}
+        if sl_dau_tien is not None:
+            out["ui_action"] = _mo_shortlist(sl_dau_tien)
     return out
 
 
@@ -1333,8 +1536,6 @@ def send_decision_emails(
     jd, err = _find_jd(db, jd_id, owner_id)
     if jd is None:
         return {"error": err}
-
-    from datetime import datetime, timezone
 
     from app.routers.shortlist import (
         _classify_notify_target,
@@ -1431,8 +1632,10 @@ def send_decision_emails(
         "sent": da_gui,
         "sent_count": len(da_gui),
         "skipped": bo_qua,
-        "ui_action": {"type": "navigate", "path": "/shortlisting"},
     }
+    # Mở lại đúng shortlist vừa gửi để HR thấy ngay cột trạng thái email đổi.
+    if can_gui:
+        out["ui_action"] = _mo_shortlist(can_gui[0].shortlist)
     if that_bai:
         out["failed"] = that_bai
         out["warning"] = (
@@ -1452,16 +1655,16 @@ def open_jd(db: Session, jd_id: str, owner_id=None) -> dict:
         return {"error": err}
     return {
         "opened": jd.title,
-        "ui_action": {"type": "navigate", "path": f"/projects/{jd.id}"},
+        "ui_action": dieu_huong(f"/projects/{jd.id}"),
     }
 
 
 def open_dashboard(db: Session, owner_id=None) -> dict:
     """Mở màn hình Dashboard (danh sách vị trí tuyển dụng)."""
-    return {"ui_action": {"type": "navigate", "path": "/"}}
+    return {"ui_action": dieu_huong("/")}
 
 
 def open_shortlisting(db: Session, owner_id=None) -> dict:
     """Mở màn hình Shortlisting (danh sách rút gọn ứng viên)."""
-    return {"ui_action": {"type": "navigate", "path": "/shortlisting"}}
+    return {"ui_action": dieu_huong("/shortlisting")}
 

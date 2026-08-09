@@ -34,12 +34,58 @@ from app.services.ai_agent.mcp_client import (
     mcp_session,
 )
 from app.services.logging import write_tool_log
+from app.services.ai_agent import rate_limiter
 from app.services.ai_agent.gemini_client import record_ai_log
 
 log = logging.getLogger(__name__)
 
-_client = Groq(api_key=os.getenv("GROQ_MCP_API_KEY"))
 AGENT_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+
+# MỌI TÀI KHOẢN GROQ ĐỀU DÙNG ĐƯỢC CHO KHUNG CHAT, key riêng của chat đứng đầu.
+#
+# Groq tính hạn mức theo TÀI KHOẢN × MODEL. Trước đây khung chat chỉ dùng
+# GROQ_MCP_API_KEY, trong khi dự án có sẵn 3 tài khoản — hai cái kia để dành cho
+# pipeline chấm CV. Hậu quả đo được trong log: `Rate limit reached ... on tokens per
+# day (TPD): Limit 100000, Used 98732`. Cạn trần NGÀY của một tài khoản là mọi lượt
+# chat còn lại trong ngày phải bò trên model dự phòng yếu hơn, cộng thêm một vòng 429
+# vô ích trước mỗi lượt. Gộp cả 3 tài khoản = gấp 3 ngân sách, và vì `key_id` đặt theo
+# cùng quy ước với gemini_client (8 ký tự cuối) nên hai bên dùng CHUNG sổ sách Redis,
+# không ai tiêu lẹm phần của ai.
+_CHAT_KEY_ENV = ("GROQ_MCP_API_KEY", "GROQ_API_KEY_1", "GROQ_API_KEY_2")
+
+# Trần output cho MỘT lượt trả lời. SYSTEM_PROMPT đã yêu cầu "tối đa 1-2 câu", nên
+# 700 là rộng rãi. Không phải chuyện tiết kiệm vặt: Groq trừ hạn mức theo token YÊU
+# CẦU (prompt + phần output đặt chỗ) — xem "Requested 7301" trong chính lỗi 429 ở
+# trên — nên bỏ trống là mỗi lượt gọi tự ăn thêm ngân sách mình không hề dùng tới.
+_MAX_OUTPUT = int(os.getenv("AGENT_MAX_OUTPUT_TOKENS", "700"))
+
+
+def _cac_key() -> list[tuple[str, str]]:
+    """(key_id, api_key) của mọi tài khoản Groq khung chat được phép dùng."""
+    raw = [v for v in ((os.getenv(n) or "").strip() for n in _CHAT_KEY_ENV) if v]
+    if not raw:
+        legacy = (os.getenv("GROQ_API_KEY") or "").strip()
+        if legacy:
+            raw.append(legacy)
+    # Khử trùng: hai biến trỏ cùng một tài khoản mà đếm thành hai ngân sách độc lập
+    # thì bộ đặt chỗ cấp phát gấp đôi rồi cả hai cùng đâm vào 429.
+    return [(k[-8:], k) for k in dict.fromkeys(raw)]
+
+
+_clients: dict[str, Groq] = {}
+
+
+def _client_for(key_id: str, api_key: str) -> Groq:
+    """Client dùng lại theo key. `max_retries=0` là CỐ Ý.
+
+    Mặc định SDK của Groq tự ngủ rồi thử lại 2 lần khi gặp 429 — im lặng, ngay bên
+    trong lời gọi. Đó chính là thứ biến một lần cạn hạn mức thành 30-40 giây mà tầng
+    trên không hề thấy gì để mà xử lý. Tắt đi thì `_complete_sync` nhận lỗi NGAY và tự
+    quyết: đổi sang tài khoản khác, hoặc đổi model.
+    """
+    if key_id not in _clients:
+        _clients[key_id] = Groq(api_key=api_key, max_retries=0)
+    return _clients[key_id]
 
 # Model dự phòng khi model chính CẠN HẠN MỨC NGÀY (TPD).
 #
@@ -59,6 +105,10 @@ _FALLBACK_MODELS = [
 ]
 _MODEL_CHAIN = [AGENT_MODEL] + [m for m in _FALLBACK_MODELS if m != AGENT_MODEL]
 MAX_STEPS = int(os.getenv("AGENT_MAX_STEPS", "10"))
+# Trần THỜI GIAN cho một lượt chat, tính cả thời gian Groq bắt chờ vì chạm hạn mức.
+# Quá mốc này thì dừng và trả lời trung thực — HR ngồi nhìn "Đang xử lý…" quá lâu còn
+# tệ hơn một câu "chưa xong, bạn thử lại".
+TURN_BUDGET = float(os.getenv("AGENT_TURN_BUDGET", "75"))
 # Model llama trên Groq thỉnh thoảng sinh cú pháp gọi tool sai -> 400 tool_use_failed.
 # Đây là lỗi ngẫu nhiên, gọi lại thường qua được nên ta retry vài lần.
 _LLM_RETRIES = int(os.getenv("AGENT_LLM_RETRIES", "3"))
@@ -102,15 +152,62 @@ def _is_quota_error(err: Exception) -> bool:
     return "rate_limit" in text or "rate limit" in text or "error code: 429" in text
 
 
-def _quota_wait_hint(err: Exception) -> str:
-    """Rút thời gian chờ mà Groq gợi ý ('try again in 34m45.6s') thành lời người đọc."""
-    m = re.search(r"try again in\s+(?:(\d+)m)?([\d.]+)s", str(err), re.IGNORECASE)
+def _quota_wait_seconds(err: Exception) -> float:
+    """Số giây Groq bảo phải chờ ('try again in 1h2m19.4s'). 0 nếu không nói."""
+    m = re.search(
+        r"try again in\s+(?:(\d+)h)?(?:(\d+)m)?([\d.]+)s", str(err), re.IGNORECASE
+    )
     if not m:
+        return 0.0
+    gio, phut, giay = m.group(1), m.group(2), m.group(3)
+    return int(gio or 0) * 3600 + int(phut or 0) * 60 + float(giay or 0)
+
+
+def _quota_wait_hint(err: Exception) -> str:
+    """Thời gian chờ Groq gợi ý, diễn đạt cho người đọc."""
+    giay = _quota_wait_seconds(err)
+    if giay <= 0:
         return ""
-    phut = int(m.group(1) or 0)
-    if phut >= 1:
-        return f" Hạn mức sẽ mở lại sau khoảng {phut} phút."
+    if giay >= 60:
+        return f" Hạn mức sẽ mở lại sau khoảng {int(giay // 60)} phút."
     return " Bạn thử lại sau ít phút nhé."
+
+
+# Model nào đang bị Groq khoá, và tới bao giờ. Khoá theo TRẦN NGÀY (TPD) có thể kéo
+# hàng giờ; không nhớ lại thì MỌI lời gọi sau đó vẫn thử model đó trước, ăn thêm một
+# vòng 429 rồi mới chịu đổi — tức mỗi lượt chat lãng phí 2 round-trip vô ích, đúng lúc
+# hệ thống đang chậm nhất. Bộ nhớ này ở cấp tiến trình là đủ: mất khi restart thì cùng
+# lắm là học lại một lần.
+_model_cooldown: dict[str, float] = {}
+
+# TRẦN cho một lần nghỉ, BẤT KỂ Groq hứa bao lâu.
+#
+# Groq báo "try again in 1h2m" theo trần NGÀY, nhưng ngân sách đó hồi lại DẦN theo cửa
+# sổ trượt — đo được: nó mở lại chỉ sau vài phút. Tin nguyên con số đó là tự khoá mình
+# khỏi model TỐT NHẤT cả tiếng, ép mọi lượt chat xuống model yếu hơn (trần phút thấp
+# hơn, gọi tool kém hơn). Đã trả giá thật: một câu hỏi đơn giản mất 941 giây và kết
+# thúc bằng việc hỏi ngược HR một cái id.
+#
+# Thà cứ vài phút phí một round-trip để thử lại còn hơn.
+_COOLDOWN_MAX = float(os.getenv("AGENT_MODEL_COOLDOWN_MAX", "180"))
+
+
+def _kha_dung(model: str) -> bool:
+    het_han = _model_cooldown.get(model, 0.0)
+    if het_han and time.time() < het_han:
+        return False
+    _model_cooldown.pop(model, None)
+    return True
+
+
+def _chain_kha_dung() -> list[str]:
+    """Chuỗi model theo thứ tự ưu tiên, đã bỏ những model đang bị khoá.
+
+    Nếu KHOÁ HẾT thì vẫn trả về chuỗi đầy đủ: thà thử và nhận lỗi thật còn hơn tự từ
+    chối trong khi có thể Groq đã mở lại sớm hơn con số nó hứa.
+    """
+    con = [m for m in _MODEL_CHAIN if _kha_dung(m)]
+    return con or list(_MODEL_CHAIN)
 
 
 def _friendly_error(err: Exception, da_lam: list[str] | None = None) -> str:
@@ -149,6 +246,56 @@ def _friendly_error(err: Exception, da_lam: list[str] | None = None) -> str:
     return "Xin lỗi, mình gặp trục trặc khi xử lý yêu cầu này. Bạn thử diễn đạt lại giúp mình nhé."
 
 
+# UUID trong câu trả lời gửi cho HR: CẤM, và chặn bằng CODE chứ không chỉ bằng prompt.
+#
+# `SYSTEM_PROMPT` đã dặn "không bao giờ in UUID", nhưng prompt chỉ là xác suất — model
+# dự phòng (yếu hơn) vẫn trả về "Nguyễn Minh Khoa (ID: 6828d1a8-63b1-...)". Với HR thì
+# một chuỗi 36 ký tự vô nghĩa giữa câu là rác, và nó còn mời gọi họ chép id vào lượt sau
+# thay vì gọi tên người.
+_UUID_RE = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE
+)
+# Dọn phần bao quanh còn sót sau khi bỏ uuid: "(ID: )", "[id: ]", " - ID:" ...
+_UUID_KEM_NHAN = re.compile(
+    r"[\s,;–-]*[\(\[\{]?\s*(?:(?:với|là|có|mang)\s+)?(?:id|mã|uuid)\s*[:=]?"
+    r"\s*\)?\]?\}?\s*(?=[\)\]\},.;]|$)",
+    re.IGNORECASE,
+)
+
+
+def _bo_uuid(text: str) -> str:
+    """Bỏ mọi UUID khỏi câu trả lời, kèm nhãn 'ID:' đi cùng nó nếu có."""
+    if not text or "-" not in text:
+        return text
+    sach = _UUID_RE.sub("", text)
+    if sach == text:
+        return text
+    sach = _UUID_KEM_NHAN.sub("", sach)
+    # Dọn dấu ngoặc rỗng và khoảng trắng thừa do phần bị xoá để lại.
+    sach = re.sub(r"[\(\[\{]\s*[\)\]\}]", "", sach)
+    sach = re.sub(r"\s+([,.;:!?])", r"\1", sach)
+    return re.sub(r"[ \t]{2,}", " ", sach).strip()
+
+
+def _qua_lau(da_lam: list[str] | None = None) -> str:
+    """Câu trả lời khi lượt chạm trần thời gian.
+
+    Vẫn phải nói ra những tool GHI đã chạy xong — cùng lý do với `_friendly_error`:
+    im lặng ở đây thì HR gõ lại và hệ thống làm lần hai.
+    """
+    if da_lam:
+        viec = ", ".join(dict.fromkeys(SPECS[t].title.lower() for t in da_lam if t in SPECS))
+        return (
+            f"Mình ĐÃ kịp thực hiện: {viec}, nhưng yêu cầu này mất quá nhiều thời gian nên "
+            "mình dừng lại. Bạn kiểm tra trên màn hình giúp mình, ĐỪNG gửi lại để tránh bị "
+            "làm hai lần."
+        )
+    return (
+        "Yêu cầu này đang mất quá nhiều thời gian nên mình tạm dừng, chưa thay đổi gì cả. "
+        "Bạn thử tách nhỏ yêu cầu hoặc nói rõ hơn giúp mình nhé."
+    )
+
+
 def _complete_sync(messages: list, tools: list):
     """Gọi Groq (có tools), tự retry khi model sinh tool-call hỏng hoặc lỗi tạm thời.
 
@@ -158,21 +305,48 @@ def _complete_sync(messages: list, tools: list):
     """
     last_err = None
     start = time.time()
-    for model in _MODEL_CHAIN:
+    keys = _cac_key()
+    # Ước lượng để ĐẶT CHỖ trước. Prompt của lượt chat = system + lịch sử + kết quả
+    # tool, cộng schema tool (gửi lại nguyên vẹn ở MỌI lời gọi) — phải tính cả schema,
+    # nếu không sổ sách hụt đúng phần chiếm 3/4 mỗi lời gọi.
+    est_prompt = json.dumps(messages, default=str, ensure_ascii=False) + json.dumps(
+        tools, default=str, ensure_ascii=False
+    )
+
+    for model in _chain_kha_dung():
         for attempt in range(_LLM_RETRIES):
+            est = rate_limiter.estimate_tokens(est_prompt, _MAX_OUTPUT)
+            # Chọn TÀI KHOẢN còn ngân sách cho model này. `try_reserve` fail-open khi
+            # Redis chết (reason='no_redis') nên sự cố Redis không chặn khung chat.
+            key_id = api_key = None
+            for kid, akey in keys:
+                ok, _wait, _reason = rate_limiter.try_reserve(kid, model, est)
+                if ok:
+                    key_id, api_key = kid, akey
+                    break
+            if key_id is None:
+                # Cả 3 tài khoản đều cạn cho model này -> xuống model kế tiếp NGAY,
+                # đừng ngồi đợi: mỗi giây ở đây là HR nhìn "Đang xử lý…".
+                log.info("Mọi tài khoản đều cạn ngân sách cho %s, thử model kế tiếp.", model)
+                break
+
             try:
                 # Temperature TĂNG DẦN qua các lần thử. Với temperature cố định, một
                 # prompt làm llama sinh cú pháp tool-call hỏng (`tool_use_failed`) sẽ
                 # sinh ra đúng chuỗi hỏng đó ở cả 3 lần retry — retry thành vô nghĩa,
                 # và HR nhận câu "mình gặp trục trặc" một cách rất ổn định. Nới ngẫu
                 # nhiên để lần thử sau thực sự là một lần thử KHÁC.
-                resp = _client.chat.completions.create(
+                resp = _client_for(key_id, api_key).chat.completions.create(
                     model=model,
                     messages=messages,
                     tools=tools,
                     tool_choice="auto",
                     temperature=0.2 + 0.3 * attempt,
+                    max_tokens=_MAX_OUTPUT,
                 )
+                dung_that = getattr(getattr(resp, "usage", None), "total_tokens", 0) or 0
+                # Trả lại phần đặt chỗ thừa, để lượt sau không bị từ chối oan.
+                rate_limiter.reconcile(key_id, model, est, dung_that)
                 completion = _completion_for_log(resp)
                 if model != AGENT_MODEL:
                     completion = f"[model dự phòng: {model}]\n{completion}"
@@ -180,7 +354,7 @@ def _complete_sync(messages: list, tools: list):
                     agent_name="copilot_agent",
                     prompt=_prompt_for_log(messages),
                     completion=completion,
-                    total_tokens=getattr(getattr(resp, "usage", None), "total_tokens", 0) or 0,
+                    total_tokens=dung_that,
                     latency_ms=(time.time() - start) * 1000,
                     is_error=False,
                     error_message=None,
@@ -188,10 +362,22 @@ def _complete_sync(messages: list, tools: list):
                 return resp
             except Exception as e:  # noqa: BLE001 - cả tool_use_failed lẫn 429/5xx
                 last_err = e
+                rate_limiter.release_reservation(key_id, model, est)
                 if _is_quota_error(e):
-                    # Hết hạn mức thì thử lại CÙNG model chỉ tốn thêm thời gian chờ —
-                    # hạn mức không hồi phục trong vài giây. Sang model khác ngay.
-                    log.warning("Model %s hết hạn mức, chuyển model dự phòng: %s", model, e)
+                    # Groq đã chặn -> ghi vào sổ Redis để các tiến trình KHÁC (worker
+                    # chấm CV dùng chung tài khoản này) không đâm vào cùng bức tường.
+                    cho = min(_quota_wait_seconds(e), _COOLDOWN_MAX)
+                    rate_limiter.cooldown(key_id, model, cho)
+                    if cho > 0:
+                        _model_cooldown[model] = time.time() + cho
+                    log.warning(
+                        "Tài khoản %s hết hạn mức cho %s (nghỉ ~%ds): %s",
+                        key_id, model, int(cho), e,
+                    )
+                    # Còn tài khoản khác cho model này thì thử tiếp NGAY ở vòng sau;
+                    # `try_reserve` sẽ tự bỏ qua tài khoản vừa bị cooldown.
+                    if len(keys) > 1 and attempt + 1 < _LLM_RETRIES:
+                        continue
                     break
                 time.sleep(0.8 * (attempt + 1))
 
@@ -221,64 +407,56 @@ async def _complete(messages: list, tools: list):
     return await asyncio.to_thread(_complete_sync, messages, tools)
 
 
-SYSTEM_PROMPT = """Bạn là trợ lý tuyển dụng thông minh của hệ thống HireWise, hỗ trợ nhân viên HR.
-Bạn CÓ các công cụ (tools) để tra cứu và thao tác dữ liệu tuyển dụng thật. Hãy gọi tool khi yêu cầu của HR RÕ RÀNG cần đến tool, thay vì bịa thông tin.
+# PROMPT NÀY PHẢI NGẮN — ĐÂY LÀ RÀNG BUỘC HIỆU NĂNG, KHÔNG PHẢI SỞ THÍCH.
+#
+# Nó được gửi kèm MỌI lời gọi LLM, hai lần mỗi lượt chat, cùng với schema của 20 tool.
+# Đo thực tế trên Groq free tier: bản dài trước đây (2.240 token) + schema (5.085 token)
+# = 7.326 token CỐ ĐỊNH mỗi lời gọi -> một lượt chat tiêu ~14.650 token trong khi trần
+# là 12.000 token/PHÚT. Nghĩa là ngay cả câu hỏi đơn giản nhất cũng vượt trần, lời gọi
+# thứ hai ăn 429 rồi phải chờ/đổi model: đo được 35,6s trung bình, cá biệt 130s, trong
+# khi lượt nào lọt trần chỉ mất 1,5s.
+#
+# QUY TẮC KHI SỬA: mỗi luật viết ĐÚNG MỘT LẦN, ở đúng một nơi.
+#   - Cách dùng một tool cụ thể  -> `description` của tool đó trong tool_registry.
+#   - Hành vi chung của trợ lý   -> ở đây.
+#   - Lý do lịch sử/bối cảnh     -> comment Python như đoạn này, KHÔNG gửi cho LLM.
+SYSTEM_PROMPT = """Bạn là trợ lý tuyển dụng của HireWise, hỗ trợ nhân viên HR. Bạn có tool để tra cứu và thao tác dữ liệu tuyển dụng THẬT, và điều khiển được giao diện bên trái qua open_jd / open_dashboard / open_shortlisting.
 
-Bạn còn ĐIỀU KHIỂN được giao diện bên phải qua các tool điều hướng: open_jd, open_dashboard, open_shortlisting.
+CHỈ GỌI ĐÚNG TOOL MÀ YÊU CẦU CẦN, KHÔNG GỌI THÊM:
+- HR hỏi XEM / TRA CỨU / LIỆT KÊ -> chỉ gọi tool ĐỌC rồi trả lời ngay. TUYỆT ĐỐI không gọi kèm tool GHI (tạo câu hỏi, nhập câu trả lời, chốt, gửi thư) khi HR không yêu cầu.
+- Gọi xong tool cần thiết là DỪNG và trả lời. Đừng "làm sẵn bước tiếp theo" cho HR.
+- Tin nhắn vô nghĩa, chào hỏi, hoặc bạn không chắc HR muốn gì -> không gọi tool nào, hỏi lại cho rõ.
 
-QUAN TRỌNG — Khi nào KHÔNG gọi tool:
-- Nếu tin nhắn MỚI NHẤT của HR là vô nghĩa (gõ phím lung tung như "hkbvnmbmn"), chỉ là lời chào, cảm ơn, hay câu nói chung chung KHÔNG nêu yêu cầu cụ thể: ĐỪNG gọi bất kỳ tool nào. Hãy hỏi lại HR muốn làm gì (vd: tạo JD, tìm ứng viên, so sánh, mở màn hình...).
-- Khi không chắc HR muốn gì: hỏi lại cho rõ TRƯỚC, tuyệt đối không đoán rồi gọi tool.
+KHÔNG BỊA — quy tắc quan trọng nhất:
+- Mọi id/tên truyền vào tool phải lấy NGUYÊN VĂN từ kết quả tool trong hội thoại này, hoặc do HR gõ. Không dùng tên giữ chỗ ("Nguyễn Văn A", "Ứng viên 1") và không dùng id giữ chỗ ("ID1", "ID2").
+- HR GỌI ĐÍCH DANH một người ("xem hồ sơ của Nguyễn Minh Khoa") -> truyền THẲNG cái tên HR vừa gõ vào tool. TUYỆT ĐỐI không gọi search_candidates rồi tự chọn một id trong danh sách: chọn nhầm là trả lời về người khác mà không ai phát hiện được. Tool tự tra tên chính xác, tên nhập nhằng thì nó sẽ báo.
+- Chưa biết ai thì gọi search_candidates để biết. Tool vừa báo lỗi thì ĐỌC thông báo lỗi rồi làm lại cho đúng, đừng đoán tiếp.
+- Tool trả 'not_found' hoặc 'needs_confirmation' = CHƯA làm gì cả. Đừng báo với HR là đã xong.
+- Chỉ nói những gì tool trả về: không bịa điểm, tên, hay kết quả.
 
-Riêng về create_jd (tạo JD mới, GHI vào hệ thống):
-- CHỈ gọi create_jd khi tin nhắn MỚI NHẤT của HR nêu RÕ ý định tuyển dụng cho MỘT vị trí cụ thể (có chức danh và/hoặc kỹ năng/yêu cầu). Ví dụ hợp lệ: "Tạo JD tuyển Backend Python 3 năm kinh nghiệm".
-- raw_text truyền vào create_jd PHẢI lấy từ chính tin nhắn mới nhất của HR. TUYỆT ĐỐI KHÔNG tái sử dụng nội dung JD từ các tin nhắn/lượt trước để tạo JD mới — mỗi JD phải ứng với một yêu cầu mới, tường minh.
-- Nếu HR chỉ gõ vài ký tự vô nghĩa hoặc chưa mô tả vị trí: KHÔNG tạo JD, hãy hỏi họ mô tả vị trí cần tuyển.
+VỊ TRÍ NÀO — khi HR không nêu tên vị trí:
+1. Có "NGỮ CẢNH GIAO DIỆN" (HR đang mở một vị trí) -> BẮT BUỘC truyền jd_id đó. "4 người cao nhất" nghĩa là của vị trí ĐANG MỞ. Bỏ trống là gom nhầm ứng viên vị trí khác rồi thao tác lan sang đó.
+2. Không có ngữ cảnh + HR chỉ TRA CỨU chung -> bỏ trống jd_id.
+3. Không có ngữ cảnh + HR yêu cầu HÀNH ĐỘNG -> gọi list_jds rồi HỎI LẠI làm cho vị trí nào. Đừng tự chọn, đừng làm cho tất cả.
+HR nêu rõ vị trí khác hoặc nói "mọi vị trí" thì làm theo HR.
 
-ID KỸ THUẬT LÀ CHUYỆN NỘI BỘ — HR KHÔNG BAO GIỜ ĐƯỢC THẤY:
-- TUYỆT ĐỐI KHÔNG in UUID/ID ra câu trả lời. Sai: "JD có ID là 8ad393c2-9819-...". Đúng: "Đã tạo JD Backend Python."
-- TUYỆT ĐỐI KHÔNG hỏi HR cung cấp jd_id / candidate_id. Tool nhận cả tên, nhưng tên đó phải là tên THẬT vừa thấy trong kết quả tool hoặc do HR gõ — ưu tiên id mà tool vừa trả về, chính xác hơn tên.
-- Cần HR làm rõ thì hỏi bằng ngôn ngữ nghiệp vụ (tên vị trí, tên ứng viên), không hỏi ID.
+THEO LÔ: HR nói "tất cả/mỗi người/top N" -> gọi search_candidates MỘT lần rồi chép nguyên candidate_ids sang MỘT lời gọi tool tiếp theo. Không gọi lặp từng người.
 
-YÊU CẦU KHÔNG NÊU VỊ TRÍ — LÀM ĐÚNG THEO THỨ TỰ NÀY, KHÔNG ĐƯỢC BỎ QUA BƯỚC 1:
-1. CÓ "NGỮ CẢNH GIAO DIỆN" trong hội thoại (HR đang mở một vị trí)? -> BẮT BUỘC truyền jd_id chính là id đó vào search_candidates / compare_candidates. HR đang nhìn màn hình vị trí đó nên "4 người cao nhất" LUÔN có nghĩa là 4 người cao nhất CỦA VỊ TRÍ ĐANG MỞ. Bỏ trống jd_id ở đây là SAI NGHIÊM TRỌNG: nó gom cả ứng viên của những vị trí khác, và các tool sau (add_to_shortlist, generate_interview_questions) sẽ thao tác lan sang những vị trí HR không hề mở.
-2. KHÔNG có ngữ cảnh giao diện, mà HR hỏi kiểu tra cứu chung ("tìm người biết Python", "ai điểm trên 80"): bỏ trống jd_id để tìm xuyên mọi vị trí.
-3. KHÔNG có ngữ cảnh giao diện, mà HR yêu cầu HÀNH ĐỘNG (thêm vào shortlist, tạo câu hỏi, chốt nhận/loại) nhưng không nêu vị trí: gọi list_jds rồi HỎI LẠI HR làm cho vị trí nào. Đừng tự chọn, và đừng làm cho tất cả.
-- HR nói rõ một vị trí khác, hoặc nói "tất cả vị trí"/"mọi vị trí": làm theo HR, ngữ cảnh giao diện nhường chỗ.
+HAI THANG ĐIỂM KHÁC NHAU: "điểm" mặc định là điểm sàng lọc CV thang 100 (search_candidates). Chỉ khi HR nói rõ "điểm phỏng vấn" mới dùng list_interview_results (thang 10). Nhầm thang là chốt nhầm người.
 
-KHÔNG BAO GIỜ TỰ NGHĨ RA TÊN HAY ID — QUY TẮC QUAN TRỌNG NHẤT:
-- Mọi candidate_id/tên ứng viên bạn truyền vào tool PHẢI lấy nguyên văn từ kết quả một tool đã gọi TRONG hội thoại này (thường là search_candidates), hoặc do chính HR gõ ra.
-- TUYỆT ĐỐI KHÔNG dùng tên mẫu/giữ chỗ như "Nguyễn Văn A", "Trần Thị B", "Ứng viên 1". Chưa biết ai thì gọi search_candidates để biết, đừng điền tạm.
-- Một tool vừa báo lỗi KHÔNG cho phép bạn đoán tiếp. Hãy ĐỌC thông báo lỗi: nó thường liệt kê sẵn các vị trí/ứng viên có thật. Dùng đúng dữ liệu đó rồi gọi lại.
-- Nếu tool trả về error kèm "not_found": KHÔNG có gì được thực hiện cả. Đừng nói với HR là đã xong.
+SAU PHỎNG VẤN — mỗi bước có ĐIỀU KIỆN riêng, KHÔNG phải chuỗi phải chạy hết:
+- HR chỉ muốn XEM buổi phỏng vấn -> get_interview, rồi DỪNG.
+- HR THUẬT LẠI ứng viên đã trả lời gì -> get_interview để lấy số thứ tự câu hỏi, rồi record_interview_answers.
+- HR muốn ĐÓNG buổi phỏng vấn -> finish_interview.
+- HR hỏi ai đạt bao nhiêu ĐIỂM PHỎNG VẤN -> list_interview_results.
+- HR nói nhận/loại ai -> set_candidate_decision. HR muốn BÁO cho ứng viên -> send_decision_emails.
+Yêu cầu gộp ("chốt nhận và gửi mail cho người trên 7 điểm") thì mới chạy nhiều bước liền nhau.
 
-LÀM VIỆC THEO LÔ — RẤT QUAN TRỌNG:
-- HR nói "tất cả những người...", "mỗi người...", "nhóm trên X điểm": TRƯỚC HẾT gọi search_candidates một lần để lấy danh sách, RỒI truyền TẤT CẢ tên đó vào MỘT lời gọi tool (add_to_shortlist, generate_interview_questions đều nhận candidate_ids là DANH SÁCH).
-- HR nói "N người điểm cao nhất" / "top N": gọi search_candidates với limit=N (kết quả ĐÃ sắp theo điểm giảm dần), rồi CHÉP NGUYÊN mảng candidate_ids trong kết quả sang các tool tiếp theo. Đừng dùng compare_candidates để lấy danh sách — nó chỉ để so sánh.
-- HR nói "N người điểm THẤP nhất" / "kém nhất" / "cuối bảng": gọi search_candidates với order="asc" và limit=N. ĐỪNG lấy danh sách giảm dần rồi tự chọn ra mấy người cuối, và đừng hỏi HR tên từng người — tool làm được việc này.
-- "Điểm" mặc định là ĐIỂM SÀNG LỌC CV (thang 100, từ search_candidates). Chỉ khi HR nói rõ "điểm phỏng vấn" thì mới dùng list_interview_results (thang 10).
-- TUYỆT ĐỐI KHÔNG gọi cùng một tool lặp đi lặp lại cho từng người. Làm vậy vừa chậm, vừa dễ hết hạn mức giữa chừng và bỏ sót người.
-- HR nêu con số cụ thể (vd "mỗi người 3 câu hỏi"): PHẢI truyền num_questions=3, đừng để mặc định.
+HÀNH ĐỘNG KHÔNG THU HỒI ĐƯỢC (gửi thư, đóng phỏng vấn, ghi đè dữ liệu): gọi lần đầu KHÔNG bật cờ confirm/replace để lấy bản xem trước, nói cho HR biết sẽ ảnh hưởng tới ai, chờ HR đồng ý rõ ràng rồi mới gọi lại kèm cờ.
 
-SAU PHỎNG VẤN — ĐI ĐÚNG THỨ TỰ NÀY:
-- HR thuật lại ứng viên trả lời thế nào: gọi get_interview TRƯỚC để lấy danh sách câu hỏi có đánh số, rồi record_interview_answers với answers xếp ĐÚNG theo thứ tự đó (câu HR không nhắc tới thì để chuỗi rỗng ở đúng vị trí, đừng dồn lên). AI sẽ tự chấm điểm từng câu.
-- Chấm xong, HR muốn đóng buổi phỏng vấn: finish_interview (mặc định chỉ xem trước; HR đồng ý thì gọi lại confirm=true).
-- HR hỏi "ai phỏng vấn trên X điểm", "điểm trung bình": dùng list_interview_results, KHÔNG dùng search_candidates. Điểm phỏng vấn thang 10, điểm sàng lọc CV thang 100 — nhầm thang là chốt nhầm người.
-- HR nói "đồng ý/nhận/loại/từ chối những người ...": set_candidate_decision (chỉ GHI quyết định, ứng viên chưa biết gì), rồi send_decision_emails để báo cho họ.
-- send_decision_emails gửi thư THẬT, không thu hồi được: gọi lần đầu KHÔNG có confirm để lấy bản xem trước, đọc cho HR nghe sẽ gửi cho ai, rồi mới gọi lại với confirm=true khi HR đồng ý.
-- Yêu cầu gộp kiểu "chốt nhận và gửi mail cho người trên 7 điểm" vẫn phải tách đúng 3 bước: list_interview_results -> set_candidate_decision -> send_decision_emails (xem trước -> HR xác nhận -> gửi).
+create_jd: chỉ tạo khi tin nhắn MỚI NHẤT nêu rõ vị trí cần tuyển, và raw_text lấy từ chính tin nhắn đó — không tái sử dụng nội dung lượt trước.
 
-VĂN PHONG TRẢ LỜI — NGẮN GỌN:
-- Tối đa 1-2 câu. Chỉ nói KẾT QUẢ, không thuật lại các bước đã làm, không nhắc lại yêu cầu của HR.
-- Không lặp lại chi tiết HR vừa gõ (kinh nghiệm, kỹ năng...), không thêm trạng thái thừa như 'đang ở trạng thái active'.
-- Ví dụ tốt: "Đã tạo JD Backend Python và mở ra cho bạn." / "Tìm được 3 ứng viên biết Python, cao nhất là Nguyễn Minh Khoa (90)."
-
-Nguyên tắc khác:
-- Khi HR muốn "mở/xem/vào" một vị trí, một ứng viên, hay một màn hình: hãy gọi tool điều hướng phù hợp để giao diện nhảy tới đúng nơi.
-- Không bao giờ bịa ID, điểm số, hay tên ứng viên. Chỉ nói những gì tool trả về.
-- Với send_interview_invite (gửi email thật, không thu hồi được): PHẢI hỏi HR xác nhận và chỉ gửi (confirm=true) khi HR đồng ý rõ ràng.
-- Nếu một tool trả về error="needs_confirmation": ĐỪNG gọi lại ngay. Hãy nói cho HR biết rủi ro trong trường "message" rồi chờ họ đồng ý, sau đó mới gọi lại kèm cờ xác nhận.
-- Luôn trả lời bằng tiếng Việt.
+TRẢ LỜI: tiếng Việt, tối đa 1-2 câu, chỉ nói KẾT QUẢ. Không thuật lại các bước, không nhắc lại yêu cầu, KHÔNG BAO GIỜ in UUID và không hỏi HR cung cấp id.
 """
 
 
@@ -360,7 +538,11 @@ def _trim_step_result(result):
 # Cắt ở đây KHÔNG làm agent mù: các trường ĐIỀU KHIỂN (id, lỗi, cảnh báo, hướng dẫn
 # bước tiếp theo) luôn được giữ nguyên; thứ bị cắt là phần liệt kê dài dòng mà model
 # chỉ cần đọc lướt.
-_LLM_RESULT_CHARS = int(os.getenv("AGENT_TOOL_RESULT_CHARS", "2500"))
+#
+# 3.500 ký tự (~1.170 token) là mức vừa đủ để một danh sách 20 ứng viên còn giữ ĐỦ TÊN
+# ở dạng rút gọn. Hạ xuống 2.500 thì nhánh "giữ đủ tên" không vừa, tool rơi về cắt bớt
+# còn 4 người — và HR hỏi về người thứ 7 là agent trả lời nhầm sang người khác.
+_LLM_RESULT_CHARS = int(os.getenv("AGENT_TOOL_RESULT_CHARS", "3500"))
 
 # Những trường agent BUỘC phải thấy đầy đủ để đi tiếp cho đúng: id để chuyển sang tool
 # sau, lỗi/cảnh báo để nói lại với HR, cờ xác nhận để biết phải hỏi trước khi làm.
@@ -372,6 +554,26 @@ _FIELDS_KHONG_CAT = (
     "jd_id", "jd", "shortlist", "title", "candidate", "failed", "skipped",
     "will_send_count", "summary", "feedback_summary",
 )
+
+
+# Những trường ĐỦ để agent nhận ra và gọi đúng một mục trong danh sách. Phần bị bỏ
+# (kỹ năng, email, nhận xét dài...) agent luôn lấy lại được bằng một tool đọc chi tiết.
+#
+# CỐ Ý KHÔNG có `candidate_id`: mảng `candidate_ids` ở cấp trên đã liệt kê đủ id theo
+# ĐÚNG thứ tự này rồi. Lặp lại 38 ký tự uuid trong từng mục là thứ đẩy danh sách vượt
+# ngân sách, và cái giá phải trả khi vượt là bị cắt mất người ở cuối bảng.
+_MUC_TOI_THIEU = (
+    "name", "candidate", "score", "average_score", "cv_score",
+    "jd_title", "status", "index", "decision", "title",
+)
+
+
+def _muc_gon(item):
+    """Rút một mục trong danh sách xuống các trường nhận dạng."""
+    if not isinstance(item, dict):
+        return item
+    nho = {k: v for k, v in item.items() if k in _MUC_TOI_THIEU}
+    return nho or item
 
 
 def _trim_for_llm(result):
@@ -407,6 +609,20 @@ def _trim_for_llm(result):
         # cho HR. Bỏ trắng cả mảng thì nó chỉ còn con số, và một agent biết "có 20
         # người" mà không biết tên ai là một agent sắp bịa ra vài cái tên.
         if isinstance(v, list) and v:
+            # NHƯNG thử RÚT GỌN TỪNG MỤC trước đã. Cắt mất mục thứ 7 nghĩa là người
+            # thứ 7 biến mất khỏi tầm nhìn của model — HR hỏi đúng người đó thì nó
+            # đành chọn đại một người nó thấy được, và trả lời về NGƯỜI KHÁC. Giữ đủ
+            # tên với ít trường hơn vừa rẻ hơn vừa không đánh rơi ai.
+            nhe = [_muc_gon(it) for it in v]
+            doan_nhe = json.dumps(nhe, ensure_ascii=False, default=str)
+            if len(doan_nhe) + len(k) + 4 <= con_lai:
+                gon[k] = nhe
+                con_lai -= len(doan_nhe) + len(k) + 4
+                gon[f"_{k}_rut_gon"] = (
+                    "Đủ MỌI mục, chỉ bớt chi tiết. Id nằm ở 'candidate_ids' theo ĐÚNG "
+                    "thứ tự này."
+                )
+                continue
             giu = []
             for item in v:
                 s = json.dumps(item, ensure_ascii=False, default=str)
@@ -439,26 +655,59 @@ async def _agent_loop(messages: list, tools: list, execute) -> dict:
     # chết giữa chừng thì HR bắt buộc phải được biết đúng danh sách đó.
     da_ghi: list[str] = []
     steps: list[dict] = []
-    ui_actions: list[dict] = []
     usage = {"prompt_tokens": 0, "completion_tokens": 0}
 
-    def _push_ui(action: dict) -> None:
-        if action and action not in ui_actions:
-            ui_actions.append(action)
+    # DIRECTIVE GIAO DIỆN — gom lại chứ không xếp hàng.
+    #
+    # HR chỉ có MỘT màn hình, nên một lượt chat chỉ được đưa họ tới MỘT nơi. Trước đây
+    # mọi ui_action được đẩy vào một danh sách rồi frontend chạy tuần tự, nên yêu cầu
+    # gộp "thêm 3 người điểm cao nhất vào shortlist X, mỗi người 3 câu hỏi" sinh ra 3
+    # directive: search_candidates nhảy sang /projects (tô sáng kết quả),
+    # add_to_shortlist nhảy sang /shortlisting, generate_interview_questions xin làm
+    # mới. HR thấy màn hình giật qua một trang rồi mới tới nơi, và đích đến phụ thuộc
+    # tool nào TÌNH CỜ chạy sau cùng.
+    #
+    # Luật ở đây: directive của tool GHI THẮNG directive của tool ĐỌC. Việc HR nhờ làm
+    # là "thêm vào shortlist" — cái search_candidates tra ra dọc đường chỉ là bước phụ,
+    # không được quyết định HR nhìn thấy gì.
+    dieu_huong_ghi: dict | None = None  # navigate cuối cùng do một tool GHI phát ra
+    dieu_huong_doc: dict | None = None  # navigate cuối cùng do một tool ĐỌC phát ra
+    can_lam_moi = False  # có tool GHI nào chạy mà không tự điều hướng
+
+    def _ui_cuoi() -> list[dict]:
+        """`refresh` trước, `navigate` sau — frontend chạy tuần tự nên navigate chốt."""
+        out: list[dict] = []
+        if can_lam_moi:
+            out.append({"type": "refresh"})
+        dich = dieu_huong_ghi or dieu_huong_doc
+        if dich:
+            out.append(dich)
+        return out
 
     def _out(reply: str, error: str | None = None) -> dict:
         d = {
-            "reply": reply,
+            # Lọc uuid ở ĐÚNG MỘT CỬA RA: mọi nhánh trả lời đều đi qua `_out`, nên không
+            # có đường nào lọt ra ngoài mà quên lọc.
+            "reply": _bo_uuid(reply),
             "tool_calls": used,
             "steps": steps,
-            "ui_actions": ui_actions,
+            "ui_actions": _ui_cuoi(),
             "usage": usage,
         }
         if error:
             d["error"] = error
         return d
 
+    bat_dau = time.time()
     for _ in range(MAX_STEPS):
+        # TRẦN THỜI GIAN CHO CẢ LƯỢT. `MAX_STEPS` giới hạn SỐ bước nhưng không giới hạn
+        # THỜI GIAN: khi Groq chạm trần token/phút, SDK của nó tự chờ rồi thử lại ngầm,
+        # nên mỗi bước có thể ngốn hàng chục giây mà code ở đây không hề thấy lỗi.
+        # Cộng dồn 10 bước là HR ngồi nhìn "Đang xử lý…" rất lâu — đo được 941 giây cho
+        # một câu hỏi tra cứu bình thường. Thà dừng sớm và nói thật.
+        if time.time() - bat_dau > TURN_BUDGET:
+            log.warning("Lượt agent vượt trần %.0fs, dừng sớm sau %d tool", TURN_BUDGET, len(used))
+            return _out(_qua_lau(da_ghi), error=f"turn_budget_exceeded ({TURN_BUDGET}s)")
         try:
             resp = await _complete(messages, tools)
         except Exception as e:  # noqa: BLE001 - trả lời nhẹ nhàng thay vì 500
@@ -506,19 +755,41 @@ async def _agent_loop(messages: list, tools: list, execute) -> dict:
             # Ghi nhận tác dụng phụ ĐÃ xảy ra. `spec.read_only` là nguồn sự thật (khai
             # trong tool_registry), nên tool mới thêm sau này tự động được tính đúng.
             spec = SPECS.get(name)
-            if spec and not spec.read_only and not (
+            vua_ghi = bool(spec) and not spec.read_only and not (
                 isinstance(result, dict) and "error" in result
-            ):
+            )
+            if vua_ghi:
                 da_ghi.append(name)
 
             # Directive điều hướng giao diện cho frontend.
-            if isinstance(result, dict):
-                if isinstance(result.get("ui_action"), dict):
-                    _push_ui(result["ui_action"])
-                # Tạo JD xong -> làm mới danh sách và mở vị trí mới.
-                if name == "create_jd" and result.get("jd_id"):
-                    _push_ui({"type": "refresh"})
-                    _push_ui({"type": "navigate", "path": f"/projects/{result['jd_id']}"})
+            co_dieu_huong = isinstance(result, dict) and isinstance(
+                result.get("ui_action"), dict
+            )
+            if co_dieu_huong:
+                if vua_ghi:
+                    dieu_huong_ghi = result["ui_action"]
+                else:
+                    dieu_huong_doc = result["ui_action"]
+
+            # Việc mở trang vị trí mới do chính `create_jd` khai (nó trả ui_action).
+            # Còn đây là thứ chỉ tầng này làm được: nạp lại danh sách dự án ở cột trái.
+            # JD vừa tạo chưa có trong `projects` của frontend, không nạp lại thì trang
+            # /projects/<id mới> không tìm thấy nó và đá HR ngược về Dashboard.
+            if isinstance(result, dict) and name == "create_jd" and result.get("jd_id"):
+                can_lam_moi = True
+
+            # TOOL GHI CHẠY XONG THÌ MÀN HÌNH PHẢI ĐỘNG ĐẬY.
+            #
+            # Không phải tool ghi nào cũng biết nên mở trang nào (gửi thư mời, sửa JD,
+            # gỡ người khỏi shortlist...), nên chúng không trả `ui_action` gì cả — và HR
+            # ngồi nhìn dữ liệu cũ cho tới khi tự F5. `refresh` không kéo HR đi đâu, chỉ
+            # bảo trang đang mở nạp lại chính nó.
+            #
+            # Dùng `vua_ghi` (kết quả của ĐÚNG lời gọi này) chứ không phải `name in
+            # da_ghi`: cùng một tool có thể chạy hai lần trong một lượt, lần đầu xong
+            # lần sau lỗi — tra theo tên thì lần lỗi vẫn được tính là đã ghi.
+            if vua_ghi and not co_dieu_huong:
+                can_lam_moi = True
 
             messages.append({
                 "role": "tool",

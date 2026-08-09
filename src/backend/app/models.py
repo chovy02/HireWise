@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, Integer, Text, ForeignKey, Float, DateTime, Boolean, Column, UniqueConstraint
+from sqlalchemy import String, Integer, Text, ForeignKey, Float, DateTime, Boolean, Column, UniqueConstraint, Index, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
@@ -287,6 +287,26 @@ class EvaluationOverride(Base):
 
 class Shortlist(Base):
     __tablename__ = "shortlists"
+
+    # MỘT VỊ TRÍ KHÔNG ĐƯỢC CÓ HAI SHORTLIST CÙNG TÊN.
+    #
+    # Trước khi có chốt này, HR bảo agent "cho 3 người tiềm năng vào shortlist" và mở
+    # màn hình lên thấy HAI dòng "tiềm năng (3)" y hệt nhau. Nguyên nhân là kiểu
+    # đọc-rồi-ghi trong `_shortlist_for`: hai lượt chạy chồng nhau (HR gửi lại câu
+    # lệnh, hoặc bấm nút tạo hai lần) cùng đọc thấy "chưa có" rồi cùng INSERT. Không
+    # có ràng buộc ở tầng DB thì mọi lớp kiểm tra bằng Python đều còn khe hở đó.
+    #
+    # `lower(btrim(name))` để "Tiềm Năng" và "tiềm năng " cũng bị coi là một. So tên
+    # BỎ DẤU ("tiem nang") thì làm ở tầng Python — Postgres cần extension `unaccent`
+    # mới làm được trong index, mà extension đó không có sẵn trong image postgres.
+    __table_args__ = (
+        Index(
+            "uq_shortlists_jd_ten",
+            "jd_id",
+            text("lower(btrim(name))"),
+            unique=True,
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     jd_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("job_descriptions.id"), nullable=False)

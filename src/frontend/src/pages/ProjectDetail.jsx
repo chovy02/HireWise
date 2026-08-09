@@ -408,16 +408,24 @@ export default function ProjectDetail() {
   // AI Copilot điều khiển trang này qua query param:
   //   ?open=<candidateId>       -> LC1: bật popup chi tiết ứng viên
   //   ?highlight=<id1,id2,...>  -> LC2: tô sáng các ứng viên khớp search
+  //   ?t=<nonce>                -> nạp lại dữ liệu trang (agent vừa đổi gì đó)
+  //
+  // `t` KHÔNG thừa: agent hay thao tác rồi điều hướng về ĐÚNG trang HR đang đứng, mà
+  // React Router coi cùng một URL là không có gì xảy ra — effect không chạy lại và các
+  // con số trên trang này (ứng viên, đã rút gọn, lượt tải) đứng im cho tới khi HR F5.
   const [searchParams] = useSearchParams()
   const openParam = searchParams.get('open')
   const highlightParam = searchParams.get('highlight')
+  const navNonce = searchParams.get('t') || ''
   const highlightIds = useMemo(
     () => new Set((highlightParam || '').split(',').filter(Boolean)),
     [highlightParam]
   )
+  // `navNonce` trong deps: HR đóng popup rồi nhờ agent mở lại đúng người đó thì
+  // `openParam` không đổi, không có nonce là popup không bật lại.
   useEffect(() => {
     if (openParam) setOpenCandidateId(openParam)
-  }, [openParam])
+  }, [openParam, navNonce])
 
   // Project được hydrate từ listJds() không kèm jd_markdown -> fetch đầy đủ 1 lần.
   useEffect(() => {
@@ -454,7 +462,9 @@ export default function ProjectDetail() {
     return () => {
       cancelled = true
     }
-  }, [id, liveKey])
+    // `navNonce`: agent vừa thêm người vào shortlist / xoá ứng viên / tải thêm CV thì
+    // đúng ba con số này đổi, nên phải nạp lại ở MỌI lượt agent điều hướng tới đây.
+  }, [id, liveKey, navNonce])
 
   // Chưa tìm thấy project: nếu đang nạp từ backend (vd reload deep-link) thì chờ,
   // đừng redirect vội về dashboard.

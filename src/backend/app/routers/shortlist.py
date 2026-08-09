@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app import models, schemas
@@ -256,16 +257,30 @@ def create_shortlist(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    """Tạo một shortlist mới cho vị trí tuyển dụng."""
-    jd = get_owned_jd(db, jd_id, current_user)
+    """Tạo một shortlist mới cho vị trí tuyển dụng.
 
-    shortlist = models.Shortlist(
-        jd_id=jd.id,
-        name=payload.name.strip(),
-        created_by=current_user.id,
-    )
+    Trùng tên bị TỪ CHỐI (409) chứ không lặng lẽ tạo thêm: một vị trí có hai danh
+    sách cùng tên thì dropdown trên màn hình Shortlisting hiện hai dòng y hệt nhau và
+    HR không có cách nào biết mình đang mở cái nào.
+    """
+    jd = get_owned_jd(db, jd_id, current_user)
+    ten = " ".join(payload.name.split())
+    if not ten:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Tên danh sách không được để trống.")
+
+    shortlist = models.Shortlist(jd_id=jd.id, name=ten, created_by=current_user.id)
     db.add(shortlist)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # Chốt cuối là unique index uq_shortlists_jd_ten. Bắt ở đây thay vì chỉ tra
+        # trước khi ghi, vì tra-rồi-ghi vẫn hở khi HR bấm nút hai lần thật nhanh —
+        # hai request cùng đọc "chưa có" rồi cùng INSERT.
+        db.rollback()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"Vị trí này đã có danh sách rút gọn tên “{ten}”. Hãy đặt tên khác.",
+        )
     db.refresh(shortlist)
 
     return schemas.ShortlistResponse(

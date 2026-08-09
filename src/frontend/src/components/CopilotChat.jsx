@@ -109,12 +109,37 @@ export default function CopilotChat({ open = false, onClose }) {
     }
   }
 
-  // Thực thi các directive điều hướng giao diện mà agent trả về.
+  // Bảo TRANG ĐANG MỞ nạp lại dữ liệu của chính nó, không kéo HR đi đâu cả.
+  //
+  // Làm bằng cách đổi nonce `t` trên chính URL hiện tại: các trang đã đặt `t` trong
+  // deps của effect (Shortlisting, ProjectDetail) sẽ fetch lại. Không có bước này thì
+  // agent sửa xong dữ liệu mà màn hình vẫn là ảnh chụp cũ, HR phải F5 mới thấy — thứ
+  // bị than phiền nhiều nhất khi dùng Copilot.
+  //
+  // `replace: true` để nút Back của trình duyệt không đầy những lượt làm mới.
+  const refreshCurrentPage = useCallback(() => {
+    const p = new URLSearchParams(window.location.search)
+    p.set('t', `${Date.now()}`)
+    navigate(`${window.location.pathname}?${p.toString()}`, { replace: true })
+  }, [navigate])
+
+  // Thực thi các directive giao diện mà agent trả về.
+  //
+  // HR chỉ có MỘT màn hình nên một lượt chat chỉ được đi tới MỘT nơi: chạy tuần tự
+  // nhiều navigate làm màn hình giật qua trang trung gian rồi mới tới đích. Backend đã
+  // gom lại còn tối đa một navigate, nhưng lọc thêm ở đây để thứ tự trong mảng không
+  // còn quyết định được HR nhìn thấy gì.
+  //
+  // Có navigate thì KHÔNG gọi refreshCurrentPage: navigate đã kèm nonce `t` nên trang
+  // đích tự nạp lại, mà làm mới "trang hiện tại" lúc này còn có thể ghi đè (replace)
+  // đúng cái URL vừa điều hướng tới.
   function runUiActions(actions = []) {
-    for (const a of actions) {
-      if (a?.type === 'navigate' && a.path) navigate(a.path)
-      else if (a?.type === 'refresh') refreshProjects()
-    }
+    const dich = actions.filter((a) => a?.type === 'navigate' && a.path).pop()
+    const canLamMoi = actions.some((a) => a?.type === 'refresh')
+
+    if (canLamMoi) refreshProjects() // danh sách dự án ở cột trái
+    if (dich) navigate(dich.path)
+    else if (canLamMoi) refreshCurrentPage()
   }
 
   async function send(text) {

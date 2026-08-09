@@ -253,6 +253,76 @@ def test_ten_viec_lay_tu_registry_nen_tool_moi_tu_dong_dung():
     assert SPECS["send_decision_emails"].title.lower() in cau
 
 
+def test_qua_lau_van_noi_ra_viec_da_lam():
+    """Dừng vì quá giờ cũng KHÔNG được im lặng về tác dụng phụ đã xảy ra."""
+    from app.services.ai_agent.agent import _qua_lau
+
+    assert "chưa thay đổi gì" in _qua_lau()
+    cau = _qua_lau(["add_to_shortlist"])
+    assert "ĐÃ kịp thực hiện" in cau and "ĐỪNG gửi lại" in cau
+
+
+# --------------------------------------------------------------------------- #
+# UUID không bao giờ được lọt ra câu trả lời cho HR
+# --------------------------------------------------------------------------- #
+def test_bo_uuid_kem_nhan_id():
+    """Model dự phòng hay trả 'Tên (ID: <uuid>)'. Prompt cấm rồi vẫn lọt, nên chặn ở code."""
+    from app.services.ai_agent.agent import _bo_uuid
+
+    ra = _bo_uuid("Cao nhất: Nguyễn Minh Khoa (ID: 6828d1a8-63b1-4b81-a991-7d6edf91aacd), 90 điểm.")
+    assert "6828d1a8" not in ra and "ID" not in ra
+    assert "Nguyễn Minh Khoa" in ra and "90 điểm" in ra
+
+
+def test_bo_uuid_khong_dung_toi_cau_binh_thuong():
+    from app.services.ai_agent.agent import _bo_uuid
+
+    goc = "Đã thêm 4 người vào shortlist Vòng 1."
+    assert _bo_uuid(goc) == goc
+
+
+def test_cat_gon_khong_duoc_lam_MAT_AI_khoi_danh_sach():
+    """LỖI THẬT: HR hỏi 'xem buổi phỏng vấn của Nguyễn Minh Khoa', agent trả lời về
+    Hoàng Văn Đạt — một người khác hẳn.
+
+    Một nửa nguyên nhân nằm ở đây: kết quả search dài bị cắt còn vài mục đầu, nên người
+    HR hỏi KHÔNG còn trong tầm nhìn của model và nó đành chọn đại người nó thấy được.
+    Rút gọn thì được, đánh rơi người thì không.
+    """
+    from app.services.ai_agent.agent import _trim_for_llm
+
+    ket_qua = {
+        "scope": "Backend Developer",
+        "count": 20,
+        "candidate_ids": [f"id-{i}" for i in range(20)],
+        "candidates": [
+            {
+                "candidate_id": f"id-{i}",
+                "name": f"Ứng viên số {i}",
+                "email": f"nguoi{i}@example.com",
+                "score": 90 - i,
+                "jd_title": "Backend Developer",
+                "skills": ["Python", "FastAPI", "PostgreSQL", "Docker", "Kubernetes"],
+            }
+            for i in range(20)
+        ],
+    }
+    gon = _trim_for_llm(ket_qua)
+
+    ten = [c["name"] for c in gon["candidates"]]
+    assert len(ten) == 20, "Đã đánh rơi ứng viên khỏi danh sách gửi cho LLM"
+    assert "Ứng viên số 19" in ten, "Người CUỐI bảng bị cắt mất"
+    # Id vẫn phải đủ để thao tác theo lô.
+    assert len(gon["candidate_ids"]) == 20
+
+
+def test_bo_uuid_khong_de_lai_ngoac_rong():
+    from app.services.ai_agent.agent import _bo_uuid
+
+    ra = _bo_uuid("Đã tạo JD (6828d1a8-63b1-4b81-a991-7d6edf91aacd).")
+    assert "(" not in ra and ")" not in ra and ra.endswith(".")
+
+
 def test_tool_doc_khong_bi_tinh_la_da_ghi():
     """Chỉ tool GHI mới đáng cảnh báo. Kể cả khi đã gọi vài tool đọc mà lượt chết giữa
     chừng thì cũng không có tác dụng phụ nào để HR phải đi kiểm tra."""

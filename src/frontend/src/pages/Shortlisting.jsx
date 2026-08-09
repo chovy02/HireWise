@@ -330,13 +330,36 @@ export default function Shortlisting() {
   const toast = useToast()
   const { projects } = useProjects()
 
+  // THAM SỐ ĐIỀU HƯỚNG do AI Copilot gửi kèm:
+  //   ?jd=<uuid>&view=shortlist&sl=<uuid>&t=<nonce>   -> mở đúng shortlist đó
+  //   ?jd=<uuid>&view=interview&cv=<uuid>&t=<nonce>   -> mở buổi phỏng vấn của đúng người đó
+  //
+  // Vì sao cần: HR bảo "thêm 3 người vào shortlist X", agent làm xong rồi mở màn hình
+  // này — nhưng trang mặc định mở chế độ Leaderboard của một vị trí bất kỳ, nên HR nhìn
+  // thấy bảng xếp hạng toàn bộ ứng viên và tưởng chưa có gì xảy ra.
+  //
+  // `cv` cũng vậy: HR nhờ "chấm câu trả lời của Nguyễn Minh Khoa" thì thứ cần hiện ra
+  // là BIÊN BẢN PHỎNG VẤN của Khoa. Màn hình phỏng vấn không có route riêng (nó là chế
+  // độ xem thứ ba của trang này), nên agent chỉ tới được qua query param.
+  //
+  // `t` (dấu thời gian) KHÔNG thừa: agent thường điều hướng tới ĐÚNG trang HR đang
+  // đứng. Nếu đường dẫn không có gì đổi thì React không chạy lại effect nạp dữ liệu,
+  // màn hình đứng im với dữ liệu cũ và HR phải F5 mới thấy — đúng lỗi đã gặp.
+  const navParams = new URLSearchParams(location.search)
+  const paramJd = navParams.get('jd')
+  const paramView = navParams.get('view')
+  const paramSl = navParams.get('sl')
+  const paramCv = navParams.get('cv')
+  const navNonce = navParams.get('t') || ''
+
   const initialId =
-    location.state?.projectId &&
+    (paramJd && projects.some((p) => p.id === paramJd) && paramJd) ||
+    (location.state?.projectId &&
     projects.some((p) => p.id === location.state.projectId)
       ? location.state.projectId
       : projects.length === 1
         ? projects[0].id
-        : null
+        : null)
   const [projectId, setProjectId] = useState(initialId)
 
   const [query, setQuery] = useState('')
@@ -353,7 +376,7 @@ export default function Shortlisting() {
   const [loadErr, setLoadErr] = useState('')
 
   // Shortlist THẬT (GET /jds/{id}/shortlists + /shortlists/{id}).
-  const [view, setView] = useState('leaderboard') // 'leaderboard' | 'shortlist'
+  const [view, setView] = useState('leaderboard') // 'leaderboard' | 'shortlist' | 'interview'
   const [shortlists, setShortlists] = useState(null) // danh sách shortlist của JD
   const [activeSlId, setActiveSlId] = useState(null) // shortlist đang chọn
   const [slDetail, setSlDetail] = useState(null) // chi tiết shortlist đang chọn
@@ -391,9 +414,38 @@ export default function Shortlisting() {
     return () => {
       cancelled = true
     }
-  }, [projectId])
+    // `navNonce`: agent vừa thao tác xong thì bảng xếp hạng cũng có thể đã đổi (điểm,
+    // trạng thái phỏng vấn), nên nạp lại cả ở đây chứ không riêng danh sách shortlist.
+  }, [projectId, navNonce])
 
-  // Nạp danh sách shortlist khi đổi JD; tự chọn shortlist đầu tiên nếu có.
+  // Agent điều hướng tới -> nhảy đúng vị trí và đúng chế độ xem nó chỉ định.
+  //
+  // `view=interview` cần thêm `interviewFor`, vì InterviewPanel nhận ứng viên qua prop
+  // chứ không tự đọc URL. Tên chưa biết ở đây (URL chỉ có id) nên để trống rồi điền ở
+  // effect dưới — panel tự fetch buổi phỏng vấn theo id, tên chỉ dùng để hiển thị.
+  useEffect(() => {
+    if (paramJd) setProjectId(paramJd)
+    if (paramView === 'interview' && paramCv) {
+      setInterviewFor((cu) => (cu?.id === paramCv ? cu : { id: paramCv, name: null }))
+      setView('interview')
+    } else if (paramView === 'shortlist' || paramView === 'leaderboard') {
+      setView(paramView)
+    }
+  }, [paramJd, paramView, paramCv, navNonce])
+
+  // Điền tên ứng viên khi bảng xếp hạng của vị trí đó tải xong. Không có bước này thì
+  // header màn hình phỏng vấn ghi "Ứng viên" trong khi HR vừa gọi đích danh một người.
+  useEffect(() => {
+    if (!interviewFor || interviewFor.name || !rows) return
+    const c = rows.find((r) => r.id === interviewFor.id)
+    if (c) setInterviewFor({ id: c.id, name: c.name })
+  }, [rows, interviewFor])
+
+  // Nạp danh sách shortlist khi đổi JD; chọn đúng shortlist agent vừa thao tác (nếu
+  // có), không thì cái đầu tiên.
+  //
+  // `navNonce` nằm trong deps để lượt điều hướng NÀO cũng nạp lại — kể cả khi projectId
+  // không đổi, vì lúc đó dữ liệu trên màn hình mới là thứ vừa cũ đi.
   useEffect(() => {
     if (!projectId) {
       setShortlists(null)
@@ -406,13 +458,14 @@ export default function Shortlisting() {
       .then((data) => {
         if (cancelled) return
         setShortlists(data)
-        setActiveSlId(data[0]?.id ?? null)
+        const muonMo = paramSl && data.some((s) => s.id === paramSl) ? paramSl : null
+        setActiveSlId(muonMo ?? data[0]?.id ?? null)
       })
       .catch(() => !cancelled && setShortlists([]))
     return () => {
       cancelled = true
     }
-  }, [projectId])
+  }, [projectId, paramSl, navNonce])
 
   // Nạp chi tiết shortlist đang chọn.
   useEffect(() => {

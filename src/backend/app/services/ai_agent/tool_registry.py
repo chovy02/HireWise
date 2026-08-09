@@ -128,22 +128,25 @@ def llm_tool_schemas() -> list[dict]:
 # "vd 'Nguyễn Minh Khoa'" — model đã lấy ĐÚNG chuỗi "Backend Developer" trong mô tả
 # này làm jd_id thật (log agent_tool_logs còn ghi), trong khi vị trí thật tên khác.
 # Ví dụ đặt trong schema không phải minh hoạ vô hại: với model yếu nó là dữ liệu mồi.
-_JD_REF = (
-    "UUID của vị trí (ưu tiên, lấy từ kết quả list_jds/search_candidates) HOẶC tên vị "
-    "trí ĐÚNG NHƯ hệ thống đang có. Không tự nghĩ ra tên vị trí."
-)
+#
+# BA HẰNG SỐ NÀY LẶP Ở ~15 TOOL nên mỗi chữ thừa bị nhân lên 15 lần trong prompt.
+# Giữ chúng ngắn nhất có thể mà vẫn đủ nghĩa.
+_JD_REF = "UUID vị trí (ưu tiên) hoặc tên ĐÚNG như hệ thống có. Không tự nghĩ ra tên."
+# Với tool thao tác trên MỘT người: ƯU TIÊN TÊN, không ưu tiên UUID.
+#
+# Lỗi thật đã gặp: HR hỏi "xem buổi phỏng vấn của Nguyễn Minh Khoa", agent đi
+# search_candidates lấy danh sách rồi TỰ CHỌN một uuid trong đó — và chọn nhầm người
+# đứng đầu bảng (Hoàng Văn Đạt). Tool không có cách nào phát hiện: uuid nào cũng hợp lệ.
+# Còn khi truyền TÊN thì `_name_matches` bắt buộc mọi token phải trùng, nên không thể
+# trả nhầm người; tên nhập nhằng thì tool báo lỗi và liệt kê người thật cho agent chọn.
 _CAND_REF = (
-    "UUID của ứng viên (ưu tiên, lấy từ kết quả search_candidates) HOẶC tên đầy đủ "
-    "đúng như tool đã trả về. Không tự nghĩ ra tên."
+    "TÊN ứng viên đúng như HR gọi (ưu tiên — tool tự tra chính xác), hoặc UUID nếu tool "
+    "trước vừa trả về đúng người đó. HR gọi đích danh ai thì truyền THẲNG tên đó."
 )
 # Với thao tác theo lô, TÊN là không đủ: một người có thể ứng tuyển nhiều vị trí và
 # mỗi lần là một hồ sơ RIÊNG. Tra theo tên chỉ ra được một hồ sơ, nên nếu agent truyền
 # tên thì các hồ sơ còn lại bị bỏ sót lặng lẽ (đã gặp thật: 7 hồ sơ chỉ xử lý được 4).
-_CAND_REF_BATCH = (
-    "Ưu tiên truyền candidate_id (UUID) mà search_candidates vừa trả về — chính xác hơn "
-    "tên khi nhiều người trùng tên hoặc một người ứng tuyển nhiều vị trí. Chỉ dùng tên "
-    "khi HR gọi đích danh và chưa hề tra cứu."
-)
+_CAND_REF_BATCH = "Ưu tiên UUID từ search_candidates; tên chỉ khi HR gọi đích danh."
 
 REGISTRY: tuple[ToolSpec, ...] = (
     # ----------------------------- ĐỌC / TRA CỨU ---------------------------- #
@@ -173,35 +176,35 @@ REGISTRY: tuple[ToolSpec, ...] = (
         name="search_candidates",
         fn=T.search_candidates,
         title="Tìm ứng viên",
+        # Vì sao mô tả phải NGẮN: schema của cả REGISTRY được gửi kèm MỌI lời gọi LLM,
+        # hai lần mỗi lượt chat. Mỗi câu giải thích thừa ở đây bị nhân lên gấp đôi rồi
+        # cộng vào trần token/phút của Groq — đo được: bộ mô tả dài trước đây ngốn 5.085
+        # token, đủ để một lượt chat bình thường vượt trần 12.000 và phải ngồi chờ 429.
+        # Lý do/bối cảnh thuộc về comment như dòng này, không thuộc về `description`.
         description=(
-            "Tìm ứng viên ĐÃ ĐƯỢC CHẤM ĐIỂM, lọc theo kỹ năng và/hoặc điểm tối thiểu "
-            "(thang 0-100). Kết quả sắp sẵn theo điểm giảm dần, nên 'N người cao nhất' chỉ "
-            "cần limit=N. "
-            "PHẠM VI TÌM: nếu hội thoại có 'NGỮ CẢNH GIAO DIỆN' (HR đang mở một vị trí) thì "
-            "BẮT BUỘC truyền jd_id đó, kể cả khi HR không nhắc tên vị trí — bỏ trống sẽ gom "
-            "cả ứng viên của vị trí khác và các tool sau sẽ thao tác nhầm sang đó. Chỉ bỏ "
-            "trống jd_id khi KHÔNG có ngữ cảnh giao diện và HR đang hỏi tra cứu chung toàn "
-            "hệ thống. TUYỆT ĐỐI không hỏi HR jd_id. "
-            "HR hỏi người ĐIỂM THẤP NHẤT / kém nhất / cuối bảng: dùng order='asc' kèm limit=N, "
-            "ĐỪNG lấy danh sách giảm dần rồi tự chọn ra người cuối. "
-            "Kết quả có sẵn trường 'candidate_ids': muốn thao tác với CẢ NHÓM vừa tìm được "
-            "thì CHÉP NGUYÊN mảng đó sang tool theo lô, TUYỆT ĐỐI không tự gõ lại tên."
+            "Tìm ứng viên ĐÃ CHẤM ĐIỂM (thang 100). 'N người cao nhất' = order='desc' + "
+            "limit=N; 'N người THẤP NHẤT' = order='asc' + limit=N. "
+            "Có NGỮ CẢNH GIAO DIỆN thì BẮT BUỘC truyền jd_id đó dù HR không nhắc tên. "
+            "Chép nguyên 'candidate_ids' trong kết quả sang tool theo lô."
         ),
         params=(
             Param(
                 "jd_id", str,
-                f"TUỲ CHỌN. {_JD_REF} Điền khi HR nêu vị trí HOẶC khi đang có ngữ cảnh "
-                "giao diện; chỉ bỏ trống để tra cứu xuyên mọi vị trí.",
+                f"TUỲ CHỌN. {_JD_REF} Bỏ trống = mọi vị trí.",
                 default="",
             ),
             Param("min_score", float, "Điểm tối thiểu (thang 0-100).", default=0.0),
             Param("skill", str, "Kỹ năng cần có, vd 'python'.", default=""),
             Param("limit", int, "Số ứng viên tối đa trả về (trần 50).", default=20),
+            # KHÔNG CÓ DEFAULT — cố ý. Với default='desc', LLM bỏ trống tham số này là
+            # lặng lẽ nhận danh sách CAO NHẤT: HR hỏi "so sánh 3 người điểm thấp nhất"
+            # thì nhận đúng 3 người đứng đầu bảng, kèm câu trả lời gọi họ là "thấp
+            # nhất". Bắt buộc điền thì LLM phải chọn chiều một cách có ý thức ở mọi lượt.
             Param(
                 "order", str,
-                "'desc' = điểm cao nhất trước (mặc định). 'asc' = điểm THẤP nhất trước, "
-                "dùng khi HR hỏi về nhóm kém nhất/cuối bảng.",
-                default="desc", enum=("desc", "asc"),
+                "BẮT BUỘC chọn theo lời HR. 'desc' = cao nhất/giỏi nhất/top/dẫn đầu. "
+                "'asc' = THẤP NHẤT/kém nhất/yếu nhất/tệ nhất/cuối bảng/để loại.",
+                enum=("desc", "asc"),
             ),
         ),
         read_only=True, idempotent=True,
@@ -230,21 +233,31 @@ REGISTRY: tuple[ToolSpec, ...] = (
         fn=T.compare_candidates,
         title="So sánh ứng viên",
         description=(
-            "So sánh 2+ ứng viên CÙNG 1 vị trí, trả về phân tích của AI. "
-            "CHỈ dùng khi HR muốn SO SÁNH — đây KHÔNG phải cách để lấy danh sách top N mang "
-            "sang tool khác; việc đó dùng search_candidates với limit=N. "
-            "Nếu HR nói 'so sánh top 3' thì truyền jd_id + top_n=3, tool tự lấy đúng N người "
-            "điểm cao nhất. Chỉ dùng candidate_ids khi HR gọi đích danh từng người."
+            "So sánh 2+ ứng viên CÙNG 1 vị trí bằng AI. CHỈ để so sánh, không phải cách lấy "
+            "danh sách (việc đó dùng search_candidates). 'So sánh 3 người CAO nhất' = jd_id "
+            "+ count=3 + order='desc'; 'so sánh 3 người THẤP nhất' = order='asc'. "
+            "candidate_ids chỉ khi HR gọi đích danh từng người."
         ),
         params=(
-            Param("jd_id", str, f"{_JD_REF} Dùng kèm top_n.", default=""),
-            Param("top_n", int, "So sánh N ứng viên điểm cao nhất của vị trí đó.", default=0),
+            Param("jd_id", str, f"{_JD_REF} Dùng kèm count.", default=""),
+            # Tên cũ là `top_n` — chính cái tên đó gài bẫy: HR hỏi "3 người THẤP nhất"
+            # mà tham số tên "top" thì LLM vẫn điền 3 và nhận về 3 người đứng đầu bảng.
+            Param("count", int, "So sánh bao nhiêu người của vị trí đó.", default=0),
+            # KHÔNG CÓ DEFAULT — cùng lý do như search_candidates.order: bỏ trống mà
+            # ngầm hiểu là "cao nhất" thì sai lặng lẽ, và sai đúng vào câu HR dùng để
+            # quyết định loại người.
+            Param(
+                "order", str,
+                "Đi kèm count, BẮT BUỘC chọn theo lời HR. 'desc' = cao nhất/giỏi nhất/"
+                "top. 'asc' = THẤP NHẤT/kém nhất/yếu nhất/cuối bảng/để loại.",
+                enum=("desc", "asc"),
+            ),
             Param(
                 "candidate_ids", list[str],
-                "UUID HOẶC tên từng ứng viên (chỉ khi HR gọi đích danh).",
+                "Từng ứng viên, chỉ khi HR gọi đích danh.",
                 default=None,
             ),
-            Param("aspect", str, "Khía cạnh trọng tâm, vd 'Python và hạ tầng'.", default=""),
+            Param("aspect", str, "Khía cạnh trọng tâm (tuỳ chọn).", default=""),
         ),
         # Không ghi gì vào DB, nhưng KHÔNG idempotent: mỗi lần gọi là một lượt sinh
         # văn bản mới của AI, kết quả không lặp lại y hệt.
@@ -268,16 +281,10 @@ REGISTRY: tuple[ToolSpec, ...] = (
         fn=T.generate_interview_questions,
         title="Sinh câu hỏi phỏng vấn",
         description=(
-            "Sinh bộ câu hỏi phỏng vấn bám CV + JD cho MỘT HOẶC NHIỀU ứng viên VÀ LƯU vào buổi "
-            "phỏng vấn của họ (HR xem được trong màn hình phỏng vấn). "
-            "QUAN TRỌNG: cần làm cho nhiều người thì truyền HẾT vào candidate_ids trong MỘT lời "
-            "gọi, TUYỆT ĐỐI không gọi lặp lại từng người. "
-            "Nếu HR nói rõ số câu (vd 'mỗi người 3 câu') thì PHẢI đặt num_questions. "
-            "Ai đã có buổi phỏng vấn mà HR nhập dữ liệu sẽ nằm trong 'needs_confirmation' — hỏi "
-            "HR rồi mới gọi lại CHỈ với những người đó kèm replace=true. "
-            "CẢ LÔ HOẶC KHÔNG GÌ CẢ: chỉ cần một ứng viên trong danh sách không tra ra được là "
-            "tool KHÔNG sinh câu hỏi cho ai và trả về 'not_found'. Khi đó hãy gọi "
-            "search_candidates để lấy candidate_ids đúng rồi gọi lại."
+            "Sinh và LƯU bộ câu hỏi phỏng vấn bám CV + JD cho một hoặc nhiều ứng viên. "
+            "Nhiều người thì truyền HẾT vào MỘT lời gọi. HR nêu số câu thì PHẢI đặt "
+            "num_questions. Ai đã có dữ liệu phỏng vấn sẽ nằm ở 'needs_confirmation': hỏi HR "
+            "rồi gọi lại CHỈ những người đó kèm replace=true."
         ),
         params=(
             Param(
@@ -287,12 +294,11 @@ REGISTRY: tuple[ToolSpec, ...] = (
             Param("aspect", str, "Trọng tâm phỏng vấn (tuỳ chọn).", default=""),
             Param(
                 "num_questions", int,
-                "Số câu hỏi cho MỖI người. Đặt đúng con số HR yêu cầu; 0 = để AI tự quyết.",
+                "Số câu hỏi MỖI người. Đúng con số HR yêu cầu; 0 = AI tự quyết.",
                 default=0,
             ),
             Param(
-                "replace", bool,
-                "true = chấp nhận GHI ĐÈ bộ câu hỏi cũ. Chỉ đặt sau khi HR đã xác nhận.",
+                "replace", bool, "true = GHI ĐÈ bộ câu hỏi cũ, chỉ sau khi HR xác nhận.",
                 default=False,
             ),
         ),
@@ -304,10 +310,10 @@ REGISTRY: tuple[ToolSpec, ...] = (
         fn=T.create_shortlist,
         title="Tạo shortlist",
         description=(
-            "Tạo 1 shortlist RỖNG cho 1 vị trí. HẦU NHƯ KHÔNG CẦN DÙNG: muốn thêm ứng viên "
-            "thì gọi thẳng add_to_shortlist — nó TỰ TẠO shortlist theo tên nếu chưa có. Gọi "
-            "tool này trước add_to_shortlist chỉ đẻ ra một shortlist rỗng thừa nằm lại trong "
-            "hệ thống. Chỉ dùng khi HR nói rõ là muốn tạo sẵn một danh sách trống."
+            "Tạo shortlist RỖNG. HẦU NHƯ KHÔNG CẦN: add_to_shortlist tự tạo theo tên. Chỉ "
+            "dùng khi HR nói rõ muốn tạo sẵn một danh sách trống. Vị trí đó đã có danh sách "
+            "cùng tên thì tool DÙNG LẠI danh sách cũ và trả status='exists' — khi đó phải "
+            "nói với HR là danh sách đã có sẵn, đừng báo là vừa tạo mới."
         ),
         params=(
             Param("jd_id", str, _JD_REF),
@@ -320,26 +326,20 @@ REGISTRY: tuple[ToolSpec, ...] = (
         fn=T.add_to_shortlist,
         title="Thêm ứng viên vào shortlist",
         description=(
-            "Đưa MỘT HOẶC NHIỀU ứng viên vào shortlist của vị trí họ ứng tuyển (tự tạo shortlist "
-            "nếu chưa có, chống trùng). Dùng khi HR muốn 'đưa/thêm ứng viên vào shortlisting'. "
-            "QUAN TRỌNG: HR nói 'tất cả những người ...' hay 'N người điểm cao nhất' thì dùng "
-            "search_candidates để lấy danh sách trước, rồi CHÉP NGUYÊN candidate_ids vào MỘT "
-            "lời gọi — TUYỆT ĐỐI không gọi lặp lại từng người và không tự gõ tên. "
-            "CẢ LÔ HOẶC KHÔNG GÌ CẢ: chỉ cần một ứng viên không tra ra được là tool KHÔNG thêm "
-            "ai vào shortlist và trả về 'not_found' — đừng báo với HR là đã thêm xong. "
-            "Nhóm trải trên NHIỀU vị trí sẽ trả error='needs_confirmation' và KHÔNG ghi gì: "
-            "đó là dấu hiệu bạn đã quên giới hạn theo vị trí HR đang mở."
+            "Đưa một hoặc nhiều ứng viên vào shortlist của vị trí họ ứng tuyển (tự tạo nếu "
+            "chưa có, chống trùng). Lấy danh sách bằng search_candidates rồi chép nguyên "
+            "candidate_ids vào MỘT lời gọi. Một ứng viên tra không ra là KHÔNG thêm ai "
+            "('not_found'). Nhóm trải nhiều vị trí trả 'needs_confirmation' và không ghi gì."
         ),
         params=(
             Param(
                 "candidate_ids", list[str],
                 f"Danh sách ứng viên, truyền TẤT CẢ cùng lúc. {_CAND_REF_BATCH}",
             ),
-            Param("shortlist_name", str, "Tên shortlist, mặc định 'AI Shortlist'.", default="AI Shortlist"),
+            Param("shortlist_name", str, "Tên shortlist.", default="AI Shortlist"),
             Param(
                 "allow_multiple_jds", bool,
-                "true = chấp nhận tạo shortlist ở NHIỀU vị trí cùng lúc. Chỉ đặt sau khi HR "
-                "đã xác nhận rõ ràng là muốn làm cho tất cả các vị trí đó.",
+                "true = chấp nhận làm cho NHIỀU vị trí, chỉ sau khi HR xác nhận.",
                 default=False,
             ),
         ),
@@ -373,10 +373,9 @@ REGISTRY: tuple[ToolSpec, ...] = (
         fn=T.get_interview,
         title="Xem buổi phỏng vấn",
         description=(
-            "Đọc buổi phỏng vấn của 1 ứng viên: danh sách câu hỏi (có ĐÁNH SỐ), câu trả lời "
-            "đã nhập, điểm và nhận xét của AI, điểm trung bình. "
-            "PHẢI gọi tool này TRƯỚC record_interview_answers: số thứ tự câu hỏi ở đây chính "
-            "là thứ tự mà lô câu trả lời phải khớp vào."
+            "Đọc buổi phỏng vấn của 1 ứng viên: câu hỏi (CÓ ĐÁNH SỐ), câu trả lời, điểm và "
+            "nhận xét AI. PHẢI gọi trước record_interview_answers — số thứ tự ở đây là thứ tự "
+            "mà lô câu trả lời phải khớp vào."
         ),
         params=(Param("candidate_id", str, _CAND_REF),),
         read_only=True, idempotent=True,
@@ -386,22 +385,20 @@ REGISTRY: tuple[ToolSpec, ...] = (
         fn=T.record_interview_answers,
         title="Nhập câu trả lời phỏng vấn",
         description=(
-            "Ghi câu trả lời của ứng viên rồi để AI CHẤM ĐIỂM từng câu (thang 10) và nhận xét. "
-            "Dùng khi HR thuật lại ứng viên đã trả lời thế nào. "
-            "answers khớp theo THỨ TỰ với câu hỏi mà get_interview vừa trả về: phần tử thứ i là "
-            "câu trả lời cho câu hỏi index=i. Câu nào HR không nói tới thì để chuỗi rỗng ở đúng "
-            "vị trí đó — TUYỆT ĐỐI không dồn danh sách lên, làm vậy là chấm câu trả lời này vào "
-            "câu hỏi khác. Không tự bịa câu trả lời thay ứng viên."
+            "Ghi câu trả lời của ứng viên rồi để AI chấm điểm từng câu (thang 10). Dùng khi HR "
+            "thuật lại ứng viên trả lời thế nào. answers khớp THỨ TỰ với câu hỏi của "
+            "get_interview: phần tử thứ i ứng với index=i, câu không nhắc tới để chuỗi rỗng "
+            "ĐÚNG vị trí (dồn lên là chấm nhầm câu). Không bịa câu trả lời thay ứng viên."
         ),
         params=(
             Param("candidate_id", str, _CAND_REF),
             Param(
                 "answers", list[str],
-                "Câu trả lời theo đúng thứ tự câu hỏi của get_interview. Chuỗi rỗng = bỏ qua câu đó.",
+                "Đúng thứ tự câu hỏi của get_interview. Chuỗi rỗng = bỏ qua câu đó.",
             ),
             Param(
                 "replace", bool,
-                "true = chấp nhận GHI ĐÈ câu trả lời/điểm đã có. Chỉ đặt sau khi HR xác nhận.",
+                "true = GHI ĐÈ câu trả lời/điểm đã có, chỉ sau khi HR xác nhận.",
                 default=False,
             ),
         ),
@@ -413,15 +410,13 @@ REGISTRY: tuple[ToolSpec, ...] = (
         fn=T.finish_interview,
         title="Kết thúc & tổng kết phỏng vấn",
         description=(
-            "Kết thúc buổi phỏng vấn: AI đọc toàn bộ biên bản (câu hỏi + câu trả lời) rồi viết "
-            "nhận xét tổng quan, và chuyển buổi phỏng vấn sang trạng thái hoàn tất. "
-            "KHÔNG MỞ LẠI ĐƯỢC: mặc định confirm=false chỉ trả bản XEM TRƯỚC (đã trả lời bao "
-            "nhiêu câu, còn trống bao nhiêu, điểm trung bình). Chỉ đặt confirm=true SAU KHI HR "
-            "xác nhận."
+            "Kết thúc buổi phỏng vấn: AI đọc biên bản rồi viết nhận xét tổng quan và đóng lại. "
+            "KHÔNG MỞ LẠI ĐƯỢC: confirm=false (mặc định) chỉ xem trước; confirm=true sau khi "
+            "HR xác nhận."
         ),
         params=(
             Param("candidate_id", str, _CAND_REF),
-            Param("confirm", bool, "true = kết thúc thật; false = chỉ xem trước.", default=False),
+            Param("confirm", bool, "true = kết thúc thật; false = xem trước.", default=False),
         ),
         destructive=True,  # đóng buổi phỏng vấn, không nhập thêm câu trả lời được
     ),
@@ -430,23 +425,14 @@ REGISTRY: tuple[ToolSpec, ...] = (
         fn=T.list_interview_results,
         title="Bảng điểm phỏng vấn",
         description=(
-            "Liệt kê ứng viên ĐÃ PHỎNG VẤN kèm ĐIỂM TRUNG BÌNH PHỎNG VẤN (thang 10), sắp theo "
-            "điểm giảm dần. Đây là tool trả lời các câu kiểu 'ai phỏng vấn trên 7 điểm'. "
-            "CHÚ Ý PHÂN BIỆT: điểm ở đây là điểm PHỎNG VẤN thang 10, khác hẳn điểm sàng lọc CV "
-            "thang 100 của search_candidates — HR nói 'điểm phỏng vấn/điểm trung bình' thì dùng "
-            "tool này, đừng dùng search_candidates. "
-            "Kết quả có sẵn 'candidate_ids' để chép sang set_candidate_decision."
+            "Ứng viên ĐÃ PHỎNG VẤN kèm điểm trung bình phỏng vấn THANG 10, giảm dần. Dùng cho "
+            "câu hỏi về 'điểm phỏng vấn' — khác điểm sàng lọc CV thang 100 của "
+            "search_candidates. Chép 'candidate_ids' sang set_candidate_decision."
         ),
         params=(
+            Param("jd_id", str, f"TUỲ CHỌN. {_JD_REF}", default=""),
             Param(
-                "jd_id", str,
-                f"TUỲ CHỌN. {_JD_REF} Điền khi HR nêu vị trí hoặc đang có ngữ cảnh giao diện.",
-                default="",
-            ),
-            Param(
-                "min_avg_score", float,
-                "Điểm phỏng vấn trung bình tối thiểu, THANG 10 (vd HR nói 'trên 7' -> 7).",
-                default=0.0,
+                "min_avg_score", float, "Điểm phỏng vấn tối thiểu, THANG 10.", default=0.0,
             ),
         ),
         read_only=True, idempotent=True,
@@ -456,13 +442,10 @@ REGISTRY: tuple[ToolSpec, ...] = (
         fn=T.set_candidate_decision,
         title="Chốt nhận / loại ứng viên",
         description=(
-            "Ghi quyết định tuyển dụng cho MỘT HOẶC NHIỀU ứng viên đang nằm trong shortlist: "
-            "accepted (nhận) / rejected (loại) / pending (để lại sau). Dùng khi HR nói 'đồng ý', "
-            "'nhận', 'loại', 'từ chối' những ai đó. "
-            "CHỈ GHI QUYẾT ĐỊNH, KHÔNG gửi thư — ứng viên chưa biết gì cho tới khi gọi "
-            "send_decision_emails. "
-            "Ứng viên chưa ở trong shortlist nào sẽ nằm trong 'not_in_shortlist' và KHÔNG được "
-            "chốt: hỏi HR có muốn thêm vào shortlist trước không."
+            "Chốt kết quả cho ứng viên ĐANG trong shortlist: accepted / rejected / pending. "
+            "Dùng khi HR nói 'nhận', 'đồng ý', 'loại', 'từ chối'. CHỈ ghi quyết định, KHÔNG "
+            "gửi thư (việc đó là send_decision_emails). Ai chưa ở trong shortlist nào sẽ nằm "
+            "ở 'not_in_shortlist' và không được chốt."
         ),
         params=(
             Param(
@@ -470,7 +453,7 @@ REGISTRY: tuple[ToolSpec, ...] = (
                 f"Danh sách ứng viên, truyền TẤT CẢ cùng lúc. {_CAND_REF_BATCH}",
             ),
             Param(
-                "decision", str, "Quyết định cho cả nhóm này.",
+                "decision", str, "Quyết định cho cả nhóm.",
                 enum=("accepted", "rejected", "pending"),
             ),
         ),
@@ -485,11 +468,10 @@ REGISTRY: tuple[ToolSpec, ...] = (
         fn=T.send_decision_emails,
         title="Gửi thư báo kết quả",
         description=(
-            "Gửi thư báo kết quả (nhận/loại) cho các ứng viên ĐÃ CHỐT của MỘT vị trí, dùng đúng "
-            "mẫu thư HR đã cấu hình. HÀNH ĐỘNG KHÔNG THU HỒI ĐƯỢC: mặc định confirm=false chỉ "
-            "trả BẢN XEM TRƯỚC (ai nhận thư gì, ai bị bỏ qua và vì sao). Chỉ đặt confirm=true "
-            "SAU KHI HR đã xác nhận rõ ràng. "
-            "Người đã nhận thư đúng với quyết định hiện tại sẽ tự động bị bỏ qua, không gửi trùng."
+            "Gửi thư báo kết quả cho ứng viên ĐÃ CHỐT của MỘT vị trí, theo mẫu HR đã cấu hình. "
+            "KHÔNG THU HỒI ĐƯỢC: confirm=false (mặc định) chỉ trả BẢN XEM TRƯỚC; chỉ đặt "
+            "confirm=true sau khi HR xác nhận rõ ràng. Ai đã nhận thư đúng quyết định hiện tại "
+            "sẽ tự động bị bỏ qua."
         ),
         params=(
             Param("jd_id", str, f"BẮT BUỘC. {_JD_REF}"),
