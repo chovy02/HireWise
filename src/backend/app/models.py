@@ -156,7 +156,15 @@ class JobDescription(Base):
     creator = relationship("User", back_populates="jds")
     cvs = relationship("Candidate", back_populates="jd")
     evaluations = relationship("Evaluation", back_populates="jd")
-    shortlists = relationship("Shortlist", back_populates="jd")
+    # order_by BẮT BUỘC, cùng lý do đã ghi ở `Shortlist.items`: không có nó, Postgres
+    # trả theo thứ tự VẬT LÝ trong heap, nên chỉ cần UPDATE một shortlist (đổi tên, hay
+    # bất kỳ thao tác nào) là hàng đó nhảy chỗ. Agent dựa vào thứ tự này để chọn
+    # shortlist mở ra cho HR (send_decision_emails, list_shortlists), nên thứ tự trôi
+    # nổi hiện ra thành "cùng một câu lệnh mà lần thì mở shortlist này, lần shortlist
+    # khác" — đúng lỗi HR gặp.
+    shortlists = relationship(
+        "Shortlist", back_populates="jd", order_by="Shortlist.created_at, Shortlist.id"
+    )
     upload_batches = relationship("UploadBatch", back_populates="jd")
 
 class UploadBatch(Base):

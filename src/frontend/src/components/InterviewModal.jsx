@@ -18,6 +18,7 @@ import {
 } from 'lucide-react'
 import { Badge, PrimaryButton, SecondaryButton } from './ui.jsx'
 import { useToast } from '../context/ToastContext.jsx'
+import { useAgentReload } from '../utils/useAgentReload.js'
 import { formatName } from '../utils/formatName.js'
 import {
   isManualQuestion,
@@ -68,15 +69,30 @@ export function InterviewPanel({ candidateId, candidateName, onClose, onBack }) 
   const displayName = formatName(candidateName) || 'Ứng viên'
   const completed = interview?.status === 'completed'
 
+  // `reloadKey` đổi = AI Copilot vừa động vào buổi phỏng vấn này (ghi câu trả lời,
+  // chấm điểm, tổng kết). Không nghe nó thì effect chỉ chạy khi ĐỔI ỨNG VIÊN, nên
+  // agent chấm xong 2/2 câu mà bảng bên trái vẫn trống tới khi HR F5 — đúng lỗi đã gặp.
+  const reloadKey = useAgentReload()
+  const daNap = useRef(null) // ứng viên nào đã nạp xong ít nhất một lần
+
   useEffect(() => {
     let cancelled = false
-    setLoading(true)
-    setNotFound(false)
-    setInterview(null)
+    // ĐỔI ỨNG VIÊN thì xoá sạch rồi hiện "đang tải"; còn NẠP LẠI cùng một người thì
+    // giữ nguyên nội dung đang hiện và thay êm khi có dữ liệu mới. Nếu cũng xoá trắng
+    // thì mỗi lần agent làm gì đó là màn hình chớp một cái, và ô soạn câu trả lời HR
+    // đang gõ dở bị dựng lại từ đầu.
+    const doiNguoi = daNap.current !== candidateId
+    if (doiNguoi) {
+      setLoading(true)
+      setNotFound(false)
+      setInterview(null)
+    }
     getCandidateInterview(candidateId)
       .then((data) => {
         if (cancelled) return
         setInterview({ ...data, questions: sortQuestions(data.questions) })
+        setNotFound(false)
+        daNap.current = candidateId
       })
       .catch(() => {
         // 404 (chưa có) hoặc lỗi khác -> hiện màn hình sinh câu hỏi.
@@ -86,7 +102,7 @@ export function InterviewPanel({ candidateId, candidateName, onClose, onBack }) 
     return () => {
       cancelled = true
     }
-  }, [candidateId])
+  }, [candidateId, reloadKey])
 
   // Mở ô soạn câu hỏi từ nút trên header: kéo luôn ô đó vào tầm mắt, vì nó nằm
   // dưới cùng danh sách nên với bộ 10 câu thì bấm xong sẽ không thấy gì thay đổi.

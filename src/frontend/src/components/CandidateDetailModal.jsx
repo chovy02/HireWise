@@ -13,6 +13,7 @@ import {
   User,
 } from 'lucide-react'
 import { Tag, Badge, PrimaryButton, SecondaryButton } from './ui.jsx'
+import { useAgentReload } from '../utils/useAgentReload.js'
 import EvaluationPanel from './EvaluationPanel.jsx'
 import { useToast } from '../context/ToastContext.jsx'
 import { formatName } from '../utils/formatName.js'
@@ -103,6 +104,11 @@ export default function CandidateDetailModal({
   const [saving, setSaving] = useState(false)
   const [retrying, setRetrying] = useState(false)
 
+  // `reloadKey`: điểm và nhận xét trong popup này đổi khi agent chấm lại / sửa điểm.
+  // (Effect tải file CV ở trên KHÔNG cần nghe nonce: nội dung CV không đổi theo thao
+  // tác của agent, mà tải lại blob PDF mỗi lượt chat thì rất tốn.)
+  const reloadKey = useAgentReload()
+
   useEffect(() => {
     let cancelled = false
     getCandidate(candidateId)
@@ -115,7 +121,7 @@ export default function CandidateDetailModal({
     return () => {
       cancelled = true
     }
-  }, [candidateId])
+  }, [candidateId, reloadKey])
 
   async function saveOverride() {
     const evaluation = detail?.evaluation

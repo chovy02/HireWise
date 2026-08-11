@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 import { Badge } from './ui.jsx'
 import { getCandidateInterview } from '../api/interviews.js'
+import { useAgentReload } from '../utils/useAgentReload.js'
 import {
   isManualQuestion,
   numberInterviewQuestions,
@@ -36,6 +37,9 @@ export default function InterviewSummary({ candidateId }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
+  // `reloadKey`: agent vừa chấm/tổng kết buổi phỏng vấn thì tóm tắt này cũ ngay.
+  const reloadKey = useAgentReload()
+
   useEffect(() => {
     let cancelled = false
     setLoading(true)
@@ -50,7 +54,7 @@ export default function InterviewSummary({ candidateId }) {
     return () => {
       cancelled = true
     }
-  }, [candidateId])
+  }, [candidateId, reloadKey])
 
   if (loading) {
     return (

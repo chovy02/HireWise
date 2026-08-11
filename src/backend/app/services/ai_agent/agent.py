@@ -313,6 +313,39 @@ def _complete_sync(messages: list, tools: list):
         tools, default=str, ensure_ascii=False
     )
 
+    da_goi = False  # đã THỰC SỰ gọi Groq lần nào chưa (dù thành công hay không)
+
+    def _goi(model: str, key_id: str, api_key: str, attempt: int, est: int):
+        """Một lượt gọi Groq. Ném nguyên lỗi ra cho vòng ngoài xử lý."""
+        # Temperature TĂNG DẦN qua các lần thử. Với temperature cố định, một prompt
+        # làm llama sinh cú pháp tool-call hỏng (`tool_use_failed`) sẽ sinh ra đúng
+        # chuỗi hỏng đó ở cả 3 lần retry — retry thành vô nghĩa, và HR nhận câu "mình
+        # gặp trục trặc" một cách rất ổn định. Nới ngẫu nhiên để lần sau khác thật.
+        resp = _client_for(key_id, api_key).chat.completions.create(
+            model=model,
+            messages=messages,
+            tools=tools,
+            tool_choice="auto",
+            temperature=0.2 + 0.3 * attempt,
+            max_tokens=_MAX_OUTPUT,
+        )
+        dung_that = getattr(getattr(resp, "usage", None), "total_tokens", 0) or 0
+        # Trả lại phần đặt chỗ thừa, để lượt sau không bị từ chối oan.
+        rate_limiter.reconcile(key_id, model, est, dung_that)
+        completion = _completion_for_log(resp)
+        if model != AGENT_MODEL:
+            completion = f"[model dự phòng: {model}]\n{completion}"
+        record_ai_log(
+            agent_name="copilot_agent",
+            prompt=_prompt_for_log(messages),
+            completion=completion,
+            total_tokens=dung_that,
+            latency_ms=(time.time() - start) * 1000,
+            is_error=False,
+            error_message=None,
+        )
+        return resp
+
     for model in _chain_kha_dung():
         for attempt in range(_LLM_RETRIES):
             est = rate_limiter.estimate_tokens(est_prompt, _MAX_OUTPUT)
@@ -331,35 +364,8 @@ def _complete_sync(messages: list, tools: list):
                 break
 
             try:
-                # Temperature TĂNG DẦN qua các lần thử. Với temperature cố định, một
-                # prompt làm llama sinh cú pháp tool-call hỏng (`tool_use_failed`) sẽ
-                # sinh ra đúng chuỗi hỏng đó ở cả 3 lần retry — retry thành vô nghĩa,
-                # và HR nhận câu "mình gặp trục trặc" một cách rất ổn định. Nới ngẫu
-                # nhiên để lần thử sau thực sự là một lần thử KHÁC.
-                resp = _client_for(key_id, api_key).chat.completions.create(
-                    model=model,
-                    messages=messages,
-                    tools=tools,
-                    tool_choice="auto",
-                    temperature=0.2 + 0.3 * attempt,
-                    max_tokens=_MAX_OUTPUT,
-                )
-                dung_that = getattr(getattr(resp, "usage", None), "total_tokens", 0) or 0
-                # Trả lại phần đặt chỗ thừa, để lượt sau không bị từ chối oan.
-                rate_limiter.reconcile(key_id, model, est, dung_that)
-                completion = _completion_for_log(resp)
-                if model != AGENT_MODEL:
-                    completion = f"[model dự phòng: {model}]\n{completion}"
-                record_ai_log(
-                    agent_name="copilot_agent",
-                    prompt=_prompt_for_log(messages),
-                    completion=completion,
-                    total_tokens=dung_that,
-                    latency_ms=(time.time() - start) * 1000,
-                    is_error=False,
-                    error_message=None,
-                )
-                return resp
+                da_goi = True
+                return _goi(model, key_id, api_key, attempt, est)
             except Exception as e:  # noqa: BLE001 - cả tool_use_failed lẫn 429/5xx
                 last_err = e
                 rate_limiter.release_reservation(key_id, model, est)
@@ -380,6 +386,35 @@ def _complete_sync(messages: list, tools: list):
                         continue
                     break
                 time.sleep(0.8 * (attempt + 1))
+
+    # KHÔNG LỜI GỌI NÀO ĐƯỢC THỬ -> sổ Redis nói mọi tài khoản đều cạn cho mọi model.
+    #
+    # Sổ đó chỉ là ƯỚC LƯỢNG: nó đặt chỗ trước theo số token DỰ ĐOÁN và mang theo
+    # cooldown học từ một lần 429 cũ, nên nó sai theo hướng BI QUAN khá thường xuyên —
+    # Groq vẫn cho gọi mà HR đã nhận "trục trặc". Thà thử một phát thật rồi nhận lỗi
+    # thật, cùng nguyên tắc với `_chain_kha_dung` ("thà thử còn hơn tự từ chối").
+    if not da_goi and keys:
+        model = _MODEL_CHAIN[0]
+        key_id, api_key = keys[0]
+        log.warning(
+            "Sổ ngân sách báo cạn hết; vẫn thử %s bằng tài khoản %s để Groq tự quyết.",
+            model, key_id,
+        )
+        try:
+            da_goi = True
+            return _goi(model, key_id, api_key, 0, 0)
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+
+    # `last_err` CÓ THỂ VẪN LÀ None nếu ngay cả lần thử liều ở trên cũng không chạy
+    # (không có key nào). `raise None` ném TypeError — một lỗi KHÔNG phải quota, nên
+    # `_friendly_error` rơi xuống nhánh chung và khuyên HR "thử diễn đạt lại", trong
+    # khi diễn đạt lại bao nhiêu lần cũng hỏng. Đúng lỗi HR gặp.
+    if last_err is None:
+        last_err = RuntimeError(
+            "rate limit: hết ngân sách token cho mọi tài khoản Groq và mọi model, "
+            "chưa gọi được lần nào."
+        )
 
     # Hết lượt retry -> ghi 1 dòng lỗi rồi mới ném ra.
     record_ai_log(

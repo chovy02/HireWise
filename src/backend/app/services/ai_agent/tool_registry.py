@@ -184,6 +184,8 @@ REGISTRY: tuple[ToolSpec, ...] = (
         description=(
             "Tìm ứng viên ĐÃ CHẤM ĐIỂM (thang 100). 'N người cao nhất' = order='desc' + "
             "limit=N; 'N người THẤP NHẤT' = order='asc' + limit=N. "
+            "HR nêu KHOẢNG ĐIỂM ('từ 50 đến 60', 'dưới 40') thì BẮT BUỘC dùng min_score "
+            "và max_score — chỉ đặt limit là lấy nhầm người ngoài khoảng. "
             "Có NGỮ CẢNH GIAO DIỆN thì BẮT BUỘC truyền jd_id đó dù HR không nhắc tên. "
             "Chép nguyên 'candidate_ids' trong kết quả sang tool theo lô."
         ),
@@ -193,7 +195,16 @@ REGISTRY: tuple[ToolSpec, ...] = (
                 f"TUỲ CHỌN. {_JD_REF} Bỏ trống = mọi vị trí.",
                 default="",
             ),
-            Param("min_score", float, "Điểm tối thiểu (thang 0-100).", default=0.0),
+            Param("min_score", float, "Điểm SÀN, tính cả bằng (thang 0-100).", default=0.0),
+            # Không có tham số này thì "lấy 3 người từ 50 đến 60 điểm" là câu KHÔNG
+            # diễn đạt được: LLM chỉ điền nổi min_score=50, rồi limit cắt từ trên
+            # xuống và trả về 77/68/55. Hai người đầu nằm ngoài khoảng HR vừa nêu.
+            Param(
+                "max_score", float,
+                "Điểm TRẦN, tính cả bằng. 0 = không chặn trên. HR nói 'từ A đến B' thì "
+                "min_score=A và max_score=B; 'dưới B' thì max_score=B.",
+                default=0.0,
+            ),
             Param("skill", str, "Kỹ năng cần có, vd 'python'.", default=""),
             Param("limit", int, "Số ứng viên tối đa trả về (trần 50).", default=20),
             # KHÔNG CÓ DEFAULT — cố ý. Với default='desc', LLM bỏ trống tham số này là
@@ -317,7 +328,11 @@ REGISTRY: tuple[ToolSpec, ...] = (
         ),
         params=(
             Param("jd_id", str, _JD_REF),
-            Param("name", str, "Tên shortlist."),
+            Param(
+                "name", str,
+                "Tên shortlist, CHÉP NGUYÊN VĂN từ tin nhắn của HR — đúng từng dấu "
+                "tiếng Việt, không viết lại, không bỏ dấu, không tự dịch.",
+            ),
         ),
         user_bound="created_by",
     ),
@@ -336,7 +351,15 @@ REGISTRY: tuple[ToolSpec, ...] = (
                 "candidate_ids", list[str],
                 f"Danh sách ứng viên, truyền TẤT CẢ cùng lúc. {_CAND_REF_BATCH}",
             ),
-            Param("shortlist_name", str, "Tên shortlist.", default="AI Shortlist"),
+            # LLM viết lại tiếng Việt rất tuỳ tiện, và tên shortlist là thứ HR nhìn
+            # thấy hằng ngày: gõ "cặn bã" mà màn hình hiện "càn bả" thì HR mất niềm tin
+            # vào cả lượt vừa chạy, dù mọi việc khác đều đúng.
+            Param(
+                "shortlist_name", str,
+                "Tên shortlist, CHÉP NGUYÊN VĂN từ tin nhắn của HR — đúng từng dấu "
+                "tiếng Việt, không viết lại, không bỏ dấu, không tự dịch.",
+                default="AI Shortlist",
+            ),
             Param(
                 "allow_multiple_jds", bool,
                 "true = chấp nhận làm cho NHIỀU vị trí, chỉ sau khi HR xác nhận.",
@@ -427,12 +450,19 @@ REGISTRY: tuple[ToolSpec, ...] = (
         description=(
             "Ứng viên ĐÃ PHỎNG VẤN kèm điểm trung bình phỏng vấn THANG 10, giảm dần. Dùng cho "
             "câu hỏi về 'điểm phỏng vấn' — khác điểm sàng lọc CV thang 100 của "
-            "search_candidates. Chép 'candidate_ids' sang set_candidate_decision."
+            "search_candidates. HR nêu KHOẢNG thì dùng cả hai cận. "
+            "Chép 'candidate_ids' sang set_candidate_decision."
         ),
         params=(
             Param("jd_id", str, f"TUỲ CHỌN. {_JD_REF}", default=""),
             Param(
-                "min_avg_score", float, "Điểm phỏng vấn tối thiểu, THANG 10.", default=0.0,
+                "min_avg_score", float, "Điểm SÀN phỏng vấn, tính cả bằng. THANG 10.",
+                default=0.0,
+            ),
+            Param(
+                "max_avg_score", float,
+                "Điểm TRẦN phỏng vấn, tính cả bằng. 0 = không chặn trên. THANG 10.",
+                default=0.0,
             ),
         ),
         read_only=True, idempotent=True,

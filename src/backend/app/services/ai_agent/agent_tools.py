@@ -335,6 +335,7 @@ def search_candidates(
     db: Session,
     jd_id: str | None = None,
     min_score: float = 0.0,
+    max_score: float = 0.0,
     skill: str | None = None,
     limit: int = 20,
     order: str = "desc",
@@ -350,12 +351,30 @@ def search_candidates(
     trước khi có nó thì "so sánh 3 người điểm thấp nhất" là việc KHÔNG LÀM ĐƯỢC: mọi
     đường đều sắp giảm dần, `limit` cắt từ trên xuống, nên nhóm cuối bảng không có cách
     nào lấy ra. Mà đó lại đúng là câu HR hỏi khi cần quyết định loại ai.
+
+    `max_score` cũng vậy — KHOẢNG ĐIỂM là thứ HR hỏi thường xuyên ("lấy nhóm 50 đến 60
+    điểm", "ai dưới 40"). Trước khi có nó, câu đó KHÔNG diễn đạt được: LLM chỉ điền
+    được `min_score=50` rồi `limit=3` cắt từ trên xuống, nên "3 người từ 50 đến 60
+    điểm" trả về 77, 68, 55 — hai người đầu nằm ngoài khoảng HR vừa nêu, mà không có
+    gì trong hệ thống báo sai. Đã xảy ra thật.
+
+    `max_score=0` = KHÔNG chặn trên (giữ nguyên hành vi cũ khi HR chỉ nêu sàn).
     """
     jd = None
     if jd_id:
         jd, err = _find_jd(db, jd_id, owner_id)
         if jd is None:
             return {"error": err}
+
+    tran = float(max_score or 0)
+    san = float(min_score or 0)
+    if tran and tran < san:
+        return {
+            "error": (
+                f"Khoảng điểm không hợp lệ: max_score={tran:g} nhỏ hơn "
+                f"min_score={san:g}. Hãy kiểm tra lại con số HR vừa nêu."
+            )
+        }
 
     # Không có jd_id -> tìm xuyên MỌI vị trí, nhưng vẫn phải chỉ trong vị trí của
     # chính người đang hỏi, nếu không Copilot sẽ trả ứng viên của tài khoản khác.
@@ -366,9 +385,11 @@ def search_candidates(
             models.JobDescription,
             models.Candidate.jd_id == models.JobDescription.id,
         )
-        .filter(models.Evaluation.score >= min_score),
+        .filter(models.Evaluation.score >= san),
         owner_id,
     )
+    if tran:
+        q = q.filter(models.Evaluation.score <= tran)
     if jd is not None:
         q = q.filter(models.Candidate.jd_id == jd.id)
     if skill:
@@ -395,6 +416,13 @@ def search_candidates(
         # chiều là báo với HR "3 người giỏi nhất" trong khi đó là 3 người kém nhất.
         "sorted_by": "điểm tăng dần (thấp nhất trước)" if tang_dan
                      else "điểm giảm dần (cao nhất trước)",
+        # Nhắc lại BỘ LỌC ĐÃ ÁP để LLM không mô tả sai danh sách nó vừa nhận. Đã gặp:
+        # HR xin "3 người từ 50 đến 60", tool chỉ lọc được sàn 50 rồi trả 77/68/55,
+        # và câu trả lời vẫn gọi đó là nhóm 50-60.
+        "score_filter": (
+            f"điểm từ {san:g} đến {tran:g}" if tran
+            else (f"điểm từ {san:g} trở lên" if san else "không lọc theo điểm")
+        ),
         "count": len(briefs),
         # Danh sách id DỌN SẴN để truyền thẳng vào các tool theo lô (add_to_shortlist,
         # generate_interview_questions). Bắt LLM tự bới từng candidate_id ra khỏi mảng
@@ -749,7 +777,7 @@ def create_shortlist(
     if not ten:
         return {"error": "Cần tên shortlist."}
 
-    da_co = _norm(ten) in {_norm(s.name) for s in jd.shortlists}
+    da_co = _khoa_shortlist(ten) in {_khoa_shortlist(s.name) for s in jd.shortlists}
     sl = _shortlist_for(db, jd.id, ten, created_by)
     return {
         # "exists" chứ không im lặng báo "created": agent phải nói đúng cho HR là danh
@@ -799,6 +827,26 @@ def _mo_shortlist(sl: models.Shortlist) -> dict:
     return dieu_huong("/shortlisting", jd=sl.jd_id, view="shortlist", sl=sl.id)
 
 
+def _khoa_shortlist(name) -> str:
+    """Khoá so tên shortlist: bỏ qua HOA/thường, khoảng trắng thừa và dạng Unicode —
+    nhưng GIỮ NGUYÊN DẤU.
+
+    VÌ SAO KHÔNG BỎ DẤU (bản trước dùng `_norm`, và đã sai thật): trong tiếng Việt,
+    hai tên chỉ khác dấu là HAI TÊN KHÁC NHAU. `_norm` đưa cả "cặn bã" lẫn "càn bả"
+    về "can ba", nên HR xin tạo "cặn bã" mà vị trí đó đã có "càn bả" thì tool lặng lẽ
+    DÙNG LẠI danh sách cũ — HR gõ một đằng, màn hình hiện một nẻo, và không có gì báo
+    là tên đã bị thay.
+
+    Bỏ dấu vốn để cứu trường hợp LLM gõ thiếu dấu ("tiem nang"). Nhưng cái giá là đặt
+    SAI TÊN theo yêu cầu của HR, mà tên là thứ HR nhìn thấy và gọi hằng ngày. Thà đẻ
+    ra một danh sách gần trùng (nhìn thấy được, xoá được) còn hơn âm thầm đổi tên.
+
+    Khoá này cũng khớp ĐÚNG với unique index `lower(btrim(name))` dưới DB, nên tầng
+    Python và tầng DB không còn nói hai chuyện khác nhau.
+    """
+    return _ten_shortlist(name).casefold()
+
+
 def _ten_shortlist(name) -> str:
     """Dạng chuẩn của tên shortlist để LƯU vào DB (vẫn giữ dấu và chữ hoa của HR).
 
@@ -812,20 +860,23 @@ def _ten_shortlist(name) -> str:
 def _shortlist_for(db: Session, jd_id, name: str, created_by: str) -> models.Shortlist:
     """Lấy shortlist tên `name` của một vị trí, chưa có thì tạo.
 
-    SO TÊN BẰNG `_norm` (bỏ dấu, hạ chữ, gộp khoảng trắng) chứ không so thô, vì cùng
-    MỘT Ý ĐỊNH của HR đến đây dưới rất nhiều mặt chữ khác nhau: HR gõ "tiềm năng",
-    LLM viết lại "Tiềm Năng" / "tiem nang" / "tiềm  năng", có lượt còn dùng dấu rời
-    (NFD) nên chuỗi trông y hệt mà `==` vẫn False. Mỗi biến thể trượt là một shortlist
-    mới — đúng lỗi HR gặp: dropdown hiện hai dòng "tiềm năng (3)" giống hệt nhau.
+    SO TÊN BẰNG `_khoa_shortlist`: bỏ qua hoa/thường, khoảng trắng thừa và dạng Unicode
+    (NFC/NFD) — vì cùng MỘT ý định của HR tới đây dưới nhiều mặt chữ ("tiềm năng",
+    "Tiềm Năng", "tiềm  năng", bản dùng dấu rời trông y hệt mà `==` vẫn False), và mỗi
+    biến thể trượt là một shortlist mới: dropdown hiện hai dòng "tiềm năng (3)" giống
+    hệt nhau.
+
+    NHƯNG GIỮ DẤU — xem `_khoa_shortlist`. Bản trước so bỏ dấu và đã sai thật: HR xin
+    "cặn bã" mà vị trí đó có sẵn "càn bả" thì tool im lặng dùng lại danh sách cũ.
 
     Trong nhóm khớp thì lấy bản CŨ NHẤT, để hai lượt agent gọi cách nhau vẫn rơi vào
     cùng một shortlist thay vì tuỳ thứ tự Postgres trả về.
 
-    Lọc bằng Python (mỗi vị trí chỉ có vài shortlist) thay vì trong SQL: so bỏ dấu
-    trong Postgres cần extension `unaccent`, không có sẵn trong image đang dùng.
+    Lọc bằng Python (mỗi vị trí chỉ có vài shortlist) thay vì trong SQL để khoá so tên
+    nằm ở ĐÚNG MỘT CHỖ, không phải viết lại một lần nữa bằng SQL rồi trôi lệch.
     """
     name = _ten_shortlist(name)
-    khoa = _norm(name)
+    khoa = _khoa_shortlist(name)
 
     def tim() -> models.Shortlist | None:
         ds = (
@@ -834,7 +885,7 @@ def _shortlist_for(db: Session, jd_id, name: str, created_by: str) -> models.Sho
             .order_by(models.Shortlist.created_at, models.Shortlist.id)
             .all()
         )
-        return next((s for s in ds if _norm(s.name) == khoa), None)
+        return next((s for s in ds if _khoa_shortlist(s.name) == khoa), None)
 
     sl = tim()
     if sl is not None:
@@ -961,6 +1012,18 @@ def add_to_shortlist(
         "added_count": len(added),
         "by_jd": theo_vi_tri,
     }
+    # TÊN LƯU KHÁC TÊN VỪA XIN -> nói thẳng, đừng để HR tự phát hiện trên màn hình.
+    #
+    # Xảy ra khi rơi vào một danh sách đã có sẵn chỉ khác hoa/thường. Lỗi HR gặp là
+    # bản nặng hơn của việc này: gõ "cặn bã" mà màn hình hiện "càn bả". Giờ so tên đã
+    # giữ dấu nên ca đó không còn, nhưng lời nhắc này vẫn phải có — nó là thứ duy nhất
+    # bắt agent NÓI RA khi tên bị đổi, thay vì im lặng báo "đã thêm xong".
+    if dich is not None and dich.name != name:
+        out["ten_khac_yeu_cau"] = {"HR xin": name, "danh sách dùng": dich.name}
+        out["warning"] = (
+            f"Đã dùng danh sách CÓ SẴN tên '{dich.name}', không phải '{name}' như vừa "
+            "yêu cầu (hai tên chỉ khác hoa/thường). PHẢI nói rõ điều này với HR."
+        )
     if already_in:
         out["already_in"] = already_in
     # Mở ĐÚNG shortlist vừa thao tác, không chỉ mở màn hình Shortlisting.
@@ -1348,7 +1411,11 @@ def finish_interview(
 
 
 def list_interview_results(
-    db: Session, jd_id: str = "", min_avg_score: float = 0.0, owner_id=None
+    db: Session,
+    jd_id: str = "",
+    min_avg_score: float = 0.0,
+    max_avg_score: float = 0.0,
+    owner_id=None,
 ) -> dict:
     """
     Bảng điểm phỏng vấn: ai đã phỏng vấn, điểm trung bình bao nhiêu (thang 10).
@@ -1356,6 +1423,10 @@ def list_interview_results(
     Đây là tool trả lời câu hỏi kiểu "những người có điểm phỏng vấn trên 7". Điểm ở
     đây là điểm PHỎNG VẤN (trung bình các câu, thang 10), KHÁC hoàn toàn điểm sàng lọc
     CV của search_candidates (thang 100) — trộn hai thang là chốt nhận/loại nhầm người.
+
+    Có `max_avg_score` vì cùng lý do với `search_candidates.max_score`: HR hỏi theo
+    KHOẢNG ("nhóm 5 tới 7 điểm") thường xuyên như hỏi theo ngưỡng, và thiếu chặn trên
+    thì câu đó trả về cả người ngoài khoảng mà không có gì báo sai.
     """
     q = _owner_filter(
         db.query(models.Candidate)
@@ -1371,6 +1442,16 @@ def list_interview_results(
         q = q.filter(models.Candidate.jd_id == jd.id)
         scope = jd.title
 
+    san = float(min_avg_score or 0)
+    tran = float(max_avg_score or 0)
+    if tran and tran < san:
+        return {
+            "error": (
+                f"Khoảng điểm không hợp lệ: max_avg_score={tran:g} nhỏ hơn "
+                f"min_avg_score={san:g}. Hãy kiểm tra lại con số HR vừa nêu."
+            )
+        }
+
     rows = []
     for c in q.all():
         interview = c.interview
@@ -1379,7 +1460,9 @@ def list_interview_results(
         da_cham, trung_binh = _interview_score(interview)
         # Chưa chấm câu nào thì KHÔNG có điểm, và "không có điểm" không phải là 0:
         # lọc "trên 7 điểm" mà coi họ là 0 sẽ âm thầm loại người chưa kịp chấm.
-        if trung_binh is None or trung_binh < float(min_avg_score or 0):
+        if trung_binh is None or trung_binh < san:
+            continue
+        if tran and trung_binh > tran:
             continue
         rows.append({
             "candidate_id": str(c.id),
@@ -1400,6 +1483,10 @@ def list_interview_results(
     out = {
         "scope": scope,
         "score_scale": "Điểm phỏng vấn thang 10 (trung bình các câu đã chấm).",
+        "score_filter": (
+            f"điểm từ {san:g} đến {tran:g}" if tran
+            else (f"điểm từ {san:g} trở lên" if san else "không lọc theo điểm")
+        ),
         "count": len(rows),
         "candidate_ids": [r["candidate_id"] for r in rows],
         "candidates": rows,
@@ -1460,18 +1547,31 @@ def set_candidate_decision(
     from app.services.logging import write_audit_log
 
     updated, khong_trong_shortlist, giu_nguyen = [], [], []
-    sl_dau_tien = None  # shortlist để mở ra cho HR xem kết quả
+    # SHORTLIST NÀO SẼ MỞ RA CHO HR: cái chứa NHIỀU NHẤT nhóm vừa chốt.
+    #
+    # Bản trước lấy `items[0].shortlist` của người ĐẦU TIÊN, mà query lại không có
+    # order_by. Hai chỗ sai cộng lại: (a) một ứng viên nằm trong nhiều shortlist thì
+    # Postgres trả theo thứ tự vật lý trong heap, và chính vòng lặp này UPDATE các
+    # item nên thứ tự đó đổi ngay giữa chừng; (b) người đầu danh sách có thể là người
+    # DUY NHẤT thuộc một shortlist khác. Kết quả: cùng một câu lệnh, lần thì mở đúng
+    # shortlist HR đang làm, lần thì nhảy sang shortlist khác — đúng lỗi HR gặp.
+    dem_shortlist: dict = {}
     for c in cands:
         items = (
             db.query(models.ShortlistItem)
+            .join(models.Shortlist, models.Shortlist.id == models.ShortlistItem.shortlist_id)
+            # Thứ tự XÁC ĐỊNH, không phụ thuộc heap.
             .filter(models.ShortlistItem.cv_id == c.id)
+            .order_by(models.Shortlist.created_at, models.Shortlist.id)
             .all()
         )
         if not items:
             khong_trong_shortlist.append(c.name)
             continue
-        if sl_dau_tien is None:
-            sl_dau_tien = items[0].shortlist
+        for item in items:
+            sl = item.shortlist
+            so, _ = dem_shortlist.get(sl.id, (0, sl))
+            dem_shortlist[sl.id] = (so + 1, sl)
         doi = False
         for item in items:
             cu = item.candidate_status
@@ -1514,8 +1614,15 @@ def set_candidate_decision(
             "Quyết định mới chỉ được LƯU, ứng viên chưa biết gì. Muốn báo cho họ thì gọi "
             "send_decision_emails."
         )
-        if sl_dau_tien is not None:
-            out["ui_action"] = _mo_shortlist(sl_dau_tien)
+        if dem_shortlist:
+            # Nhiều người nhất trước; hoà thì lấy shortlist CŨ NHẤT rồi tới id nhỏ
+            # nhất — cùng quy ước với `_shortlist_for`, để hai lần chạy trên cùng dữ
+            # liệu luôn mở ra đúng một màn hình.
+            dich = sorted(
+                dem_shortlist.values(),
+                key=lambda cap: (-cap[0], cap[1].created_at, str(cap[1].id)),
+            )[0][1]
+            out["ui_action"] = _mo_shortlist(dich)
     return out
 
 
