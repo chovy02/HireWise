@@ -13,6 +13,7 @@ và phải đoán/bịa ID ở lượt sau.
 """
 
 import json
+import os
 import uuid
 
 from sqlalchemy.orm import Session
@@ -23,6 +24,23 @@ from app import models
 _HISTORY_LIMIT = 14
 # Trần độ dài ghi chú kết quả tool cho MỖI lượt.
 _TOOL_NOTE_MAX = 2500
+
+# NGÂN SÁCH KÝ TỰ CHO TOÀN BỘ LỊCH SỬ GỬI CHO LLM.
+#
+# Đếm theo SỐ TIN NHẮN là không đủ, và đây là lỗi đã làm hỏng việc thật: 14 tin nhắn
+# nghe thì ít, nhưng mỗi ghi chú tool tới 2.500 ký tự và HR hay dán nguyên câu trả lời
+# phỏng vấn dài — cộng lại thành hơn 30.000 ký tự lịch sử, chồng lên ~4.700 token nền
+# (system prompt + schema 20 tool) là vượt trần 8.000 token/phút của Groq. Đo được
+# trong log: "Request too large ... Requested 9759" cho đúng một yêu cầu "ghi câu trả
+# lời của ứng viên X".
+#
+# 6.000 ký tự (~2.000 token) chừa đủ chỗ cho phần nền, cho câu HR vừa gõ (có thể rất
+# dài) và cho kết quả tool của chính lượt này.
+_HISTORY_CHARS = int(os.getenv("AGENT_HISTORY_CHARS", "6000"))
+
+# Ghi chú tool CŨ chỉ cần đủ để nhớ id/tên đã tra, không cần nguyên bảng dữ liệu —
+# nên trong ngữ cảnh nó được cắt ngắn hơn nhiều so với bản lưu trong DB.
+_TOOL_NOTE_IN_HISTORY = int(os.getenv("AGENT_TOOL_NOTE_HISTORY_CHARS", "700"))
 
 _TOOL_NOTE_PREFIX = (
     "[Kết quả tool ở lượt trước — HÃY DÙNG ĐÚNG các id/tên dưới đây, TUYỆT ĐỐI KHÔNG bịa id mới]:\n"
@@ -162,14 +180,29 @@ def build_history(db: Session, session_id) -> list[dict]:
         .limit(_HISTORY_LIMIT)
         .all()
     )
-    rows.reverse()  # về lại thứ tự thời gian tăng dần
-
-    history: list[dict] = []
-    for m in rows:
+    # Duyệt từ MỚI NHẤT về cũ và dừng khi hết ngân sách ký tự: tin nhắn gần đây là thứ
+    # quyết định lượt này, tin cũ chỉ là bối cảnh. Cắt từ đầu kia (bỏ tin mới) thì agent
+    # mất đúng phần đang nói dở.
+    nguoc: list[dict] = []
+    con_lai = _HISTORY_CHARS
+    for m in rows:  # rows đang là mới -> cũ
         if m.sender_role == "hr_staff":
-            history.append({"role": "user", "content": m.content})
+            msg = {"role": "user", "content": m.content}
         elif m.sender_role == "ai_agent":
-            history.append({"role": "assistant", "content": m.content})
+            msg = {"role": "assistant", "content": m.content}
         elif m.sender_role == "system":
-            history.append({"role": "system", "content": _TOOL_NOTE_PREFIX + m.content})
-    return history
+            msg = {
+                "role": "system",
+                "content": _TOOL_NOTE_PREFIX + m.content[:_TOOL_NOTE_IN_HISTORY],
+            }
+        else:
+            continue
+
+        do_dai = len(msg["content"])
+        if do_dai > con_lai:
+            break
+        nguoc.append(msg)
+        con_lai -= do_dai
+
+    nguoc.reverse()  # về lại thứ tự thời gian tăng dần
+    return nguoc

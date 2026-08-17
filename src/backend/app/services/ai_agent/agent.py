@@ -172,7 +172,14 @@ def _qua_lon(err: Exception) -> bool:
     CẮT NHỎ rồi gọi lại ngay — chờ bao lâu cũng không giúp gì.
     """
     text = str(err).lower()
-    return "413" in text or "request too large" in text
+    # SO KHỚP CHẶT, KHÔNG BẮT CHUỖI "413" TRẦN.
+    #
+    # Bản đầu tìm mỗi substring "413" trong thông báo lỗi — mà "413" xuất hiện đầy rẫy
+    # trong những chỗ chẳng liên quan: một uuid ứng viên, một số token, một id phiên.
+    # Hậu quả đúng như HR gặp: một yêu cầu ngắn ("gửi thư chấp nhận cho <tên>") lỗi vì
+    # nguyên nhân khác hẳn, nhưng bị dán nhãn "yêu cầu gom quá nhiều dữ liệu" — vừa nói
+    # sai với HR, vừa che mất lỗi thật.
+    return "request too large" in text or "error code: 413" in text or "status code: 413" in text
 
 
 def _is_quota_error(err: Exception) -> bool:
@@ -185,6 +192,30 @@ def _is_quota_error(err: Exception) -> bool:
 
 # Độ dài giữ lại cho MỘT kết quả tool cũ khi phải cắt lịch sử vì 413.
 _TOOL_MSG_MIN_CHARS = int(os.getenv("AGENT_TOOL_MSG_MIN_CHARS", "400"))
+
+
+def _bo_bot_lich_su_cu(messages: list) -> bool:
+    """Bỏ tin nhắn CŨ NHẤT của các lượt trước. True nếu bỏ được.
+
+    Đây là nước thứ hai, dùng khi kết quả tool trong lượt này đã lược hết mà request vẫn
+    quá lớn — tình huống có thật: HR dán nguyên một câu trả lời phỏng vấn dài rồi nhờ
+    ghi lại, trong khi phiên chat đã tích vài lượt tương tự.
+
+    CHỈ ĐỘNG VÀO PHẦN TRƯỚC CÂU HỎI HIỆN TẠI. Câu HR vừa gõ phải giữ NGUYÊN VĂN (nó là
+    dữ liệu sẽ được ghi vào buổi phỏng vấn), và cặp assistant(tool_calls) + tool của
+    lượt đang chạy cũng không được đụng tới — bỏ lẻ một vế là Groq báo lỗi thiếu
+    tool_call_id. Phần lịch sử cũ thì chỉ gồm user/assistant/system rời rạc nên bỏ an
+    toàn.
+    """
+    vi_tri_user = [i for i, m in enumerate(messages) if m.get("role") == "user"]
+    if not vi_tri_user:
+        return False
+    hien_tai = vi_tri_user[-1]
+    # index 0 là system prompt — không bao giờ bỏ.
+    if hien_tai <= 1:
+        return False
+    messages.pop(1)
+    return True
 
 
 def _thu_gon_lich_su(messages: list) -> bool:
@@ -200,7 +231,7 @@ def _thu_gon_lich_su(messages: list) -> bool:
     """
     chi_so = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
     if len(chi_so) <= 1:
-        return False
+        return _bo_bot_lich_su_cu(messages)
     da_cat = False
     for i in chi_so[:-1]:
         noi_dung = messages[i].get("content") or ""
@@ -211,7 +242,8 @@ def _thu_gon_lich_su(messages: list) -> bool:
         if len(gon) < len(noi_dung):
             messages[i] = {**messages[i], "content": gon}
             da_cat = True
-    return da_cat
+    # Kết quả tool đã lược sạch mà vẫn còn to -> chuyển sang bỏ bớt lịch sử lượt cũ.
+    return da_cat or _bo_bot_lich_su_cu(messages)
 
 
 def _quota_wait_seconds(err: Exception) -> float:
@@ -960,6 +992,12 @@ async def _agent_loop(messages: list, tools: list, execute) -> dict:
         except Exception as e:  # noqa: BLE001 - trả lời nhẹ nhàng thay vì 500
             # `da_ghi` là phần bắt buộc: lượt LLM cuối (viết câu trả lời) hỏng KHÔNG
             # xoá đi những gì các tool trước đó đã ghi vào DB.
+            # GHI NGUYÊN VĂN LỖI THẬT. Câu trả lời cho HR cố tình được viết lại cho dễ
+            # hiểu, nên nếu chỗ này không log thì nguyên nhân thật biến mất hoàn toàn —
+            # và mọi lỗi khác nhau đều trông giống nhau từ phía màn hình chat.
+            log.warning(
+                "Lượt agent hỏng sau %d tool (%s): %s", len(used), type(e).__name__, e
+            )
             return _out(_friendly_error(e, da_ghi), error=str(e))
 
         if getattr(resp, "usage", None):
@@ -1053,7 +1091,14 @@ async def _agent_loop(messages: list, tools: list, execute) -> dict:
                 "content": json.dumps(_trim_for_llm(result), default=str, ensure_ascii=False),
             })
 
-    return _out("Xin lỗi, yêu cầu cần quá nhiều bước để xử lý. Bạn thử tách nhỏ giúp mình nhé.")
+    # Hết MAX_STEPS. Log ra ĐÚNG chuỗi tool đã gọi: HR chỉ nhờ một việc mà chạm trần
+    # bước thì gần như luôn là agent gọi lặp một tool (mỗi lần một tham số hơi khác),
+    # và không có danh sách này thì không có cách nào biết nó lặp ở đâu.
+    log.warning("Lượt agent chạm trần %d bước; chuỗi tool đã gọi: %s", MAX_STEPS, used)
+    return _out(
+        "Xin lỗi, yêu cầu cần quá nhiều bước để xử lý. Bạn thử tách nhỏ giúp mình nhé.",
+        error=f"max_steps_exceeded ({MAX_STEPS}): {used}",
+    )
 
 
 async def _run_via_mcp(messages: list, user_id) -> dict:
