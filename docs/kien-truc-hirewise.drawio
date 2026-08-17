@@ -1,0 +1,394 @@
+<mxfile host="app.diagrams.net" agent="HireWise" type="device">
+  <diagram id="hirewise-architecture" name="Hình 1.2 — Kiến trúc hệ thống">
+    <mxGraphModel dx="1600" dy="1000" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1900" pageHeight="1100" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <!-- ═══════════════ TIÊU ĐỀ ═══════════════ -->
+        <mxCell id="title" value="Hình 1.2 — Sơ đồ kiến trúc hệ thống HireWise" style="text;html=1;align=left;verticalAlign=middle;fontSize=18;fontStyle=1;fontColor=#161C28;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry x="40" y="50" width="660" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="titleSub" value="6 container Docker Compose (viền liền) · 2 dịch vụ ngoài (viền đứt)" style="text;html=1;align=left;verticalAlign=middle;fontSize=11;fontColor=#6C768D;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry x="40" y="76" width="660" height="18" as="geometry"/>
+        </mxCell>
+
+        <!-- ═══════════════ CLIENT ═══════════════ -->
+        <mxCell id="client" value="Client" style="rounded=1;arcSize=6;whiteSpace=wrap;html=1;container=1;collapsible=0;recursiveResize=0;verticalAlign=top;align=left;spacingLeft=14;spacingTop=4;fontSize=14;fontStyle=1;fillColor=#DFEAF7;strokeColor=#4E7DB4;fontColor=#27496F;" vertex="1" parent="1">
+          <mxGeometry x="40" y="240" width="280" height="300" as="geometry"/>
+        </mxCell>
+        <mxCell id="clientSub" value="React 18 · Vite · Tailwind 4 · :5173" style="text;html=1;align=left;verticalAlign=middle;fontSize=10;fontColor=#6C768D;strokeColor=none;fillColor=none;" vertex="1" parent="client">
+          <mxGeometry x="14" y="24" width="250" height="14" as="geometry"/>
+        </mxCell>
+        <mxCell id="c1" value="Dashboard · Dự án · Shortlist" style="rounded=1;arcSize=20;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=11;fillColor=#F2F7FC;strokeColor=#B9CFE6;fontColor=#27496F;" vertex="1" parent="client">
+          <mxGeometry x="22" y="52" width="236" height="36" as="geometry"/>
+        </mxCell>
+        <mxCell id="c2" value="Copilot Chat (khung chat AI)" style="rounded=1;arcSize=20;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=11;fillColor=#F2F7FC;strokeColor=#B9CFE6;fontColor=#27496F;" vertex="1" parent="client">
+          <mxGeometry x="22" y="97" width="236" height="36" as="geometry"/>
+        </mxCell>
+        <mxCell id="c3" value="Context: Auth · Project · Toast" style="rounded=1;arcSize=20;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=11;fillColor=#F2F7FC;strokeColor=#B9CFE6;fontColor=#27496F;" vertex="1" parent="client">
+          <mxGeometry x="22" y="142" width="236" height="36" as="geometry"/>
+        </mxCell>
+        <mxCell id="c4" value="api/client.js — fetch + JWT" style="rounded=1;arcSize=20;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=11;fillColor=#F2F7FC;strokeColor=#B9CFE6;fontColor=#27496F;" vertex="1" parent="client">
+          <mxGeometry x="22" y="187" width="236" height="36" as="geometry"/>
+        </mxCell>
+        <mxCell id="c5" value="Vite dev proxy → api:8000" style="rounded=1;arcSize=20;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=11;fillColor=#F2F7FC;strokeColor=#B9CFE6;fontColor=#27496F;" vertex="1" parent="client">
+          <mxGeometry x="22" y="232" width="236" height="36" as="geometry"/>
+        </mxCell>
+
+        <!-- ═══════════════ API SERVER ═══════════════ -->
+        <mxCell id="api" value="API Server" style="rounded=1;arcSize=6;whiteSpace=wrap;html=1;container=1;collapsible=0;recursiveResize=0;verticalAlign=top;align=left;spacingLeft=14;spacingTop=4;fontSize=14;fontStyle=1;fillColor=#DEEEDB;strokeColor=#5C9354;fontColor=#2F5B2C;" vertex="1" parent="1">
+          <mxGeometry x="440" y="130" width="500" height="500" as="geometry"/>
+        </mxCell>
+        <mxCell id="apiSub" value="FastAPI · Uvicorn · SQLAlchemy · container hirewise_api" style="text;html=1;align=left;verticalAlign=middle;fontSize=10;fontColor=#6C768D;strokeColor=none;fillColor=none;" vertex="1" parent="api">
+          <mxGeometry x="14" y="24" width="460" height="14" as="geometry"/>
+        </mxCell>
+        <mxCell id="rail" value="GATEWAY API · :8000" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;horizontal=0;fontSize=11;fontStyle=1;fillColor=#5C9354;strokeColor=none;fontColor=#FFFFFF;" vertex="1" parent="api">
+          <mxGeometry x="22" y="52" width="54" height="422" as="geometry"/>
+        </mxCell>
+        <mxCell id="a1" value="&lt;b&gt;REST Routers&lt;/b&gt;&lt;br&gt;&lt;span style='font-size:9px;color:#6C768D'&gt;auth · jds · candidates · evaluations · shortlists · interviews · agent&lt;/span&gt;" style="rounded=1;arcSize=16;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=11;fillColor=#F3F9F2;strokeColor=#BEDAB9;fontColor=#2F5B2C;" vertex="1" parent="api">
+          <mxGeometry x="94" y="52" width="384" height="44" as="geometry"/>
+        </mxCell>
+        <mxCell id="a2" value="&lt;b&gt;Xác thực &amp;amp; phân quyền&lt;/b&gt;&lt;br&gt;&lt;span style='font-size:9px;color:#6C768D'&gt;JWT HS256 · bcrypt · require_role(hr_staff | admin)&lt;/span&gt;" style="rounded=1;arcSize=16;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=11;fillColor=#F3F9F2;strokeColor=#BEDAB9;fontColor=#2F5B2C;" vertex="1" parent="api">
+          <mxGeometry x="94" y="106" width="384" height="44" as="geometry"/>
+        </mxCell>
+        <mxCell id="a3" value="&lt;b&gt;Xử lý CV&lt;/b&gt;&lt;br&gt;&lt;span style='font-size:9px;color:#6C768D'&gt;giải nén ZIP · PyMuPDF trích text · SHA-256 chống trùng&lt;/span&gt;" style="rounded=1;arcSize=16;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=11;fillColor=#F3F9F2;strokeColor=#BEDAB9;fontColor=#2F5B2C;" vertex="1" parent="api">
+          <mxGeometry x="94" y="160" width="384" height="44" as="geometry"/>
+        </mxCell>
+        <mxCell id="a4" value="&lt;b&gt;Chuẩn hoá JD&lt;/b&gt;&lt;br&gt;&lt;span style='font-size:9px;color:#6C768D'&gt;mô tả tự do của HR → JSON yêu cầu có cấu trúc&lt;/span&gt;" style="rounded=1;arcSize=16;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=11;fillColor=#F3F9F2;strokeColor=#BEDAB9;fontColor=#2F5B2C;" vertex="1" parent="api">
+          <mxGeometry x="94" y="214" width="384" height="44" as="geometry"/>
+        </mxCell>
+        <mxCell id="a5" value="&lt;b&gt;AI Agent Loop&lt;/b&gt;&lt;br&gt;&lt;span style='font-size:9px;color:#6C768D'&gt;LLM tự chọn tool · tối đa 10 bước · 75 giây mỗi lượt&lt;/span&gt;" style="rounded=1;arcSize=16;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=11;fillColor=#F3F9F2;strokeColor=#BEDAB9;fontColor=#2F5B2C;" vertex="1" parent="api">
+          <mxGeometry x="94" y="268" width="384" height="44" as="geometry"/>
+        </mxCell>
+        <mxCell id="a6" value="&lt;b&gt;Nghiệp vụ tuyển dụng&lt;/b&gt;&lt;br&gt;&lt;span style='font-size:9px;color:#6C768D'&gt;xếp hạng · shortlist · quyết định · giới hạn dữ liệu theo HR&lt;/span&gt;" style="rounded=1;arcSize=16;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=11;fillColor=#F3F9F2;strokeColor=#BEDAB9;fontColor=#2F5B2C;" vertex="1" parent="api">
+          <mxGeometry x="94" y="322" width="384" height="44" as="geometry"/>
+        </mxCell>
+        <mxCell id="a7" value="&lt;b&gt;Rate Limiter&lt;/b&gt;&lt;br&gt;&lt;span style='font-size:9px;color:#6C768D'&gt;đặt chỗ token Groq trên Redis — script Lua nguyên tử&lt;/span&gt;" style="rounded=1;arcSize=16;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=11;fillColor=#F3F9F2;strokeColor=#BEDAB9;fontColor=#2F5B2C;" vertex="1" parent="api">
+          <mxGeometry x="94" y="376" width="384" height="44" as="geometry"/>
+        </mxCell>
+        <mxCell id="a8" value="&lt;b&gt;prestart&lt;/b&gt;&lt;br&gt;&lt;span style='font-size:9px;color:#6C768D'&gt;chờ Postgres sẵn sàng → chạy Alembic migration&lt;/span&gt;" style="rounded=1;arcSize=16;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=11;fillColor=#F3F9F2;strokeColor=#BEDAB9;fontColor=#2F5B2C;" vertex="1" parent="api">
+          <mxGeometry x="94" y="430" width="384" height="44" as="geometry"/>
+        </mxCell>
+
+        <!-- ═══════════════ MCP SERVER ═══════════════ -->
+        <mxCell id="mcp" value="MCP Server" style="rounded=1;arcSize=6;whiteSpace=wrap;html=1;container=1;collapsible=0;recursiveResize=0;verticalAlign=top;align=left;spacingLeft=14;spacingTop=4;fontSize=14;fontStyle=1;fillColor=#E6DEF5;strokeColor=#7B5EBB;fontColor=#4A3880;" vertex="1" parent="1">
+          <mxGeometry x="1040" y="130" width="340" height="250" as="geometry"/>
+        </mxCell>
+        <mxCell id="mcpSub" value="FastMCP · dịch vụ nội bộ · hirewise_mcp" style="text;html=1;align=left;verticalAlign=middle;fontSize=10;fontColor=#6C768D;strokeColor=none;fillColor=none;" vertex="1" parent="mcp">
+          <mxGeometry x="14" y="24" width="300" height="14" as="geometry"/>
+        </mxCell>
+        <mxCell id="m1" value="&lt;b&gt;tools/list · tools/call&lt;/b&gt;&lt;br&gt;&lt;span style='font-size:9px;color:#6C768D'&gt;Streamable HTTP :8001 — không publish ra host&lt;/span&gt;" style="rounded=1;arcSize=16;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=11;fillColor=#F5F1FC;strokeColor=#CDC0E8;fontColor=#4A3880;" vertex="1" parent="mcp">
+          <mxGeometry x="22" y="52" width="296" height="46" as="geometry"/>
+        </mxCell>
+        <mxCell id="m2" value="&lt;b&gt;20 tool nghiệp vụ&lt;/b&gt;&lt;br&gt;&lt;span style='font-size:9px;color:#6C768D'&gt;sinh từ tool_registry — một nguồn sự thật duy nhất&lt;/span&gt;" style="rounded=1;arcSize=16;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=11;fillColor=#F5F1FC;strokeColor=#CDC0E8;fontColor=#4A3880;" vertex="1" parent="mcp">
+          <mxGeometry x="22" y="108" width="296" height="46" as="geometry"/>
+        </mxCell>
+        <mxCell id="m3" value="&lt;b&gt;Chốt an toàn&lt;/b&gt;&lt;br&gt;&lt;span style='font-size:9px;color:#6C768D'&gt;Bearer MCP_AUTH_TOKEN + header X-HireWise-Actor&lt;/span&gt;" style="rounded=1;arcSize=16;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=11;fillColor=#F5F1FC;strokeColor=#CDC0E8;fontColor=#4A3880;" vertex="1" parent="mcp">
+          <mxGeometry x="22" y="164" width="296" height="46" as="geometry"/>
+        </mxCell>
+
+        <!-- ═══════════════ CELERY WORKER ═══════════════ -->
+        <mxCell id="worker" value="Celery Worker" style="rounded=1;arcSize=6;whiteSpace=wrap;html=1;container=1;collapsible=0;recursiveResize=0;verticalAlign=top;align=left;spacingLeft=14;spacingTop=4;fontSize=14;fontStyle=1;fillColor=#FAE3CE;strokeColor=#C67F3A;fontColor=#85501F;" vertex="1" parent="1">
+          <mxGeometry x="1040" y="440" width="340" height="190" as="geometry"/>
+        </mxCell>
+        <mxCell id="wrkSub" value="chấm CV nền · hirewise_worker" style="text;html=1;align=left;verticalAlign=middle;fontSize=10;fontColor=#6C768D;strokeColor=none;fillColor=none;" vertex="1" parent="worker">
+          <mxGeometry x="14" y="24" width="300" height="14" as="geometry"/>
+        </mxCell>
+        <mxCell id="w1" value="evaluate_candidate_task (×4)" style="rounded=1;arcSize=20;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=11;fillColor=#FEF5EC;strokeColor=#EDCBA9;fontColor=#85501F;" vertex="1" parent="worker">
+          <mxGeometry x="22" y="52" width="296" height="34" as="geometry"/>
+        </mxCell>
+        <mxCell id="w2" value="parse → chấm điểm → bằng chứng" style="rounded=1;arcSize=20;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=11;fillColor=#FEF5EC;strokeColor=#EDCBA9;fontColor=#85501F;" vertex="1" parent="worker">
+          <mxGeometry x="22" y="92" width="296" height="34" as="geometry"/>
+        </mxCell>
+        <mxCell id="w3" value="hết quota AI → hẹn lại, ≤ 12 lần" style="rounded=1;arcSize=20;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=11;fillColor=#FEF5EC;strokeColor=#EDCBA9;fontColor=#85501F;" vertex="1" parent="worker">
+          <mxGeometry x="22" y="132" width="296" height="34" as="geometry"/>
+        </mxCell>
+
+        <!-- ═══════════════ DOCKER VOLUMES ═══════════════ -->
+        <mxCell id="vols" value="Docker volumes" style="rounded=1;arcSize=6;whiteSpace=wrap;html=1;container=1;collapsible=0;recursiveResize=0;verticalAlign=top;align=left;spacingLeft=14;spacingTop=4;fontSize=14;fontStyle=1;fillColor=#E6E9F0;strokeColor=#7A8399;fontColor=#474F62;" vertex="1" parent="1">
+          <mxGeometry x="40" y="730" width="280" height="220" as="geometry"/>
+        </mxCell>
+        <mxCell id="volSub" value="sống qua mỗi lần rebuild" style="text;html=1;align=left;verticalAlign=middle;fontSize=10;fontColor=#6C768D;strokeColor=none;fillColor=none;" vertex="1" parent="vols">
+          <mxGeometry x="14" y="24" width="250" height="14" as="geometry"/>
+        </mxCell>
+        <mxCell id="v1" value="postgres_data" style="rounded=1;arcSize=20;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=11;fillColor=#F5F6F9;strokeColor=#CBD1DD;fontColor=#474F62;" vertex="1" parent="vols">
+          <mxGeometry x="22" y="52" width="236" height="36" as="geometry"/>
+        </mxCell>
+        <mxCell id="v2" value="cv_storage — PDF gốc" style="rounded=1;arcSize=20;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=11;fillColor=#F5F6F9;strokeColor=#CBD1DD;fontColor=#474F62;" vertex="1" parent="vols">
+          <mxGeometry x="22" y="97" width="236" height="36" as="geometry"/>
+        </mxCell>
+        <mxCell id="v3" value="email_attachments" style="rounded=1;arcSize=20;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=11;fillColor=#F5F6F9;strokeColor=#CBD1DD;fontColor=#474F62;" vertex="1" parent="vols">
+          <mxGeometry x="22" y="142" width="236" height="36" as="geometry"/>
+        </mxCell>
+
+        <!-- ═══════════════ POSTGRESQL ═══════════════ -->
+        <mxCell id="pg" value="PostgreSQL 15" style="rounded=1;arcSize=6;whiteSpace=wrap;html=1;container=1;collapsible=0;recursiveResize=0;verticalAlign=top;align=left;spacingLeft=52;spacingTop=4;fontSize=14;fontStyle=1;fillColor=#D7EAF0;strokeColor=#3E8092;fontColor=#235767;" vertex="1" parent="1">
+          <mxGeometry x="440" y="730" width="520" height="280" as="geometry"/>
+        </mxCell>
+        <mxCell id="pgIcon" value="" style="shape=cylinder3;boundedLbl=1;backgroundOutline=1;size=6;whiteSpace=wrap;html=1;fillColor=#F0F8FA;strokeColor=#3E8092;" vertex="1" parent="pg">
+          <mxGeometry x="20" y="8" width="22" height="28" as="geometry"/>
+        </mxCell>
+        <mxCell id="pgSub" value="hirewise_db :5433→5432 · UUID PK · JSONB · timestamptz" style="text;html=1;align=left;verticalAlign=middle;fontSize=10;fontColor=#6C768D;strokeColor=none;fillColor=none;" vertex="1" parent="pg">
+          <mxGeometry x="52" y="26" width="450" height="14" as="geometry"/>
+        </mxCell>
+        <mxCell id="t01" value="users" style="rounded=1;arcSize=20;whiteSpace=wrap;html=1;fontSize=9;fontFamily=Courier New;fillColor=#F0F8FA;strokeColor=#B0D3DD;fontColor=#235767;" vertex="1" parent="pg">
+          <mxGeometry x="22" y="52" width="152" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="t02" value="job_descriptions" style="rounded=1;arcSize=20;whiteSpace=wrap;html=1;fontSize=9;fontFamily=Courier New;fillColor=#F0F8FA;strokeColor=#B0D3DD;fontColor=#235767;" vertex="1" parent="pg">
+          <mxGeometry x="184" y="52" width="152" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="t03" value="candidates" style="rounded=1;arcSize=20;whiteSpace=wrap;html=1;fontSize=9;fontFamily=Courier New;fillColor=#F0F8FA;strokeColor=#B0D3DD;fontColor=#235767;" vertex="1" parent="pg">
+          <mxGeometry x="346" y="52" width="152" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="t04" value="candidate_skills" style="rounded=1;arcSize=20;whiteSpace=wrap;html=1;fontSize=9;fontFamily=Courier New;fillColor=#F0F8FA;strokeColor=#B0D3DD;fontColor=#235767;" vertex="1" parent="pg">
+          <mxGeometry x="22" y="90" width="152" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="t05" value="candidate_projects" style="rounded=1;arcSize=20;whiteSpace=wrap;html=1;fontSize=9;fontFamily=Courier New;fillColor=#F0F8FA;strokeColor=#B0D3DD;fontColor=#235767;" vertex="1" parent="pg">
+          <mxGeometry x="184" y="90" width="152" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="t06" value="evaluations" style="rounded=1;arcSize=20;whiteSpace=wrap;html=1;fontSize=9;fontFamily=Courier New;fillColor=#F0F8FA;strokeColor=#B0D3DD;fontColor=#235767;" vertex="1" parent="pg">
+          <mxGeometry x="346" y="90" width="152" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="t07" value="evaluation_overrides" style="rounded=1;arcSize=20;whiteSpace=wrap;html=1;fontSize=9;fontFamily=Courier New;fillColor=#F0F8FA;strokeColor=#B0D3DD;fontColor=#235767;" vertex="1" parent="pg">
+          <mxGeometry x="22" y="128" width="152" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="t08" value="shortlists" style="rounded=1;arcSize=20;whiteSpace=wrap;html=1;fontSize=9;fontFamily=Courier New;fillColor=#F0F8FA;strokeColor=#B0D3DD;fontColor=#235767;" vertex="1" parent="pg">
+          <mxGeometry x="184" y="128" width="152" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="t09" value="shortlist_items" style="rounded=1;arcSize=20;whiteSpace=wrap;html=1;fontSize=9;fontFamily=Courier New;fillColor=#F0F8FA;strokeColor=#B0D3DD;fontColor=#235767;" vertex="1" parent="pg">
+          <mxGeometry x="346" y="128" width="152" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="t10" value="interviews" style="rounded=1;arcSize=20;whiteSpace=wrap;html=1;fontSize=9;fontFamily=Courier New;fillColor=#F0F8FA;strokeColor=#B0D3DD;fontColor=#235767;" vertex="1" parent="pg">
+          <mxGeometry x="22" y="166" width="152" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="t11" value="interview_questions" style="rounded=1;arcSize=20;whiteSpace=wrap;html=1;fontSize=9;fontFamily=Courier New;fillColor=#F0F8FA;strokeColor=#B0D3DD;fontColor=#235767;" vertex="1" parent="pg">
+          <mxGeometry x="184" y="166" width="152" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="t12" value="upload_batches" style="rounded=1;arcSize=20;whiteSpace=wrap;html=1;fontSize=9;fontFamily=Courier New;fillColor=#F0F8FA;strokeColor=#B0D3DD;fontColor=#235767;" vertex="1" parent="pg">
+          <mxGeometry x="346" y="166" width="152" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="t13" value="chat_sessions · messages" style="rounded=1;arcSize=20;whiteSpace=wrap;html=1;fontSize=9;fontFamily=Courier New;fillColor=#F0F8FA;strokeColor=#B0D3DD;fontColor=#235767;" vertex="1" parent="pg">
+          <mxGeometry x="22" y="204" width="152" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="t14" value="email_templates" style="rounded=1;arcSize=20;whiteSpace=wrap;html=1;fontSize=9;fontFamily=Courier New;fillColor=#F0F8FA;strokeColor=#B0D3DD;fontColor=#235767;" vertex="1" parent="pg">
+          <mxGeometry x="184" y="204" width="152" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="t15" value="ai_logs · audit_logs" style="rounded=1;arcSize=20;whiteSpace=wrap;html=1;fontSize=9;fontFamily=Courier New;fillColor=#F0F8FA;strokeColor=#B0D3DD;fontColor=#235767;" vertex="1" parent="pg">
+          <mxGeometry x="346" y="204" width="152" height="30" as="geometry"/>
+        </mxCell>
+
+        <!-- ═══════════════ REDIS ═══════════════ -->
+        <mxCell id="redis" value="Redis 7" style="rounded=1;arcSize=6;whiteSpace=wrap;html=1;container=1;collapsible=0;recursiveResize=0;verticalAlign=top;align=left;spacingLeft=14;spacingTop=4;fontSize=14;fontStyle=1;fillColor=#F7DEDB;strokeColor=#B55A50;fontColor=#7F3A32;" vertex="1" parent="1">
+          <mxGeometry x="1060" y="730" width="320" height="280" as="geometry"/>
+        </mxCell>
+        <mxCell id="rdsSub" value="hirewise_redis :6379" style="text;html=1;align=left;verticalAlign=middle;fontSize=10;fontColor=#6C768D;strokeColor=none;fillColor=none;" vertex="1" parent="redis">
+          <mxGeometry x="14" y="24" width="280" height="14" as="geometry"/>
+        </mxCell>
+        <mxCell id="r1" value="&lt;b&gt;DB 0 — Celery broker&lt;/b&gt;&lt;br&gt;&lt;span style='font-size:9px;color:#6C768D'&gt;hàng đợi task chấm CV&lt;/span&gt;" style="rounded=1;arcSize=16;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=11;fillColor=#FDF2F1;strokeColor=#E9C0BB;fontColor=#7F3A32;" vertex="1" parent="redis">
+          <mxGeometry x="22" y="52" width="276" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="r2" value="&lt;b&gt;DB 1 — result backend&lt;/b&gt;&lt;br&gt;&lt;span style='font-size:9px;color:#6C768D'&gt;trạng thái &amp;amp; kết quả từng task&lt;/span&gt;" style="rounded=1;arcSize=16;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=11;fillColor=#FDF2F1;strokeColor=#E9C0BB;fontColor=#7F3A32;" vertex="1" parent="redis">
+          <mxGeometry x="22" y="112" width="276" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="r3" value="&lt;b&gt;DB 2 — sổ ngân sách token&lt;/b&gt;&lt;br&gt;&lt;span style='font-size:9px;color:#6C768D'&gt;cửa sổ trượt phút/ngày · Lua nguyên tử&lt;/span&gt;" style="rounded=1;arcSize=16;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=11;fillColor=#FDF2F1;strokeColor=#E9C0BB;fontColor=#7F3A32;" vertex="1" parent="redis">
+          <mxGeometry x="22" y="172" width="276" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="rNote" value="cả 3 tiến trình đếm chung một sổ" style="text;html=1;align=left;verticalAlign=middle;fontSize=9;fontColor=#6C768D;strokeColor=none;fillColor=none;" vertex="1" parent="redis">
+          <mxGeometry x="22" y="230" width="276" height="14" as="geometry"/>
+        </mxCell>
+
+        <!-- ═══════════════ NGOÀI HỆ THỐNG: SMTP ═══════════════ -->
+        <mxCell id="smtp" value="SMTP Server" style="rounded=1;arcSize=6;whiteSpace=wrap;html=1;container=1;collapsible=0;recursiveResize=0;dashed=1;dashPattern=6 4;verticalAlign=top;align=left;spacingLeft=48;spacingTop=6;fontSize=13;fontStyle=1;fillColor=#F7ECD0;strokeColor=#AE8C2E;fontColor=#745B14;" vertex="1" parent="1">
+          <mxGeometry x="1540" y="150" width="200" height="150" as="geometry"/>
+        </mxCell>
+        <mxCell id="smtpIcon" value="" style="ellipse;shape=cloud;whiteSpace=wrap;html=1;fillColor=#FDF8EC;strokeColor=#AE8C2E;" vertex="1" parent="smtp">
+          <mxGeometry x="10" y="8" width="34" height="24" as="geometry"/>
+        </mxCell>
+        <mxCell id="smtp1" value="smtp.gmail.com:465" style="text;html=1;align=left;verticalAlign=middle;fontSize=10;fontFamily=Courier New;fontColor=#745B14;strokeColor=none;fillColor=none;" vertex="1" parent="smtp">
+          <mxGeometry x="12" y="44" width="176" height="14" as="geometry"/>
+        </mxCell>
+        <mxCell id="smtp2" value="SSL/TLS · fastapi-mail + smtplib" style="text;html=1;align=left;verticalAlign=middle;fontSize=9;fontColor=#6C768D;strokeColor=none;fillColor=none;" vertex="1" parent="smtp">
+          <mxGeometry x="12" y="62" width="176" height="14" as="geometry"/>
+        </mxCell>
+        <mxCell id="smtp3" value="mã xác minh · khoá tài khoản&lt;br&gt;thư nhận / từ chối ứng viên" style="text;html=1;align=left;verticalAlign=top;fontSize=9;fontColor=#6C768D;strokeColor=none;fillColor=none;" vertex="1" parent="smtp">
+          <mxGeometry x="12" y="80" width="176" height="34" as="geometry"/>
+        </mxCell>
+
+        <!-- ═══════════════ NGOÀI HỆ THỐNG: GROQ ═══════════════ -->
+        <mxCell id="groq" value="Groq LLM API" style="rounded=1;arcSize=6;whiteSpace=wrap;html=1;container=1;collapsible=0;recursiveResize=0;dashed=1;dashPattern=6 4;verticalAlign=top;align=left;spacingLeft=48;spacingTop=6;fontSize=13;fontStyle=1;fillColor=#F7ECD0;strokeColor=#AE8C2E;fontColor=#745B14;" vertex="1" parent="1">
+          <mxGeometry x="1540" y="420" width="200" height="180" as="geometry"/>
+        </mxCell>
+        <mxCell id="groqIcon" value="" style="ellipse;shape=cloud;whiteSpace=wrap;html=1;fillColor=#FDF8EC;strokeColor=#AE8C2E;" vertex="1" parent="groq">
+          <mxGeometry x="10" y="8" width="34" height="24" as="geometry"/>
+        </mxCell>
+        <mxCell id="groq1" value="api.groq.com" style="text;html=1;align=left;verticalAlign=middle;fontSize=10;fontFamily=Courier New;fontColor=#745B14;strokeColor=none;fillColor=none;" vertex="1" parent="groq">
+          <mxGeometry x="12" y="44" width="176" height="14" as="geometry"/>
+        </mxCell>
+        <mxCell id="groq2" value="openai/gpt-oss-120b — chính" style="text;html=1;align=left;verticalAlign=middle;fontSize=9;fontColor=#6C768D;strokeColor=none;fillColor=none;" vertex="1" parent="groq">
+          <mxGeometry x="12" y="62" width="176" height="14" as="geometry"/>
+        </mxCell>
+        <mxCell id="groq3" value="openai/gpt-oss-20b — dự phòng" style="text;html=1;align=left;verticalAlign=middle;fontSize=9;fontColor=#6C768D;strokeColor=none;fillColor=none;" vertex="1" parent="groq">
+          <mxGeometry x="12" y="80" width="176" height="14" as="geometry"/>
+        </mxCell>
+        <mxCell id="groq4" value="free tier: TPM/TPD tính riêng&lt;br&gt;theo từng model và tài khoản" style="text;html=1;align=left;verticalAlign=top;fontSize=9;fontColor=#6C768D;strokeColor=none;fillColor=none;" vertex="1" parent="groq">
+          <mxGeometry x="12" y="98" width="176" height="34" as="geometry"/>
+        </mxCell>
+
+        <!-- ═══════════════ CHÚ GIẢI ═══════════════ -->
+        <mxCell id="legend" value="Chú giải" style="rounded=1;arcSize=6;whiteSpace=wrap;html=1;container=1;collapsible=0;recursiveResize=0;verticalAlign=top;align=left;spacingLeft=14;spacingTop=4;fontSize=12;fontStyle=1;fillColor=#FFFFFF;strokeColor=#DBE0EB;fontColor=#161C28;" vertex="1" parent="1">
+          <mxGeometry x="1420" y="730" width="300" height="260" as="geometry"/>
+        </mxCell>
+        <mxCell id="lg1s" value="" style="rounded=1;arcSize=30;html=1;fillColor=#DFEAF7;strokeColor=#4E7DB4;" vertex="1" parent="legend">
+          <mxGeometry x="16" y="36" width="18" height="18" as="geometry"/>
+        </mxCell>
+        <mxCell id="lg1t" value="Tầng giao diện" style="text;html=1;align=left;verticalAlign=middle;fontSize=11;fontColor=#414A5E;strokeColor=none;fillColor=none;" vertex="1" parent="legend">
+          <mxGeometry x="42" y="36" width="240" height="18" as="geometry"/>
+        </mxCell>
+        <mxCell id="lg2s" value="" style="rounded=1;arcSize=30;html=1;fillColor=#DEEEDB;strokeColor=#5C9354;" vertex="1" parent="legend">
+          <mxGeometry x="16" y="62" width="18" height="18" as="geometry"/>
+        </mxCell>
+        <mxCell id="lg2t" value="Tầng ứng dụng" style="text;html=1;align=left;verticalAlign=middle;fontSize=11;fontColor=#414A5E;strokeColor=none;fillColor=none;" vertex="1" parent="legend">
+          <mxGeometry x="42" y="62" width="240" height="18" as="geometry"/>
+        </mxCell>
+        <mxCell id="lg3s" value="" style="rounded=1;arcSize=30;html=1;fillColor=#E6DEF5;strokeColor=#7B5EBB;" vertex="1" parent="legend">
+          <mxGeometry x="16" y="88" width="18" height="18" as="geometry"/>
+        </mxCell>
+        <mxCell id="lg3t" value="Tầng công cụ AI (MCP)" style="text;html=1;align=left;verticalAlign=middle;fontSize=11;fontColor=#414A5E;strokeColor=none;fillColor=none;" vertex="1" parent="legend">
+          <mxGeometry x="42" y="88" width="240" height="18" as="geometry"/>
+        </mxCell>
+        <mxCell id="lg4s" value="" style="rounded=1;arcSize=30;html=1;fillColor=#FAE3CE;strokeColor=#C67F3A;" vertex="1" parent="legend">
+          <mxGeometry x="16" y="114" width="18" height="18" as="geometry"/>
+        </mxCell>
+        <mxCell id="lg4t" value="Xử lý nền (bất đồng bộ)" style="text;html=1;align=left;verticalAlign=middle;fontSize=11;fontColor=#414A5E;strokeColor=none;fillColor=none;" vertex="1" parent="legend">
+          <mxGeometry x="42" y="114" width="240" height="18" as="geometry"/>
+        </mxCell>
+        <mxCell id="lg5s" value="" style="rounded=1;arcSize=30;html=1;fillColor=#D7EAF0;strokeColor=#3E8092;" vertex="1" parent="legend">
+          <mxGeometry x="16" y="140" width="18" height="18" as="geometry"/>
+        </mxCell>
+        <mxCell id="lg5t" value="Cơ sở dữ liệu" style="text;html=1;align=left;verticalAlign=middle;fontSize=11;fontColor=#414A5E;strokeColor=none;fillColor=none;" vertex="1" parent="legend">
+          <mxGeometry x="42" y="140" width="240" height="18" as="geometry"/>
+        </mxCell>
+        <mxCell id="lg6s" value="" style="rounded=1;arcSize=30;html=1;fillColor=#F7DEDB;strokeColor=#B55A50;" vertex="1" parent="legend">
+          <mxGeometry x="16" y="166" width="18" height="18" as="geometry"/>
+        </mxCell>
+        <mxCell id="lg6t" value="Hàng đợi &amp;amp; bộ đếm" style="text;html=1;align=left;verticalAlign=middle;fontSize=11;fontColor=#414A5E;strokeColor=none;fillColor=none;" vertex="1" parent="legend">
+          <mxGeometry x="42" y="166" width="240" height="18" as="geometry"/>
+        </mxCell>
+        <mxCell id="lg7s" value="" style="rounded=1;arcSize=30;html=1;fillColor=#E6E9F0;strokeColor=#7A8399;" vertex="1" parent="legend">
+          <mxGeometry x="16" y="192" width="18" height="18" as="geometry"/>
+        </mxCell>
+        <mxCell id="lg7t" value="Lưu trữ tệp" style="text;html=1;align=left;verticalAlign=middle;fontSize=11;fontColor=#414A5E;strokeColor=none;fillColor=none;" vertex="1" parent="legend">
+          <mxGeometry x="42" y="192" width="240" height="18" as="geometry"/>
+        </mxCell>
+        <mxCell id="lg8s" value="" style="rounded=1;arcSize=30;html=1;dashed=1;dashPattern=4 3;fillColor=#F7ECD0;strokeColor=#AE8C2E;" vertex="1" parent="legend">
+          <mxGeometry x="16" y="218" width="18" height="18" as="geometry"/>
+        </mxCell>
+        <mxCell id="lg8t" value="Dịch vụ ngoài hệ thống" style="text;html=1;align=left;verticalAlign=middle;fontSize=11;fontColor=#414A5E;strokeColor=none;fillColor=none;" vertex="1" parent="legend">
+          <mxGeometry x="42" y="218" width="240" height="18" as="geometry"/>
+        </mxCell>
+
+        <!-- ═══════════════ CẠNH: CLIENT ⇄ API ═══════════════ -->
+        <mxCell id="e1" value="HTTPS / REST&lt;br&gt;JWT Bearer" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#67718A;strokeWidth=1.6;fontSize=10;fontColor=#6C768D;endArrow=blockThin;endFill=1;endSize=6;verticalAlign=bottom;labelBackgroundColor=none;exitX=1;exitY=0.267;exitDx=0;exitDy=0;entryX=0;entryY=0.38;entryDx=0;entryDy=0;" edge="1" parent="1" source="client" target="api">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e2" value="dữ liệu JSON" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#67718A;strokeWidth=1.6;fontSize=10;fontColor=#6C768D;endArrow=blockThin;endFill=1;endSize=6;verticalAlign=top;labelBackgroundColor=none;exitX=0;exitY=0.52;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="api" target="client">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- ═══════════════ CẠNH: API → MCP ═══════════════ -->
+        <mxCell id="e3" value="MCP Streamable&lt;br&gt;HTTP :8001" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#67718A;strokeWidth=1.6;fontSize=10;fontColor=#6C768D;endArrow=blockThin;endFill=1;endSize=6;verticalAlign=bottom;labelBackgroundColor=none;exitX=1;exitY=0.16;exitDx=0;exitDy=0;entryX=0;entryY=0.32;entryDx=0;entryDy=0;" edge="1" parent="1" source="api" target="mcp">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- ═══════════════ CẠNH: MCP / WORKER / API → NGOÀI ═══════════════ -->
+        <mxCell id="e4" value="gửi thư kết quả" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#67718A;strokeWidth=1.6;fontSize=10;fontColor=#6C768D;endArrow=blockThin;endFill=1;endSize=6;verticalAlign=bottom;labelBackgroundColor=none;exitX=1;exitY=0.36;exitDx=0;exitDy=0;entryX=0;entryY=0.467;entryDx=0;entryDy=0;" edge="1" parent="1" source="mcp" target="smtp">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e5" value="sinh câu hỏi PV" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#67718A;strokeWidth=1.6;fontSize=10;fontColor=#6C768D;endArrow=blockThin;endFill=1;endSize=6;verticalAlign=bottom;labelBackgroundColor=none;exitX=1;exitY=0.84;exitDx=0;exitDy=0;entryX=0;entryY=0.222;entryDx=0;entryDy=0;" edge="1" parent="1" source="mcp" target="groq">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1420" y="340"/>
+              <mxPoint x="1420" y="460"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e6" value="chấm điểm CV" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#67718A;strokeWidth=1.6;fontSize=10;fontColor=#6C768D;endArrow=blockThin;endFill=1;endSize=6;verticalAlign=bottom;labelBackgroundColor=none;exitX=1;exitY=0.421;exitDx=0;exitDy=0;entryX=0;entryY=0.556;entryDx=0;entryDy=0;" edge="1" parent="1" source="worker" target="groq">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e7" value="gọi LLM — chuẩn hoá JD · agent chat · chấm phỏng vấn" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#67718A;strokeWidth=1.6;fontSize=10;fontColor=#6C768D;endArrow=blockThin;endFill=1;endSize=6;verticalAlign=bottom;labelBackgroundColor=none;exitX=0.64;exitY=0;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="api" target="groq">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="760" y="66"/>
+              <mxPoint x="1815" y="66"/>
+              <mxPoint x="1815" y="510"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e8" value="SMTP — mail xác minh &amp;amp; thư kết quả" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#67718A;strokeWidth=1.6;fontSize=10;fontColor=#6C768D;endArrow=blockThin;endFill=1;endSize=6;verticalAlign=bottom;labelBackgroundColor=none;exitX=0.84;exitY=0;exitDx=0;exitDy=0;entryX=1;entryY=0.733;entryDx=0;entryDy=0;" edge="1" parent="1" source="api" target="smtp">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="860" y="96"/>
+              <mxPoint x="1790" y="96"/>
+              <mxPoint x="1790" y="260"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- ═══════════════ BUS DỮ LIỆU ═══════════════ -->
+        <mxCell id="bus" value="đọc / ghi dùng chung" style="edgeStyle=none;html=1;strokeColor=#67718A;strokeWidth=2.4;fontSize=10;fontColor=#6C768D;endArrow=none;startArrow=none;verticalAlign=bottom;labelBackgroundColor=none;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="620" y="676" as="sourcePoint"/>
+            <mxPoint x="1240" y="676" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="busApi" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#67718A;strokeWidth=1.6;endArrow=none;exitX=0.52;exitY=1;exitDx=0;exitDy=0;" edge="1" parent="1" source="api">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="700" y="676" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="busMcp" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#67718A;strokeWidth=1.6;endArrow=none;exitX=0;exitY=0.84;exitDx=0;exitDy=0;" edge="1" parent="1" source="mcp">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1000" y="676" as="targetPoint"/>
+            <Array as="points">
+              <mxPoint x="1000" y="340"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="busWrk" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#67718A;strokeWidth=1.6;endArrow=none;exitX=0.353;exitY=1;exitDx=0;exitDy=0;" edge="1" parent="1" source="worker">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1160" y="676" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="busPg" value="SQLAlchemy · psycopg2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#67718A;strokeWidth=1.6;fontSize=10;fontColor=#6C768D;endArrow=blockThin;endFill=1;endSize=6;startArrow=blockThin;startFill=1;startSize=6;align=left;labelBackgroundColor=none;entryX=0.346;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" target="pg">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="620" y="676" as="sourcePoint"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="busRds" value="đẩy task · đếm token" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#67718A;strokeWidth=1.6;fontSize=10;fontColor=#6C768D;endArrow=blockThin;endFill=1;endSize=6;startArrow=blockThin;startFill=1;startSize=6;align=left;labelBackgroundColor=none;entryX=0.563;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" target="redis">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1240" y="676" as="sourcePoint"/>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- ═══════════════ REDIS → WORKER ═══════════════ -->
+        <mxCell id="e9" value="worker lấy task" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#67718A;strokeWidth=1.6;fontSize=10;fontColor=#6C768D;endArrow=blockThin;endFill=1;endSize=6;align=left;labelBackgroundColor=none;exitX=0.844;exitY=0;exitDx=0;exitDy=0;entryX=0.853;entryY=1;entryDx=0;entryDy=0;" edge="1" parent="1" source="redis" target="worker">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- ═══════════════ VOLUMES ═══════════════ -->
+        <mxCell id="e10" value="cv_storage · email_attachments" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;dashPattern=5 4;strokeColor=#A6AEBF;strokeWidth=1.6;fontSize=10;fontColor=#6C768D;endArrow=blockThin;endFill=1;endSize=6;verticalAlign=bottom;labelBackgroundColor=none;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0;entryY=0.94;entryDx=0;entryDy=0;" edge="1" parent="1" source="vols" target="api">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="180" y="600"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e11" value="postgres_data" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;dashPattern=5 4;strokeColor=#A6AEBF;strokeWidth=1.6;fontSize=10;fontColor=#6C768D;endArrow=blockThin;endFill=1;endSize=6;verticalAlign=bottom;labelBackgroundColor=none;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.393;entryDx=0;entryDy=0;" edge="1" parent="1" source="vols" target="pg">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
