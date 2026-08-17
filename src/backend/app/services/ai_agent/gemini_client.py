@@ -284,20 +284,31 @@ def is_model_missing(err: Exception) -> bool:
     ngoài, trong khi chuỗi model dự phòng vẫn còn nguyên một model chạy tốt chưa hề thử.
     """
     msg = str(err).lower()
-    return "model_not_found" in msg or ("404" in msg and "does not exist" in msg)
+    return "model_not_found" in msg or ("error code: 404" in msg and "does not exist" in msg)
 
 
 def _is_rate_limit(err: Exception) -> bool:
     msg = str(err).lower()
-    return "429" in msg or "rate limit" in msg or "rate_limit" in msg or "quota" in msg
+    return (
+        "error code: 429" in msg
+        or "rate limit" in msg
+        or "rate_limit" in msg
+        or "quota" in msg
+    )
 
 
 def _is_transient(err: Exception) -> bool:
-    """5xx / timeout / mất kết nối: lỗi TẠM THỜI, thử lại là được."""
+    """5xx / timeout / mất kết nối: lỗi TẠM THỜI, thử lại là được.
+
+    Mã lỗi phải khớp cả cụm "error code: 5xx". Bắt substring "500"/"503" trần thì một
+    uuid, một số token hay một mốc thời gian có ba chữ số đó cũng biến lỗi TẤT ĐỊNH
+    thành "tạm thời" — và code ngồi thử lại 4 lần một thứ không đời nào chạy được.
+    """
     msg = str(err).lower()
     return any(
         k in msg
-        for k in ("500", "502", "503", "504", "overloaded", "unavailable",
+        for k in ("error code: 500", "error code: 502", "error code: 503",
+                  "error code: 504", "overloaded", "unavailable",
                   "timeout", "timed out", "connection", "temporarily")
     )
 

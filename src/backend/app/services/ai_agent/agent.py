@@ -159,10 +159,91 @@ class _TraLoiRong(Exception):
     """Groq trả 200 nhưng lượt đó không có chữ nào và cũng không gọi tool nào."""
 
 
+def _qua_lon(err: Exception) -> bool:
+    """413: MỘT request vượt trần token/phút — KHÁC HẲN "hết hạn mức".
+
+    Groq gắn nhãn `rate_limit_exceeded` cho cả hai, nên trước đây 413 rơi thẳng vào
+    nhánh quota: Copilot đi báo HR "hệ thống hết hạn mức AI cho hôm nay" trong khi hạn
+    mức còn nguyên — thứ cạn là chỗ trong MỘT lời gọi. Đúng màn hình HR đã gặp: lượt đó
+    tạo shortlist + sinh câu hỏi xong xuôi, chỉ mỗi lời gọi cuối (viết câu trả lời) mang
+    theo lịch sử 8.446 token nên không lọt qua trần 8.000.
+
+    Cách chữa cũng ngược nhau: hết hạn mức thì phải CHỜ, còn request quá lớn thì phải
+    CẮT NHỎ rồi gọi lại ngay — chờ bao lâu cũng không giúp gì.
+    """
+    text = str(err).lower()
+    # SO KHỚP CHẶT, KHÔNG BẮT CHUỖI "413" TRẦN.
+    #
+    # Bản đầu tìm mỗi substring "413" trong thông báo lỗi — mà "413" xuất hiện đầy rẫy
+    # trong những chỗ chẳng liên quan: một uuid ứng viên, một số token, một id phiên.
+    # Hậu quả đúng như HR gặp: một yêu cầu ngắn ("gửi thư chấp nhận cho <tên>") lỗi vì
+    # nguyên nhân khác hẳn, nhưng bị dán nhãn "yêu cầu gom quá nhiều dữ liệu" — vừa nói
+    # sai với HR, vừa che mất lỗi thật.
+    return "request too large" in text or "error code: 413" in text or "status code: 413" in text
+
+
 def _is_quota_error(err: Exception) -> bool:
     """Lỗi này là do CẠN HẠN MỨC nhà cung cấp (429), không phải lỗi lập trình."""
+    if _qua_lon(err):
+        return False
     text = str(err).lower()
     return "rate_limit" in text or "rate limit" in text or "error code: 429" in text
+
+
+# Độ dài giữ lại cho MỘT kết quả tool cũ khi phải cắt lịch sử vì 413.
+_TOOL_MSG_MIN_CHARS = int(os.getenv("AGENT_TOOL_MSG_MIN_CHARS", "400"))
+
+
+def _bo_bot_lich_su_cu(messages: list) -> bool:
+    """Bỏ tin nhắn CŨ NHẤT của các lượt trước. True nếu bỏ được.
+
+    Đây là nước thứ hai, dùng khi kết quả tool trong lượt này đã lược hết mà request vẫn
+    quá lớn — tình huống có thật: HR dán nguyên một câu trả lời phỏng vấn dài rồi nhờ
+    ghi lại, trong khi phiên chat đã tích vài lượt tương tự.
+
+    CHỈ ĐỘNG VÀO PHẦN TRƯỚC CÂU HỎI HIỆN TẠI. Câu HR vừa gõ phải giữ NGUYÊN VĂN (nó là
+    dữ liệu sẽ được ghi vào buổi phỏng vấn), và cặp assistant(tool_calls) + tool của
+    lượt đang chạy cũng không được đụng tới — bỏ lẻ một vế là Groq báo lỗi thiếu
+    tool_call_id. Phần lịch sử cũ thì chỉ gồm user/assistant/system rời rạc nên bỏ an
+    toàn.
+    """
+    vi_tri_user = [i for i, m in enumerate(messages) if m.get("role") == "user"]
+    if not vi_tri_user:
+        return False
+    hien_tai = vi_tri_user[-1]
+    # index 0 là system prompt — không bao giờ bỏ.
+    if hien_tai <= 1:
+        return False
+    messages.pop(1)
+    return True
+
+
+def _thu_gon_lich_su(messages: list) -> bool:
+    """Cắt bớt kết quả các tool CŨ trong lịch sử. Trả True nếu cắt được gì.
+
+    Kết quả tool được gửi LẠI nguyên vẹn ở mọi bước sau của lượt, nên một lượt nhiều
+    bước (tìm ứng viên -> tạo shortlist -> sinh câu hỏi -> trả lời) tự phình lên tới
+    trần. Bước sau chỉ cần biết bước trước đã làm gì và ra sao, không cần đọc lại toàn
+    bộ bảng dữ liệu — nên cắt phần cũ là cách rẻ nhất để lượt chạy tới cùng.
+
+    KẾT QUẢ TOOL MỚI NHẤT LUÔN GIỮ NGUYÊN: đó chính là thứ model đang cần để viết câu
+    trả lời hoặc quyết định bước kế tiếp.
+    """
+    chi_so = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
+    if len(chi_so) <= 1:
+        return _bo_bot_lich_su_cu(messages)
+    da_cat = False
+    for i in chi_so[:-1]:
+        noi_dung = messages[i].get("content") or ""
+        gon = noi_dung[:_TOOL_MSG_MIN_CHARS] + " …(đã lược bớt cho vừa trần token)"
+        # CHỈ tính là cắt được khi bản mới NGẮN THẬT. Nếu không, phần đuôi "…đã lược
+        # bớt" tự nó làm chuỗi dài hơn ngưỡng, và mỗi lần gọi lại hàm này lại báo "cắt
+        # được" trong khi kích thước đứng yên — vòng thử lại chạy đủ lượt rồi vẫn 413.
+        if len(gon) < len(noi_dung):
+            messages[i] = {**messages[i], "content": gon}
+            da_cat = True
+    # Kết quả tool đã lược sạch mà vẫn còn to -> chuyển sang bỏ bớt lịch sử lượt cũ.
+    return da_cat or _bo_bot_lich_su_cu(messages)
 
 
 def _quota_wait_seconds(err: Exception) -> float:
@@ -191,7 +272,15 @@ def _quota_wait_hint(err: Exception) -> str:
 # vòng 429 rồi mới chịu đổi — tức mỗi lượt chat lãng phí 2 round-trip vô ích, đúng lúc
 # hệ thống đang chậm nhất. Bộ nhớ này ở cấp tiến trình là đủ: mất khi restart thì cùng
 # lắm là học lại một lần.
-_model_cooldown: dict[str, float] = {}
+#
+# KHOÁ THEO (TÀI KHOẢN, MODEL), KHÔNG PHẢI THEO MODEL.
+#
+# Groq tính hạn mức theo TỔ CHỨC: đã kiểm chứng bằng chính thông báo lỗi của Groq —
+# ba key của dự án thuộc BA org khác nhau (org_01kykyty…, org_01kym0mg…, org_01kysbpa…),
+# tức ba ngân sách hoàn toàn độc lập. Bản trước khoá theo tên model, nên một tài khoản
+# cạn 8.000 token/phút là model đó bị gạch khỏi chuỗi cho CẢ BA tài khoản — tự vứt đi
+# 2/3 ngân sách rồi tụt xuống model yếu hơn, đúng lúc HR đang chờ.
+_model_cooldown: dict[tuple[str, str], float] = {}
 
 # TRẦN cho một lần nghỉ, BẤT KỂ Groq hứa bao lâu.
 #
@@ -206,11 +295,21 @@ _COOLDOWN_MAX = float(os.getenv("AGENT_MODEL_COOLDOWN_MAX", "180"))
 
 
 def _kha_dung(model: str) -> bool:
-    het_han = _model_cooldown.get(model, 0.0)
-    if het_han and time.time() < het_han:
-        return False
-    _model_cooldown.pop(model, None)
-    return True
+    """Model này còn ÍT NHẤT MỘT tài khoản chưa bị khoá không?
+
+    Chỉ cần một tài khoản còn mở là model vẫn dùng được — `try_reserve` sẽ tự chọn đúng
+    tài khoản đó và bỏ qua những tài khoản đang nghỉ.
+    """
+    bay_gio = time.time()
+    con_khoa = 0
+    keys = _cac_key()
+    for key_id, _ in keys:
+        het_han = _model_cooldown.get((key_id, model), 0.0)
+        if het_han and bay_gio < het_han:
+            con_khoa += 1
+        else:
+            _model_cooldown.pop((key_id, model), None)
+    return con_khoa < len(keys) if keys else True
 
 
 # Model KHÔNG GỌI ĐƯỢC TOOL (vd groq/compound: "`tool calling` is not supported with
@@ -264,13 +363,25 @@ def _friendly_error(err: Exception, da_lam: list[str] | None = None) -> str:
     """
     het_han_muc = _is_quota_error(err)
     goi_y = _quota_wait_hint(err) if het_han_muc else ""
+    if _qua_lon(err) and not da_lam:
+        # Nói đúng bản chất: yêu cầu này quá dài cho một lời gọi, KHÔNG phải hết hạn mức
+        # (bảo HR "hết hạn mức hôm nay" khiến họ ngồi chờ tới mai một cách vô ích).
+        return (
+            "Yêu cầu này gom quá nhiều dữ liệu cho một lượt xử lý nên mình chưa trả lời "
+            "được. Bạn tách nhỏ ra giúp mình nhé (ví dụ làm từng nhóm ứng viên, hoặc "
+            "hỏi từng việc một)."
+        )
 
     if da_lam:
         # Tên tiếng Việt lấy từ chính registry (`title`), khử trùng nhưng giữ thứ tự
         # đã làm — HR đọc là hình dung được đúng những gì vừa xảy ra với dữ liệu.
         viec = ", ".join(dict.fromkeys(SPECS[t].title.lower() for t in da_lam if t in SPECS))
-        ly_do = ("hệ thống hết hạn mức AI cho hôm nay" if het_han_muc
-                 else "mình gặp trục trặc kỹ thuật")
+        if het_han_muc:
+            ly_do = "hệ thống hết hạn mức AI cho hôm nay"
+        elif _qua_lon(err):
+            ly_do = "yêu cầu này quá dài cho một lượt xử lý"
+        else:
+            ly_do = "mình gặp trục trặc kỹ thuật"
         return (
             f"Mình ĐÃ kịp thực hiện: {viec}. Nhưng {ly_do} nên chưa tổng hợp được câu "
             f"trả lời. Bạn kiểm tra lại trên màn hình giúp mình, ĐỪNG gửi lại yêu cầu "
@@ -473,6 +584,24 @@ def _complete_sync(messages: list, tools: list):
                         model, key_id,
                     )
                     break
+                if _qua_lon(e):
+                    # KHÔNG phải hết hạn mức -> KHÔNG cooldown, KHÔNG bỏ model. Cắt bớt
+                    # lịch sử rồi gọi lại NGAY: đổi model chỉ vô ích vì mọi model trên
+                    # tài khoản free đều cùng trần 8.000 token/phút.
+                    if _thu_gon_lich_su(messages) and attempt + 1 < _LLM_RETRIES:
+                        est_prompt = json.dumps(messages, default=str, ensure_ascii=False) + json.dumps(
+                            tools, default=str, ensure_ascii=False
+                        )
+                        log.warning(
+                            "Request vượt trần token/phút của %s; đã lược bớt lịch sử và gọi lại.",
+                            model,
+                        )
+                        continue
+                    log.warning(
+                        "Request vẫn vượt trần token/phút của %s sau khi lược; thử model kế tiếp.",
+                        model,
+                    )
+                    break
                 if _khong_goi_duoc_tool(e):
                     # CÙNG MỘT HÌNH DẠNG với 404: lỗi tất định về NĂNG LỰC model, thử
                     # lại bao nhiêu lần cũng vậy. Gạch tên khỏi chuỗi CHAT (model vẫn
@@ -489,7 +618,7 @@ def _complete_sync(messages: list, tools: list):
                     cho = min(_quota_wait_seconds(e), _COOLDOWN_MAX)
                     rate_limiter.cooldown(key_id, model, cho)
                     if cho > 0:
-                        _model_cooldown[model] = time.time() + cho
+                        _model_cooldown[(key_id, model)] = time.time() + cho
                     log.warning(
                         "Tài khoản %s hết hạn mức cho %s (nghỉ ~%ds): %s",
                         key_id, model, int(cho), e,
@@ -863,6 +992,12 @@ async def _agent_loop(messages: list, tools: list, execute) -> dict:
         except Exception as e:  # noqa: BLE001 - trả lời nhẹ nhàng thay vì 500
             # `da_ghi` là phần bắt buộc: lượt LLM cuối (viết câu trả lời) hỏng KHÔNG
             # xoá đi những gì các tool trước đó đã ghi vào DB.
+            # GHI NGUYÊN VĂN LỖI THẬT. Câu trả lời cho HR cố tình được viết lại cho dễ
+            # hiểu, nên nếu chỗ này không log thì nguyên nhân thật biến mất hoàn toàn —
+            # và mọi lỗi khác nhau đều trông giống nhau từ phía màn hình chat.
+            log.warning(
+                "Lượt agent hỏng sau %d tool (%s): %s", len(used), type(e).__name__, e
+            )
             return _out(_friendly_error(e, da_ghi), error=str(e))
 
         if getattr(resp, "usage", None):
@@ -956,7 +1091,14 @@ async def _agent_loop(messages: list, tools: list, execute) -> dict:
                 "content": json.dumps(_trim_for_llm(result), default=str, ensure_ascii=False),
             })
 
-    return _out("Xin lỗi, yêu cầu cần quá nhiều bước để xử lý. Bạn thử tách nhỏ giúp mình nhé.")
+    # Hết MAX_STEPS. Log ra ĐÚNG chuỗi tool đã gọi: HR chỉ nhờ một việc mà chạm trần
+    # bước thì gần như luôn là agent gọi lặp một tool (mỗi lần một tham số hơi khác),
+    # và không có danh sách này thì không có cách nào biết nó lặp ở đâu.
+    log.warning("Lượt agent chạm trần %d bước; chuỗi tool đã gọi: %s", MAX_STEPS, used)
+    return _out(
+        "Xin lỗi, yêu cầu cần quá nhiều bước để xử lý. Bạn thử tách nhỏ giúp mình nhé.",
+        error=f"max_steps_exceeded ({MAX_STEPS}): {used}",
+    )
 
 
 async def _run_via_mcp(messages: list, user_id) -> dict:
