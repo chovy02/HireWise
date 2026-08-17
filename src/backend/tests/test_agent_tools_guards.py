@@ -65,7 +65,7 @@ def test_nhom_trai_nhieu_vi_tri_thi_hoi_lai_va_khong_ghi_gi(monkeypatch):
     """
     a, b = uuid.uuid4(), uuid.uuid4()
     nhom = [_cand("Người A", a, "Backend Python"), _cand("Người B", b, "Data Science")]
-    monkeypatch.setattr(T, "_resolve_refs", lambda db, refs, owner_id=None: (nhom, [], []))
+    monkeypatch.setattr(T, "_resolve_refs", lambda db, refs, owner_id=None, jd_id=None: (nhom, [], []))
 
     db = FakeDB()
     ket_qua = T.add_to_shortlist(
@@ -83,7 +83,7 @@ def test_dong_y_ro_rang_thi_van_lam_duoc(monkeypatch):
     """Rào chắn là để HỎI, không phải để cấm: HR xác nhận thì tool phải chạy tiếp."""
     a, b = uuid.uuid4(), uuid.uuid4()
     nhom = [_cand("Người A", a, "Backend Python"), _cand("Người B", b, "Data Science")]
-    monkeypatch.setattr(T, "_resolve_refs", lambda db, refs, owner_id=None: (nhom, [], []))
+    monkeypatch.setattr(T, "_resolve_refs", lambda db, refs, owner_id=None, jd_id=None: (nhom, [], []))
     # Qua được rào thì tool bắt đầu đụng DB — chứng minh bằng chính việc FakeDB nổ.
     with pytest.raises(AssertionError, match="đụng tới DB"):
         T.add_to_shortlist(
@@ -96,7 +96,7 @@ def test_cung_mot_vi_tri_thi_khong_bi_chan(monkeypatch):
     """Không được chặn nhầm luồng bình thường (cả nhóm cùng một vị trí)."""
     a = uuid.uuid4()
     nhom = [_cand("Người A", a, "Backend Python"), _cand("Người B", a, "Backend Python")]
-    monkeypatch.setattr(T, "_resolve_refs", lambda db, refs, owner_id=None: (nhom, [], []))
+    monkeypatch.setattr(T, "_resolve_refs", lambda db, refs, owner_id=None, jd_id=None: (nhom, [], []))
     with pytest.raises(AssertionError, match="đụng tới DB"):
         T.add_to_shortlist(
             FakeDB(), candidate_ids=["x", "y"], created_by=str(uuid.uuid4()),

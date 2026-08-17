@@ -148,6 +148,15 @@ _CAND_REF = (
 # tên thì các hồ sơ còn lại bị bỏ sót lặng lẽ (đã gặp thật: 7 hồ sơ chỉ xử lý được 4).
 _CAND_REF_BATCH = "Ưu tiên UUID từ search_candidates; tên chỉ khi HR gọi đích danh."
 
+# Một người ứng tuyển NHIỀU vị trí là chuyện bình thường, và khi đó gọi tên là nhập
+# nhằng — tool buộc phải từ chối cả lô. Nhưng HR đang đứng ở màn hình của MỘT vị trí
+# nên với họ chẳng có gì mơ hồ. `jd_id` là chỗ để agent chuyển ngữ cảnh đó xuống tool.
+# Thiếu nó, "gửi thư từ chối cho Lê Hoàng Yến" bị chặn thẳng dù agent BIẾT vị trí nào.
+_JD_REF_THU_HEP = (
+    "TUỲ CHỌN nhưng NÊN CÓ: vị trí để thu hẹp khi tra tên (dùng jd_id của NGỮ CẢNH "
+    "GIAO DIỆN). Cần thiết khi một người ứng tuyển nhiều vị trí."
+)
+
 REGISTRY: tuple[ToolSpec, ...] = (
     # ----------------------------- ĐỌC / TRA CỨU ---------------------------- #
     ToolSpec(
@@ -308,6 +317,7 @@ REGISTRY: tuple[ToolSpec, ...] = (
                 "Số câu hỏi MỖI người. Đúng con số HR yêu cầu; 0 = AI tự quyết.",
                 default=0,
             ),
+            Param("jd_id", str, _JD_REF_THU_HEP, default=""),
             Param(
                 "replace", bool, "true = GHI ĐÈ bộ câu hỏi cũ, chỉ sau khi HR xác nhận.",
                 default=False,
@@ -341,15 +351,32 @@ REGISTRY: tuple[ToolSpec, ...] = (
         fn=T.add_to_shortlist,
         title="Thêm ứng viên vào shortlist",
         description=(
-            "Đưa một hoặc nhiều ứng viên vào shortlist của vị trí họ ứng tuyển (tự tạo nếu "
-            "chưa có, chống trùng). Lấy danh sách bằng search_candidates rồi chép nguyên "
-            "candidate_ids vào MỘT lời gọi. Một ứng viên tra không ra là KHÔNG thêm ai "
-            "('not_found'). Nhóm trải nhiều vị trí trả 'needs_confirmation' và không ghi gì."
+            "Đưa ứng viên vào shortlist của vị trí họ ứng tuyển (tự tạo nếu chưa có, chống "
+            "trùng). HAI CÁCH: HR nêu TIÊU CHÍ ĐIỂM ('từ 50 đến 60', 'trên 80', '3 người "
+            "thấp nhất') -> truyền jd_id + min_score/max_score/limit/order và BỎ TRỐNG "
+            "candidate_ids, tool tự chọn người; HR gọi ĐÍCH DANH -> truyền candidate_ids. "
+            "TUYỆT ĐỐI không chép lại candidate_ids của lượt trước. Một ứng viên tra không ra "
+            "là KHÔNG thêm ai ('not_found'). Nhóm trải nhiều vị trí trả 'needs_confirmation'."
         ),
         params=(
             Param(
                 "candidate_ids", list[str],
-                f"Danh sách ứng viên, truyền TẤT CẢ cùng lúc. {_CAND_REF_BATCH}",
+                f"CHỈ khi HR gọi đích danh từng người. {_CAND_REF_BATCH} "
+                "Bỏ trống khi dùng tiêu chí điểm.",
+                default=None,
+            ),
+            # Bộ lọc để TOOL tự truy vấn. Không có nó thì luồng bắt buộc là
+            # search_candidates -> LLM tự cầm id -> add, và LLM đã bê nhầm id của lượt
+            # trước sang (nhóm 20 điểm vào shortlist "từ 50 đến 60"). Xem docstring của
+            # `add_to_shortlist`.
+            Param("jd_id", str, f"{_JD_REF} Dùng kèm bộ lọc điểm.", default=""),
+            Param("min_score", float, "Điểm tối thiểu (thang 0-100).", default=0.0),
+            Param("max_score", float, "Điểm tối đa. 0 = không chặn trên.", default=0.0),
+            Param("limit", int, "Lấy tối đa bao nhiêu người. 0 = mọi người khớp.", default=0),
+            Param(
+                "order", str,
+                "Khi có limit: 'desc' = cao nhất trước, 'asc' = THẤP NHẤT trước.",
+                default="desc", enum=("desc", "asc"),
             ),
             # LLM viết lại tiếng Việt rất tuỳ tiện, và tên shortlist là thứ HR nhìn
             # thấy hằng ngày: gõ "cặn bã" mà màn hình hiện "càn bả" thì HR mất niềm tin
@@ -486,6 +513,7 @@ REGISTRY: tuple[ToolSpec, ...] = (
                 "decision", str, "Quyết định cho cả nhóm.",
                 enum=("accepted", "rejected", "pending"),
             ),
+            Param("jd_id", str, _JD_REF_THU_HEP, default=""),
         ),
         # KHÔNG destructive: quyết định là một trường trạng thái, đổi lại được bất cứ lúc
         # nào và ứng viên chưa hề biết gì. Thứ không rút lại được là THƯ BÁO, và chỗ đó

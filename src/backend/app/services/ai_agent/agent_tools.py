@@ -195,13 +195,22 @@ def _find_jd(db: Session, ref, owner_id=None) -> tuple[models.JobDescription | N
     return None, f"Không tìm thấy vị trí '{ref}'. Các vị trí đang có: {dang_co}."
 
 
-def _find_candidate(db: Session, ref, owner_id=None) -> tuple[models.Candidate | None, str | None]:
+def _find_candidate(
+    db: Session, ref, owner_id=None, jd_id=None
+) -> tuple[models.Candidate | None, str | None]:
     """Tìm ứng viên từ UUID HOẶC tên, chỉ trong JD của `owner_id`. Trả `(c, lý_do)`.
 
     NHẬP NHẰNG LÀ LỖI, KHÔNG PHẢI CHUYỆN TỰ QUYẾT. Bản trước lấy `.first()` theo
     `created_at` giảm dần, nên "Khoa" khớp ba người thì tool âm thầm chọn một —
     và HR không có cách nào biết mình vừa thao tác lên ai. Giờ trả lỗi kèm tên các
     ứng viên khớp để agent hỏi lại hoặc dùng candidate_id.
+
+    `jd_id` THU HẸP VỀ MỘT VỊ TRÍ, và nó gỡ đúng bế tắc HR gặp: một người ứng tuyển
+    nhiều vị trí thì gọi tên là nhập nhằng, mà HR đang đứng ở màn hình của MỘT vị trí
+    nên với họ chẳng có gì mơ hồ cả. Trước đây tool không có chỗ nhận thông tin đó,
+    nên "gửi thư từ chối cho Lê Hoàng Yến" bị từ chối thẳng dù agent BIẾT rõ HR đang
+    mở vị trí nào (ngữ cảnh giao diện). Có `jd_id` thì tra trong đúng vị trí đó, chỉ
+    khi vẫn còn nhập nhằng mới báo lỗi.
     """
     base = _owner_filter(
         db.query(models.Candidate).join(
@@ -210,6 +219,15 @@ def _find_candidate(db: Session, ref, owner_id=None) -> tuple[models.Candidate |
         ),
         owner_id,
     )
+    if jd_id:
+        jd, err = _find_jd(db, jd_id, owner_id)
+        # JD tra không ra (id sai, hoặc vị trí đã bị xoá) -> BÁO NGAY, tuyệt đối không
+        # lặng lẽ bỏ bộ lọc rồi tra khắp mọi vị trí: làm vậy vừa mở lại đúng cảnh thao
+        # tác lan sang vị trí khác, vừa khiến lỗi hiện ra dưới dạng "tên khớp 3 hồ sơ"
+        # — agent đọc xong sẽ đi sửa cái tên, trong khi hỏng là ở jd_id.
+        if jd is None:
+            return None, err
+        base = base.filter(models.Candidate.jd_id == jd.id)
     try:
         c = base.filter(models.Candidate.id == uuid.UUID(str(ref))).first()
         if c is not None:
@@ -237,7 +255,7 @@ def _find_candidate(db: Session, ref, owner_id=None) -> tuple[models.Candidate |
 
 
 def _resolve_refs(
-    db: Session, refs: list[str], owner_id=None
+    db: Session, refs: list[str], owner_id=None, jd_id=None
 ) -> tuple[list[models.Candidate], list[str], list[str]]:
     """Resolve CẢ danh sách ứng viên TRƯỚC khi làm bất cứ việc gì.
 
@@ -251,7 +269,7 @@ def _resolve_refs(
     ly_do: list[str] = []
     seen: set = set()
     for ref in refs:
-        c, err = _find_candidate(db, ref, owner_id)
+        c, err = _find_candidate(db, ref, owner_id, jd_id)
         if c is None:
             hong.append(str(ref))
             ly_do.append(err or f"Không tìm thấy '{ref}'.")
@@ -276,10 +294,35 @@ def _resolve_refs(
 #
 # Tool ĐỌC (compare_candidates) vẫn xử lý phần tìm được kèm cảnh báo: không có tác
 # dụng phụ nào để mất, và một bản so sánh thiếu người vẫn hữu ích hơn là không có gì.
+# CHỈ NÓI VẤN ĐỀ, KHÔNG DẶN VIỆC. Câu này đi thẳng vào `error`, mà LLM có thói quen
+# đọc nguyên văn `error` ra cho HR — đã xảy ra thật: HR nhận đúng câu "Hãy gọi
+# search_candidates để lấy đúng candidate_ids rồi gọi lại tool này với mảng đó", một
+# lời dặn nội bộ hoàn toàn vô nghĩa với người dùng. Phần hướng dẫn cho LLM chuyển hết
+# sang `how_to_proceed` (xem `_huong_dan_ref_hong`), nơi nó vốn thuộc về.
 _TU_CHOI_DANH_SACH_HONG = (
-    "Danh sách ứng viên không hợp lệ nên CHƯA thao tác gì cả. Hãy gọi search_candidates "
-    "để lấy đúng candidate_ids rồi gọi lại tool này với mảng đó."
+    "Chưa xác định chắc chắn được ứng viên nào nên CHƯA thao tác gì cả."
 )
+
+
+def _huong_dan_ref_hong(ly_do: list[str]) -> str:
+    """Việc LLM phải làm tiếp — KHÔNG dành cho HR đọc.
+
+    Tách theo loại thất bại, vì hai loại cần hai cách chữa khác hẳn nhau:
+      - nhập nhằng (một người ứng tuyển nhiều vị trí) -> thu hẹp bằng jd_id của vị trí
+        HR đang mở, KHÔNG phải đi tra lại danh sách;
+      - không tìm thấy -> tra lại bằng search_candidates.
+    """
+    nhap_nhang = any("khớp" in (r or "") for r in ly_do)
+    if nhap_nhang:
+        return (
+            "Có tên khớp NHIỀU hồ sơ vì ứng viên ứng tuyển nhiều vị trí. Gọi lại tool "
+            "này kèm jd_id của vị trí HR đang mở (xem NGỮ CẢNH GIAO DIỆN) để thu hẹp. "
+            "Không có ngữ cảnh thì HỎI HR đang nói về vị trí nào — đừng tự chọn."
+        )
+    return (
+        "Gọi search_candidates để lấy đúng candidate_ids rồi gọi lại tool này. Nói với "
+        "HR bằng lời của bạn là chưa tìm ra ai, đừng đọc lại nguyên văn thông báo này."
+    )
 
 
 def _candidate_brief(c: models.Candidate) -> dict:
@@ -513,7 +556,7 @@ def compare_candidates(
     if candidate_ids:
         # Tool ĐỌC: so phần tìm được rồi cảnh báo, không chặn cả lô như tool ghi —
         # xem `_TU_CHOI_DANH_SACH_HONG`.
-        cands, missing, ly_do = _resolve_refs(db, candidate_ids, owner_id)
+        cands, missing, ly_do = _resolve_refs(db, candidate_ids, owner_id, jd_id)
     elif jd_id and count:
         jd, err = _find_jd(db, jd_id, owner_id)
         if jd is None:
@@ -671,6 +714,7 @@ def generate_interview_questions(
     aspect: str = "",
     num_questions: int = 0,
     replace: bool = False,
+    jd_id: str = "",
     owner_id=None,
 ) -> dict:
     """
@@ -704,13 +748,14 @@ def generate_interview_questions(
     # trên một danh sách đoán (xem `_TU_CHOI_DANH_SACH_HONG`), việc này còn tiết kiệm
     # thật: mỗi ứng viên là một lượt gọi Gemini, chặn sớm thì không đốt hạn mức cho
     # một lô sai.
-    cands, not_found, ly_do = _resolve_refs(db, refs, owner_id)
+    cands, not_found, ly_do = _resolve_refs(db, refs, owner_id, jd_id)
     if not_found:
         return {
             "error": _TU_CHOI_DANH_SACH_HONG,
             "not_found": not_found,
             "details": ly_do,
             "resolved": [c.name for c in cands],
+            "how_to_proceed": _huong_dan_ref_hong(ly_do),
         }
 
     results = [
@@ -912,25 +957,74 @@ def _shortlist_for(db: Session, jd_id, name: str, created_by: str) -> models.Sho
 
 def add_to_shortlist(
     db: Session,
-    candidate_ids: list[str],
-    created_by: str,
+    candidate_ids: list[str] | None = None,
+    created_by: str = "",
     shortlist_name: str = "AI Shortlist",
+    jd_id: str = "",
+    min_score: float = 0.0,
+    max_score: float = 0.0,
+    limit: int = 0,
+    order: str = "",
     allow_multiple_jds: bool = False,
     owner_id=None,
 ) -> dict:
     """
-    Đưa MỘT HOẶC NHIỀU ứng viên vào shortlist. Tự tìm shortlist tên `shortlist_name`
-    trong JD của từng ứng viên; chưa có thì tạo. Chống thêm trùng.
+    Đưa ứng viên vào shortlist. Hai cách dùng, GIỐNG `compare_candidates`:
+      1) HR gọi đích danh   -> truyền `candidate_ids`.
+      2) HR nêu TIÊU CHÍ    -> truyền jd_id + min_score/max_score/limit/order, TOOL tự
+         chọn người từ DB.
 
-    NHẬN CẢ DANH SÁCH vì HR gần như luôn thao tác theo nhóm ("cho tất cả người trên 80
-    điểm vào shortlist X"). Bản chỉ nhận 1 người bắt agent gọi lại N lần, mỗi lần gửi
-    lại toàn bộ hội thoại cho LLM — vừa đốt token vừa dễ chạm trần số bước của agent.
+    VÌ SAO PHẢI CÓ CÁCH (2) — đây là lỗi HR gặp thật: HR gõ "thêm những ứng viên có
+    điểm từ 50 đến 60 vào shortlist trung bình". Trước đây tool chỉ nhận candidate_ids,
+    nên luồng bắt buộc là search_candidates -> LLM TỰ CẦM danh sách id -> add. Khâu
+    giữa đó do LLM nhớ, và nó nhớ sai: nó bê nguyên bộ id của LƯỢT TRƯỚC (nhóm "3
+    người thấp nhất", toàn 20 điểm) sang, thành ra shortlist "trung bình" chứa đúng ba
+    người 20 điểm. Không có gì trong hệ thống phát hiện được, vì với tool thì đó vẫn
+    là ba id hợp lệ. Log còn ghi lại đúng thói quen này ở compare_candidates: hai lượt
+    liên tiếp dùng lại y nguyên bộ id của lượt trước đó.
+
+    Để tool TỰ TRUY VẤN thì không còn khâu nào cho LLM nhớ sai: tiêu chí HR vừa nói
+    được thi hành thẳng trên DB, trong cùng một lời gọi.
+
+    NHẬN CẢ DANH SÁCH vì HR gần như luôn thao tác theo nhóm. Bản chỉ nhận 1 người bắt
+    agent gọi lại N lần, mỗi lần gửi lại toàn bộ hội thoại cho LLM — vừa đốt token vừa
+    dễ chạm trần số bước của agent.
 
     LƯU Ý NGHIỆP VỤ: shortlist thuộc về VỊ TRÍ. Nhóm ứng viên trải trên nhiều vị trí sẽ
     vào NHIỀU shortlist cùng tên, mỗi vị trí một cái — nên nhóm trải nhiều vị trí phải
     được HR xác nhận trước, xem `allow_multiple_jds`.
     """
     refs = [r for r in (candidate_ids or []) if str(r).strip()]
+    loc: dict | None = None
+
+    if not refs:
+        # Không có id -> phải có tiêu chí. Dùng CHÍNH `search_candidates` để câu truy
+        # vấn chỉ tồn tại ở một chỗ; sửa cách lọc điểm về sau không thể lệch hai nơi.
+        if not (jd_id or min_score or max_score or limit):
+            return {
+                "error": "Cần `candidate_ids`, HOẶC tiêu chí lọc (jd_id + min_score/"
+                         "max_score/limit/order).",
+            }
+        kq = search_candidates(
+            db, jd_id=jd_id, min_score=min_score, max_score=max_score,
+            limit=limit or 50, order=order or "desc", owner_id=owner_id,
+        )
+        if "error" in kq:
+            return kq
+        refs = list(kq.get("candidate_ids") or [])
+        loc = {
+            "scope": kq.get("scope"),
+            "min_score": min_score,
+            "max_score": max_score or None,
+            "sorted_by": kq.get("sorted_by"),
+        }
+        if not refs:
+            return {
+                "error": "Không có ứng viên nào khớp tiêu chí nên KHÔNG thêm ai cả.",
+                "criteria": loc,
+                "how_to_proceed": "Nói cho HR biết là không có ai trong khoảng đó.",
+            }
+
     if not refs:
         return {"error": "Cần ít nhất 1 ứng viên."}
 
@@ -939,13 +1033,14 @@ def add_to_shortlist(
     # Resolve TRỌN danh sách trước, chưa ghi gì. Đây là tool đã từng thêm nhầm một
     # người thật vào shortlist vì LLM bịa tên "Trần Thị B" — xem `_TU_CHOI_DANH_SACH_HONG`
     # và `_name_matches`. Chặn ở đây thì cả shortlist lẫn dữ liệu đều không bị đụng.
-    cands, not_found, ly_do = _resolve_refs(db, refs, owner_id)
+    cands, not_found, ly_do = _resolve_refs(db, refs, owner_id, jd_id)
     if not_found:
         return {
             "error": _TU_CHOI_DANH_SACH_HONG,
             "not_found": not_found,
             "details": ly_do,
             "resolved": [c.name for c in cands],
+            "how_to_proceed": _huong_dan_ref_hong(ly_do),
         }
 
 
@@ -997,7 +1092,14 @@ def add_to_shortlist(
             continue
 
         db.add(models.ShortlistItem(shortlist_id=sl.id, cv_id=c.id))
-        added.append(c.name)
+        # KÈM ĐIỂM, không chỉ tên. HR nêu tiêu chí theo điểm ("từ 50 đến 60") nên điểm
+        # là thứ DUY NHẤT chứng minh tool lấy đúng người. Trả về mỗi cái tên thì LLM
+        # viết "đã thêm 2 người có điểm từ 50 đến 60" trong khi thực tế toàn người 20
+        # điểm — mà chẳng có gì trong ngữ cảnh của nó mâu thuẫn để mà phát hiện.
+        added.append({
+            "name": c.name,
+            "score": c.evaluation.score if c.evaluation else None,
+        })
         jd_title = c.jd.title if c.jd else "?"
         theo_vi_tri[jd_title] = theo_vi_tri.get(jd_title, 0) + 1
 
@@ -1012,6 +1114,10 @@ def add_to_shortlist(
         "added_count": len(added),
         "by_jd": theo_vi_tri,
     }
+    if loc:
+        # Nói rõ tool đã tự lọc theo tiêu chí nào — để câu trả lời cuối bám vào đúng
+        # khoảng điểm HR nêu, thay vì bịa lại theo trí nhớ.
+        out["criteria"] = loc
     # TÊN LƯU KHÁC TÊN VỪA XIN -> nói thẳng, đừng để HR tự phát hiện trên màn hình.
     #
     # Xảy ra khi rơi vào một danh sách đã có sẵn chỉ khác hoa/thường. Lỗi HR gặp là
@@ -1514,6 +1620,7 @@ def set_candidate_decision(
     db: Session,
     candidate_ids: list[str],
     decision: str,
+    jd_id: str = "",
     owner_id=None,
 ) -> dict:
     """
@@ -1535,13 +1642,14 @@ def set_candidate_decision(
     if not refs:
         return {"error": "Cần ít nhất 1 ứng viên."}
 
-    cands, not_found, ly_do = _resolve_refs(db, refs, owner_id)
+    cands, not_found, ly_do = _resolve_refs(db, refs, owner_id, jd_id)
     if not_found:
         return {
             "error": _TU_CHOI_DANH_SACH_HONG,
             "not_found": not_found,
             "details": ly_do,
             "resolved": [c.name for c in cands],
+            "how_to_proceed": _huong_dan_ref_hong(ly_do),
         }
 
     from app.services.logging import write_audit_log
