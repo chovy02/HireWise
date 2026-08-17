@@ -35,11 +35,17 @@ from app.services.ai_agent.mcp_client import (
 )
 from app.services.logging import write_tool_log
 from app.services.ai_agent import rate_limiter
-from app.services.ai_agent.gemini_client import record_ai_log
+from app.services.ai_agent.gemini_client import (
+    MODEL_KHONG_TON_TAI,
+    is_model_missing,
+    record_ai_log,
+)
 
 log = logging.getLogger(__name__)
 
-AGENT_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+# Mặc định phải là model tài khoản THẬT SỰ còn gọi được — Groq đã gỡ họ llama-3.x khỏi
+# free tier (404 model_not_found). Xem chú thích cùng chủ đề trong gemini_client.
+AGENT_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 
 # MỌI TÀI KHOẢN GROQ ĐỀU DÙNG ĐƯỢC CHO KHUNG CHAT, key riêng của chat đứng đầu.
 #
@@ -95,12 +101,12 @@ def _client_for(key_id: str, api_key: str) -> Groq:
 # khác. Hết 70b thì hạ xuống model khác còn hơn là ném cho HR câu "gặp trục trặc".
 #
 # THỨ TỰ QUAN TRỌNG: xếp theo NĂNG LỰC GỌI TOOL giảm dần, không phải theo tốc độ.
-# Đã thử `llama-3.1-8b-instant` đứng đầu: nó bịa ra ứng viên không tồn tại ("Trần Văn
-# A", "Nguyễn Thị B") thay vì dùng kết quả search vừa nhận. Một agent thao tác dữ liệu
+# Đã thử model rút gọn đứng đầu: nó bịa ra ứng viên không tồn tại ("Trần Văn A",
+# "Nguyễn Thị B") thay vì dùng kết quả search vừa nhận. Một agent thao tác dữ liệu
 # thật mà bịa tham số thì tệ hơn hẳn việc báo lỗi thẳng, nên model yếu để cuối cùng.
 _FALLBACK_MODELS = [
     m.strip()
-    for m in os.getenv("GROQ_FALLBACK_MODELS", "openai/gpt-oss-120b,openai/gpt-oss-20b").split(",")
+    for m in os.getenv("GROQ_FALLBACK_MODELS", "openai/gpt-oss-20b").split(",")
     if m.strip()
 ]
 _MODEL_CHAIN = [AGENT_MODEL] + [m for m in _FALLBACK_MODELS if m != AGENT_MODEL]
@@ -200,14 +206,28 @@ def _kha_dung(model: str) -> bool:
     return True
 
 
+def _con_song() -> list[str]:
+    """Chuỗi model bỏ đi những model NHÀ CUNG CẤP KHÔNG CÒN PHỤC VỤ (404).
+
+    Khác hẳn cooldown ở trên: cooldown là tạm thời nên hết hạn là thử lại, còn model bị
+    gỡ khỏi tài khoản thì thử lại bao nhiêu lần cũng 404. Danh sách chết dùng chung với
+    `gemini_client` để hai đường gọi Groq (khung chat và pipeline) chỉ phải học một lần.
+    Chết sạch thì vẫn trả chuỗi đầy đủ — để lỗi thật của Groq nói ra nguyên nhân, thay
+    vì ta tự dựng một lỗi khác che mất nó.
+    """
+    con = [m for m in _MODEL_CHAIN if m not in MODEL_KHONG_TON_TAI]
+    return con or list(_MODEL_CHAIN)
+
+
 def _chain_kha_dung() -> list[str]:
     """Chuỗi model theo thứ tự ưu tiên, đã bỏ những model đang bị khoá.
 
     Nếu KHOÁ HẾT thì vẫn trả về chuỗi đầy đủ: thà thử và nhận lỗi thật còn hơn tự từ
     chối trong khi có thể Groq đã mở lại sớm hơn con số nó hứa.
     """
-    con = [m for m in _MODEL_CHAIN if _kha_dung(m)]
-    return con or list(_MODEL_CHAIN)
+    song = _con_song()
+    con = [m for m in song if _kha_dung(m)]
+    return con or song
 
 
 def _friendly_error(err: Exception, da_lam: list[str] | None = None) -> str:
@@ -242,6 +262,15 @@ def _friendly_error(err: Exception, da_lam: list[str] | None = None) -> str:
         return (
             "Hệ thống đã dùng hết hạn mức AI cho hôm nay nên mình chưa xử lý được yêu "
             f"cầu này.{goi_y}"
+        )
+    if is_model_missing(err):
+        # Đây là lỗi CẤU HÌNH, không phải lỗi cách HR diễn đạt: model khai trong
+        # GROQ_MODEL đã bị nhà cung cấp gỡ. Khuyên "diễn đạt lại" ở đây là đẩy HR đi
+        # gõ lại mãi một yêu cầu không đời nào chạy được.
+        return (
+            "Hệ thống đang cấu hình một model AI mà nhà cung cấp không còn phục vụ, nên "
+            "mình chưa xử lý được. Việc này cần quản trị viên cập nhật cấu hình (biến "
+            "GROQ_MODEL), gõ lại yêu cầu sẽ không giúp được gì."
         )
     return "Xin lỗi, mình gặp trục trặc khi xử lý yêu cầu này. Bạn thử diễn đạt lại giúp mình nhé."
 
@@ -369,6 +398,18 @@ def _complete_sync(messages: list, tools: list):
             except Exception as e:  # noqa: BLE001 - cả tool_use_failed lẫn 429/5xx
                 last_err = e
                 rate_limiter.release_reservation(key_id, model, est)
+                if is_model_missing(e):
+                    # Groq không phục vụ model này nữa -> gạch tên và XUỐNG MODEL KẾ
+                    # TIẾP NGAY. Trước đây 404 rơi vào nhánh "lỗi ngẫu nhiên" ở cuối:
+                    # 3 lần gọi lại + 2 lần ngủ cho mỗi lượt chat, chỉ để nhận đúng
+                    # một câu trả lời tất định.
+                    MODEL_KHONG_TON_TAI.add(model)
+                    log.warning(
+                        "Groq không còn model %s cho tài khoản %s; chuyển model kế tiếp. "
+                        "Cập nhật GROQ_MODEL/GROQ_FALLBACK_MODELS theo /v1/models.",
+                        model, key_id,
+                    )
+                    break
                 if _is_quota_error(e):
                     # Groq đã chặn -> ghi vào sổ Redis để các tiến trình KHÁC (worker
                     # chấm CV dùng chung tài khoản này) không đâm vào cùng bức tường.
@@ -394,7 +435,8 @@ def _complete_sync(messages: list, tools: list):
     # Groq vẫn cho gọi mà HR đã nhận "trục trặc". Thà thử một phát thật rồi nhận lỗi
     # thật, cùng nguyên tắc với `_chain_kha_dung` ("thà thử còn hơn tự từ chối").
     if not da_goi and keys:
-        model = _MODEL_CHAIN[0]
+        # Model đầu tiên CÒN SỐNG: thử lại một model đã 404 thì chắc chắn 404 lần nữa.
+        model = _con_song()[0]
         key_id, api_key = keys[0]
         log.warning(
             "Sổ ngân sách báo cạn hết; vẫn thử %s bằng tài khoản %s để Groq tự quyết.",

@@ -80,10 +80,18 @@ def generate_interview(
         "ai_identified_weaknesses": weakness_context(candidate.evaluation)
     }
 
-    ai_questions = generate_interview_questions_ai(jd.requirements, candidate_context, payload.aspect)
-    
+    # Lỗi của tầng AI được nói NGUYÊN VĂN cho người bấm nút: "Lỗi khi AI sinh câu hỏi"
+    # là câu duy nhất HR nhận được cho mọi nguyên nhân (hết hạn mức, JSON hỏng, model bị
+    # nhà cung cấp gỡ) — không đủ để biết nên chờ, bấm lại, hay báo quản trị viên.
+    try:
+        ai_questions = generate_interview_questions_ai(jd.requirements, candidate_context, payload.aspect)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(
+            status_code=502, detail=f"Lỗi khi AI sinh câu hỏi phỏng vấn: {e}"
+        ) from e
+
     if not ai_questions:
-        raise HTTPException(status_code=502, detail="Lỗi khi AI sinh câu hỏi phỏng vấn.")
+        raise HTTPException(status_code=502, detail="AI trả về danh sách câu hỏi rỗng.")
 
     # Tạo lại bộ câu hỏi: chỉ thay phần AI, GIỮ NGUYÊN câu HR tự soạn (kèm câu trả lời
     # đã chấm của chúng). Trước đây cả buổi phỏng vấn bị xoá trắng, nghĩa là mỗi lần HR

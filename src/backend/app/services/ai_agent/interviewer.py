@@ -93,11 +93,17 @@ def generate_interview_questions_ai(
                                       .replace("{count_requirement}", count_requirement)\
                                       .replace("{jd_requirements}", json.dumps(jd_reqs, ensure_ascii=False))\
                                       .replace("{candidate_info}", json.dumps(candidate_info, ensure_ascii=False))
-    try:
-        parsed_data = json.loads(_clean_json(generate_text(INTERVIEW_MODEL, prompt, agent_name="interview_questions")))
-        return parsed_data.get("questions", [])
-    except Exception as e:
-        return []
+    # KHÔNG NUỐT LỖI Ở ĐÂY.
+    #
+    # Bản trước `except Exception: return []`, nên mọi nguyên nhân — hết hạn mức, JSON
+    # hỏng, hay model đã bị Groq gỡ (404) — đều biến thành đúng một câu "AI không sinh
+    # được câu hỏi". Đã trả giá thật: cả lô 7 ứng viên fail, HR chỉ thấy "không thể sinh
+    # câu hỏi cho bất kỳ ai" và không có gì để lần ra rằng chỉ cần đổi tên model. Người
+    # gọi tự quyết cách báo; ở đây chỉ có nhiệm vụ nói thật vì sao hỏng.
+    parsed_data = json.loads(
+        _clean_json(generate_text(INTERVIEW_MODEL, prompt, agent_name="interview_questions"))
+    )
+    return parsed_data.get("questions", [])
 
 # Câu hỏi HR tự soạn thường không kèm đáp án kỳ vọng. Nhét chuỗi rỗng vào prompt thì AI
 # coi như "không có gì để đối chiếu" và chấm rất tùy hứng — nên nói rõ để nó tự dựng chuẩn.

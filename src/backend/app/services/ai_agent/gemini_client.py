@@ -101,19 +101,27 @@ def _client_for(key_id: str, api_key: str) -> Groq:
 # ngân sách thật, không chỉ là đổi model.
 #
 # CHÍNH SÁCH (cố ý khác nhau giữa hai loại việc):
-#   - cv_parser: thử 70b trước, 70b hết chỗ thì rớt xuống 8b. Trích xuất là việc
-#     máy móc nên CV này parse bằng 70b, CV kia bằng 8b cũng không làm lệch thứ
-#     hạng; đổi lại throughput tăng mạnh và TPD của 8b (500k) gỡ nút "hết token".
-#   - cv_scorer: KHÓA CỨNG ở 70b, thà xếp hàng chờ. Điểm số là thứ tạo ra bảng xếp
-#     hạng — chấm mỗi ứng viên bằng một model khác nhau là so sánh không công bằng.
+#   - cv_parser: thử model chính trước, hết chỗ thì rớt xuống model rút gọn. Trích
+#     xuất là việc máy móc nên CV này parse bằng model lớn, CV kia bằng model nhỏ
+#     cũng không làm lệch thứ hạng; đổi lại throughput tăng mạnh.
+#   - cv_scorer: KHÓA CỨNG ở model chính, thà xếp hàng chờ. Điểm số là thứ tạo ra bảng
+#     xếp hạng — chấm mỗi ứng viên bằng một model khác nhau là so sánh không công bằng.
 
-SMART_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
-FAST_MODEL = os.getenv("GROQ_MODEL_FAST", "llama-3.1-8b-instant")
+# MẶC ĐỊNH PHẢI LÀ MODEL TÀI KHOẢN THẬT SỰ CÒN ĐƯỢC GỌI.
+#
+# Trước đây mặc định là `llama-3.3-70b-versatile` / `llama-3.1-8b-instant`. Groq đã gỡ
+# cả họ llama-3.x khỏi free tier: mọi lời gọi trả 404 `model_not_found`, mà 404 không
+# phải 429 cũng không phải lỗi tạm thời nên nó xuyên thẳng qua mọi lớp retry — HR nhận
+# "AI không sinh được câu hỏi" cho TOÀN BỘ danh sách, còn log chỉ thấy 404. Danh sách
+# model thật của tài khoản lấy bằng:
+#   curl -H "Authorization: Bearer $GROQ_API_KEY_1" https://api.groq.com/openai/v1/models
+SMART_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+FAST_MODEL = os.getenv("GROQ_MODEL_FAST", "openai/gpt-oss-20b")
 
 # Model DỰ PHÒNG cùng đẳng cấp với SMART_MODEL (không phải model rút gọn như
-# FAST_MODEL). Ngân sách của nó hoàn toàn tách biệt: đo trên header của Groq thì
-# gpt-oss-120b có TPM riêng 8.000, cộng thêm vào 12.000 của llama-3.3-70b.
-BACKUP_MODEL = os.getenv("GROQ_MODEL_BACKUP", "openai/gpt-oss-120b")
+# FAST_MODEL). Ngân sách của nó hoàn toàn tách biệt: Groq tính TPM theo TỪNG model, nên
+# mỗi model thêm vào chuỗi là cộng thêm 8.000 TPM thật.
+BACKUP_MODEL = os.getenv("GROQ_MODEL_BACKUP", "openai/gpt-oss-20b")
 
 # Agent được phép rớt xuống model nhanh khi model chính hết chỗ.
 # Để trống (LLM_FALLBACK_AGENTS=) nếu muốn mọi việc chạy hết bằng SMART_MODEL.
@@ -229,6 +237,23 @@ def _retry_after_seconds(err: Exception) -> float | None:
     return None
 
 
+# Model mà NHÀ CUNG CẤP không phục vụ nữa (hoặc tài khoản không có quyền) -> Groq trả
+# 404 `model_not_found`. Nhớ lại trong tiến trình để không hỏi lại cùng một model đã
+# chết ở mọi lời gọi sau: một lô 7 ứng viên = 7 lần đâm vào đúng bức tường đó.
+MODEL_KHONG_TON_TAI: set[str] = set()
+
+
+def is_model_missing(err: Exception) -> bool:
+    """Lỗi này là 'model không tồn tại', tức ĐỔI MODEL mới cứu được — retry thì vô ích.
+
+    Đây là lỗi đã làm chết tính năng sinh câu hỏi phỏng vấn: Groq gỡ llama-3.x khỏi free
+    tier, mà 404 không rơi vào nhánh 429 lẫn nhánh lỗi tạm thời nên nó xuyên thẳng ra
+    ngoài, trong khi chuỗi model dự phòng vẫn còn nguyên một model chạy tốt chưa hề thử.
+    """
+    msg = str(err).lower()
+    return "model_not_found" in msg or ("404" in msg and "does not exist" in msg)
+
+
 def _is_rate_limit(err: Exception) -> bool:
     msg = str(err).lower()
     return "429" in msg or "rate limit" in msg or "rate_limit" in msg or "quota" in msg
@@ -340,7 +365,14 @@ def generate_text(model_name: str, prompt: str, agent_name: str = None) -> str:
         LLMResponseTruncated: JSON bị cắt vì chạm trần output.
     """
     label = agent_name or model_name
-    models = _models_for(label)
+    models = [m for m in _models_for(label) if m not in MODEL_KHONG_TON_TAI]
+    if not models:
+        raise AIServiceError(
+            f"Không còn model nào dùng được cho {label}: "
+            f"{', '.join(sorted(MODEL_KHONG_TON_TAI))} đều bị Groq trả model_not_found. "
+            "Cập nhật GROQ_MODEL / GROQ_MODEL_BACKUP theo danh sách model thật của tài "
+            "khoản (GET https://api.groq.com/openai/v1/models)."
+        )
     expected_out = _EXPECTED_OUTPUT.get(label, _DEFAULT_EXPECTED_OUTPUT)
 
     start_time = time.time()
@@ -395,6 +427,25 @@ def generate_text(model_name: str, prompt: str, agent_name: str = None) -> str:
             last_error = e
             # Lời gọi hỏng thì token chưa bị tiêu -> trả lại chỗ đã đặt.
             rate_limiter.release_reservation(key_id, model, est_tokens)
+
+            if is_model_missing(e):
+                # Model này KHÔNG BAO GIỜ chạy lại được: gạch tên rồi thử ngay model kế
+                # tiếp trong chuỗi, thay vì để cả tính năng chết theo một model đã bị
+                # nhà cung cấp gỡ.
+                MODEL_KHONG_TON_TAI.add(model)
+                models = [m for m in models if m != model]
+                if models and attempt < MAX_RETRIES:
+                    continue
+                record_ai_log(
+                    agent_name=label, prompt=prompt, completion=None, total_tokens=0,
+                    latency_ms=(time.time() - start_time) * 1000,
+                    is_error=True, error_message=str(e),
+                )
+                raise AIServiceError(
+                    f"Groq không còn phục vụ model {model} cho tài khoản này và chuỗi "
+                    "dự phòng đã cạn. Cập nhật GROQ_MODEL / GROQ_MODEL_BACKUP theo "
+                    "GET https://api.groq.com/openai/v1/models."
+                ) from e
 
             if _is_rate_limit(e):
                 # Vẫn ăn 429 dù đã đặt chỗ: nghĩa là có luồng khác (agent chat, script

@@ -657,11 +657,20 @@ def _generate_questions_for(
         "ai_identified_weaknesses": weakness_context(c.evaluation),
     }
     # Gọi AI TRƯỚC khi đụng vào DB: AI hỏng thì bộ câu hỏi cũ vẫn còn nguyên.
-    ai_questions = generate_interview_questions_ai(
-        jd.requirements if jd else {}, candidate_context, aspect, num_questions
-    )
+    #
+    # NÓI RÕ VÌ SAO HỎNG. Cả lô cùng fail thì nguyên nhân gần như luôn là chung (hết hạn
+    # mức, model bị nhà cung cấp gỡ) — nuốt nó thành "AI không sinh được câu hỏi" là bắt
+    # HR lẫn người trực hệ thống đoán mò, trong khi lời của Groq đã nói thẳng.
+    try:
+        ai_questions = generate_interview_questions_ai(
+            jd.requirements if jd else {}, candidate_context, aspect, num_questions
+        )
+    except Exception as e:  # noqa: BLE001 - một người hỏng không được kéo cả lô chết theo
+        return {"candidate": c.name, "status": "failed",
+                "reason": f"AI không sinh được câu hỏi: {type(e).__name__}: {e}"}
     if not ai_questions:
-        return {"candidate": c.name, "status": "failed", "reason": "AI không sinh được câu hỏi."}
+        return {"candidate": c.name, "status": "failed",
+                "reason": "AI trả về danh sách câu hỏi rỗng."}
 
     created = interview is None
     kept_questions: list[models.InterviewQuestion] = []

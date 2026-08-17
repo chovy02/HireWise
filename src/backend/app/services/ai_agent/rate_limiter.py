@@ -37,6 +37,9 @@ SAFETY_RATIO = float(os.getenv("LLM_SAFETY_RATIO", "0.85"))
 # Hạn mức free tier Groq (https://console.groq.com/docs/rate-limits).
 # Ghi đè bằng env khi nâng lên Developer tier — KHÔNG cần sửa code.
 _DEFAULT_LIMITS = {
+    # Họ llama-3.x: Groq đã NGỪNG PHỤC VỤ cho free tier (17/08/2026, 404 model_not_found).
+    # Giữ lại số liệu để .env cũ còn trỏ vào chúng thì sổ sách không rơi xuống
+    # _FALLBACK_LIMIT một cách âm thầm — nhưng đừng đặt lại làm model mặc định.
     "llama-3.3-70b-versatile": {"rpm": 30, "tpm": 12_000, "rpd": 1_000, "tpd": 100_000},
     "llama-3.1-8b-instant": {"rpm": 30, "tpm": 6_000, "rpd": 14_400, "tpd": 500_000},
     # Model dự phòng cùng đẳng cấp (xem BACKUP_MODEL trong gemini_client). rpm/tpm lấy
