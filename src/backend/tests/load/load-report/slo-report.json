@@ -1,5 +1,9 @@
 {
+<<<<<<< HEAD
   "generated_at": "2026-08-17T22:22:58+07:00",
+=======
+  "generated_at": "2026-08-17T21:42:24+07:00",
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
   "max_error_rate_pct": 0.0,
   "summary": {
     "endpoints_measured": 25,
@@ -15,7 +19,11 @@
       "group": "A",
       "group_label": "A · tra cứu tức thời",
       "budget_ms": 300,
+<<<<<<< HEAD
       "count": 34,
+=======
+      "count": 67,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "http_errors": 0,
       "error_rate": 0.0,
       "breaches": 0,
@@ -23,8 +31,13 @@
       "min_ms": 4,
       "p50_ms": 5,
       "p95_ms": 8,
+<<<<<<< HEAD
       "p99_ms": 8,
       "max_ms": 8,
+=======
+      "p99_ms": 17,
+      "max_ms": 17,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "verdict": "ĐẠT",
       "note": ""
     },
@@ -39,11 +52,19 @@
       "error_rate": 0.0,
       "breaches": 0,
       "breach_rate": 0.0,
+<<<<<<< HEAD
       "min_ms": 8,
       "p50_ms": 10,
       "p95_ms": 15,
       "p99_ms": 15,
       "max_ms": 15,
+=======
+      "min_ms": 6,
+      "p50_ms": 8,
+      "p95_ms": 25,
+      "p99_ms": 25,
+      "max_ms": 25,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "verdict": "ĐẠT",
       "note": "giải mã JWT + 1 truy vấn theo email"
     },
@@ -53,14 +74,23 @@
       "group": "A",
       "group_label": "A · tra cứu tức thời",
       "budget_ms": 300,
+<<<<<<< HEAD
       "count": 15,
+=======
+      "count": 25,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "http_errors": 0,
       "error_rate": 0.0,
       "breaches": 0,
       "breach_rate": 0.0,
       "min_ms": 5,
+<<<<<<< HEAD
       "p50_ms": 6,
       "p95_ms": 11,
+=======
+      "p50_ms": 7,
+      "p95_ms": 10,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "p99_ms": 11,
       "max_ms": 11,
       "verdict": "ĐẠT",
@@ -72,16 +102,28 @@
       "group": "A",
       "group_label": "A · tra cứu tức thời",
       "budget_ms": 300,
+<<<<<<< HEAD
       "count": 151,
+=======
+      "count": 169,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "http_errors": 0,
       "error_rate": 0.0,
       "breaches": 0,
       "breach_rate": 0.0,
+<<<<<<< HEAD
       "min_ms": 4,
       "p50_ms": 6,
       "p95_ms": 16,
       "p99_ms": 17,
       "max_ms": 18,
+=======
+      "min_ms": 5,
+      "p50_ms": 7,
+      "p95_ms": 20,
+      "p99_ms": 34,
+      "max_ms": 35,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "verdict": "ĐẠT",
       "note": "danh sách dự án + đếm ứng viên gộp 1 query"
     },
@@ -91,16 +133,27 @@
       "group": "A",
       "group_label": "A · tra cứu tức thời",
       "budget_ms": 300,
+<<<<<<< HEAD
       "count": 29,
+=======
+      "count": 20,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "http_errors": 0,
       "error_rate": 0.0,
       "breaches": 0,
       "breach_rate": 0.0,
       "min_ms": 5,
+<<<<<<< HEAD
       "p50_ms": 5,
       "p95_ms": 7,
       "p99_ms": 8,
       "max_ms": 8,
+=======
+      "p50_ms": 7,
+      "p95_ms": 25,
+      "p99_ms": 25,
+      "max_ms": 25,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "verdict": "ĐẠT",
       "note": ""
     },
@@ -110,16 +163,27 @@
       "group": "A",
       "group_label": "A · tra cứu tức thời",
       "budget_ms": 300,
+<<<<<<< HEAD
       "count": 102,
+=======
+      "count": 179,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "http_errors": 0,
       "error_rate": 0.0,
       "breaches": 0,
       "breach_rate": 0.0,
       "min_ms": 4,
+<<<<<<< HEAD
       "p50_ms": 5,
       "p95_ms": 8,
       "p99_ms": 13,
       "max_ms": 14,
+=======
+      "p50_ms": 6,
+      "p95_ms": 9,
+      "p99_ms": 16,
+      "max_ms": 17,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "verdict": "ĐẠT",
       "note": ""
     },
@@ -129,16 +193,27 @@
       "group": "A",
       "group_label": "A · tra cứu tức thời",
       "budget_ms": 300,
+<<<<<<< HEAD
       "count": 94,
+=======
+      "count": 133,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "http_errors": 0,
       "error_rate": 0.0,
       "breaches": 0,
       "breach_rate": 0.0,
       "min_ms": 5,
+<<<<<<< HEAD
       "p50_ms": 6,
       "p95_ms": 16,
       "p99_ms": 20,
       "max_ms": 20,
+=======
+      "p50_ms": 7,
+      "p95_ms": 18,
+      "p99_ms": 22,
+      "max_ms": 23,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "verdict": "ĐẠT",
       "note": ""
     },
@@ -148,16 +223,26 @@
       "group": "A",
       "group_label": "A · tra cứu tức thời",
       "budget_ms": 300,
+<<<<<<< HEAD
       "count": 31,
+=======
+      "count": 59,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "http_errors": 0,
       "error_rate": 0.0,
       "breaches": 0,
       "breach_rate": 0.0,
       "min_ms": 5,
       "p50_ms": 6,
+<<<<<<< HEAD
       "p95_ms": 8,
       "p99_ms": 9,
       "max_ms": 9,
+=======
+      "p95_ms": 10,
+      "p99_ms": 16,
+      "max_ms": 16,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "verdict": "ĐẠT",
       "note": ""
     },
@@ -167,16 +252,26 @@
       "group": "A",
       "group_label": "A · tra cứu tức thời",
       "budget_ms": 300,
+<<<<<<< HEAD
       "count": 138,
+=======
+      "count": 166,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "http_errors": 0,
       "error_rate": 0.0,
       "breaches": 0,
       "breach_rate": 0.0,
       "min_ms": 3,
       "p50_ms": 4,
+<<<<<<< HEAD
       "p95_ms": 8,
       "p99_ms": 9,
       "max_ms": 11,
+=======
+      "p95_ms": 7,
+      "p99_ms": 14,
+      "max_ms": 15,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "verdict": "ĐẠT",
       "note": "chuông thông báo, gọi mỗi lần đổi trang"
     },
@@ -186,16 +281,28 @@
       "group": "B",
       "group_label": "B · truy vấn tổng hợp",
       "budget_ms": 800,
+<<<<<<< HEAD
       "count": 12,
+=======
+      "count": 17,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "http_errors": 0,
       "error_rate": 0.0,
       "breaches": 0,
       "breach_rate": 0.0,
+<<<<<<< HEAD
       "min_ms": 16,
       "p50_ms": 16,
       "p95_ms": 20,
       "p99_ms": 20,
       "max_ms": 20,
+=======
+      "min_ms": 27,
+      "p50_ms": 32,
+      "p95_ms": 51,
+      "p99_ms": 51,
+      "max_ms": 51,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "verdict": "ĐẠT",
       "note": ""
     },
@@ -205,16 +312,28 @@
       "group": "B",
       "group_label": "B · truy vấn tổng hợp",
       "budget_ms": 800,
+<<<<<<< HEAD
       "count": 21,
+=======
+      "count": 26,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "http_errors": 0,
       "error_rate": 0.0,
       "breaches": 0,
       "breach_rate": 0.0,
+<<<<<<< HEAD
       "min_ms": 7,
       "p50_ms": 10,
       "p95_ms": 23,
       "p99_ms": 28,
       "max_ms": 28,
+=======
+      "min_ms": 8,
+      "p50_ms": 11,
+      "p95_ms": 19,
+      "p99_ms": 51,
+      "max_ms": 51,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "verdict": "ĐẠT",
       "note": ""
     },
@@ -224,16 +343,28 @@
       "group": "B",
       "group_label": "B · truy vấn tổng hợp",
       "budget_ms": 800,
+<<<<<<< HEAD
       "count": 6,
+=======
+      "count": 8,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "http_errors": 0,
       "error_rate": 0.0,
       "breaches": 0,
       "breach_rate": 0.0,
+<<<<<<< HEAD
       "min_ms": 6,
       "p50_ms": 10,
       "p95_ms": 10,
       "p99_ms": 10,
       "max_ms": 10,
+=======
+      "min_ms": 8,
+      "p50_ms": 10,
+      "p95_ms": 15,
+      "p99_ms": 15,
+      "max_ms": 15,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "verdict": "ĐẠT",
       "note": ""
     },
@@ -243,16 +374,26 @@
       "group": "B",
       "group_label": "B · truy vấn tổng hợp",
       "budget_ms": 800,
+<<<<<<< HEAD
       "count": 21,
+=======
+      "count": 26,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "http_errors": 0,
       "error_rate": 0.0,
       "breaches": 0,
       "breach_rate": 0.0,
       "min_ms": 5,
       "p50_ms": 6,
+<<<<<<< HEAD
       "p95_ms": 20,
       "p99_ms": 26,
       "max_ms": 26,
+=======
+      "p95_ms": 9,
+      "p99_ms": 31,
+      "max_ms": 31,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "verdict": "ĐẠT",
       "note": ""
     },
@@ -262,16 +403,28 @@
       "group": "B",
       "group_label": "B · truy vấn tổng hợp",
       "budget_ms": 800,
+<<<<<<< HEAD
       "count": 12,
+=======
+      "count": 17,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "http_errors": 0,
       "error_rate": 0.0,
       "breaches": 0,
       "breach_rate": 0.0,
+<<<<<<< HEAD
       "min_ms": 8,
       "p50_ms": 9,
       "p95_ms": 23,
       "p99_ms": 23,
       "max_ms": 23,
+=======
+      "min_ms": 6,
+      "p50_ms": 8,
+      "p95_ms": 18,
+      "p99_ms": 18,
+      "max_ms": 18,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "verdict": "ĐẠT",
       "note": ""
     },
@@ -281,16 +434,27 @@
       "group": "B",
       "group_label": "B · truy vấn tổng hợp",
       "budget_ms": 800,
+<<<<<<< HEAD
       "count": 94,
+=======
+      "count": 145,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "http_errors": 0,
       "error_rate": 0.0,
       "breaches": 0,
       "breach_rate": 0.0,
       "min_ms": 5,
+<<<<<<< HEAD
       "p50_ms": 6,
       "p95_ms": 9,
       "p99_ms": 16,
       "max_ms": 16,
+=======
+      "p50_ms": 7,
+      "p95_ms": 10,
+      "p99_ms": 13,
+      "max_ms": 18,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "verdict": "ĐẠT",
       "note": "kèm raw_text CV + đánh giá chi tiết"
     },
@@ -300,7 +464,11 @@
       "group": "B",
       "group_label": "B · truy vấn tổng hợp",
       "budget_ms": 800,
+<<<<<<< HEAD
       "count": 94,
+=======
+      "count": 145,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "http_errors": 0,
       "error_rate": 0.0,
       "breaches": 0,
@@ -308,7 +476,11 @@
       "min_ms": 4,
       "p50_ms": 5,
       "p95_ms": 7,
+<<<<<<< HEAD
       "p99_ms": 13,
+=======
+      "p99_ms": 9,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "max_ms": 13,
       "verdict": "ĐẠT",
       "note": "404 khi chưa có buổi PV là hợp lệ"
@@ -319,16 +491,28 @@
       "group": "B",
       "group_label": "B · truy vấn tổng hợp",
       "budget_ms": 800,
+<<<<<<< HEAD
       "count": 310,
+=======
+      "count": 495,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "http_errors": 0,
       "error_rate": 0.0,
       "breaches": 0,
       "breach_rate": 0.0,
+<<<<<<< HEAD
       "min_ms": 7,
       "p50_ms": 10,
       "p95_ms": 30,
       "p99_ms": 34,
       "max_ms": 38,
+=======
+      "min_ms": 18,
+      "p50_ms": 23,
+      "p95_ms": 52,
+      "p99_ms": 99,
+      "max_ms": 107,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "verdict": "ĐẠT",
       "note": "giao diện POLL endpoint này khi đang upload"
     },
@@ -338,16 +522,28 @@
       "group": "B",
       "group_label": "B · truy vấn tổng hợp",
       "budget_ms": 800,
+<<<<<<< HEAD
       "count": 51,
+=======
+      "count": 181,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "http_errors": 0,
       "error_rate": 0.0,
       "breaches": 0,
       "breach_rate": 0.0,
+<<<<<<< HEAD
       "min_ms": 5,
       "p50_ms": 7,
       "p95_ms": 10,
       "p99_ms": 14,
       "max_ms": 14,
+=======
+      "min_ms": 6,
+      "p50_ms": 15,
+      "p95_ms": 22,
+      "p99_ms": 26,
+      "max_ms": 30,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "verdict": "ĐẠT",
       "note": ""
     },
@@ -357,16 +553,28 @@
       "group": "B",
       "group_label": "B · truy vấn tổng hợp",
       "budget_ms": 800,
+<<<<<<< HEAD
       "count": 5,
+=======
+      "count": 15,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "http_errors": 0,
       "error_rate": 0.0,
       "breaches": 0,
       "breach_rate": 0.0,
+<<<<<<< HEAD
       "min_ms": 10,
       "p50_ms": 12,
       "p95_ms": 13,
       "p99_ms": 13,
       "max_ms": 13,
+=======
+      "min_ms": 4,
+      "p50_ms": 7,
+      "p95_ms": 18,
+      "p99_ms": 18,
+      "max_ms": 18,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "verdict": "ĐẠT",
       "note": ""
     },
@@ -376,16 +584,28 @@
       "group": "C",
       "group_label": "C · ghi dữ liệu",
       "budget_ms": 1000,
+<<<<<<< HEAD
       "count": 48,
+=======
+      "count": 66,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "http_errors": 0,
       "error_rate": 0.0,
       "breaches": 0,
       "breach_rate": 0.0,
+<<<<<<< HEAD
       "min_ms": 7,
       "p50_ms": 8,
       "p95_ms": 11,
       "p99_ms": 16,
       "max_ms": 16,
+=======
+      "min_ms": 8,
+      "p50_ms": 9,
+      "p95_ms": 13,
+      "p99_ms": 19,
+      "max_ms": 19,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "verdict": "ĐẠT",
       "note": ""
     },
@@ -395,16 +615,28 @@
       "group": "C",
       "group_label": "C · ghi dữ liệu",
       "budget_ms": 1000,
+<<<<<<< HEAD
       "count": 48,
+=======
+      "count": 66,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "http_errors": 0,
       "error_rate": 0.0,
       "breaches": 0,
       "breach_rate": 0.0,
+<<<<<<< HEAD
       "min_ms": 5,
       "p50_ms": 6,
       "p95_ms": 8,
       "p99_ms": 9,
       "max_ms": 9,
+=======
+      "min_ms": 6,
+      "p50_ms": 6,
+      "p95_ms": 9,
+      "p99_ms": 11,
+      "max_ms": 11,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "verdict": "ĐẠT",
       "note": ""
     },
@@ -424,16 +656,28 @@
       "group": "C",
       "group_label": "C · ghi dữ liệu",
       "budget_ms": 1000,
+<<<<<<< HEAD
       "count": 48,
+=======
+      "count": 66,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "http_errors": 0,
       "error_rate": 0.0,
       "breaches": 0,
       "breach_rate": 0.0,
+<<<<<<< HEAD
       "min_ms": 49,
       "p50_ms": 59,
       "p95_ms": 67,
       "p99_ms": 72,
       "max_ms": 72,
+=======
+      "min_ms": 15,
+      "p50_ms": 55,
+      "p95_ms": 60,
+      "p99_ms": 65,
+      "max_ms": 65,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "verdict": "ĐẠT",
       "note": "HR chốt nhận/loại"
     },
@@ -443,16 +687,28 @@
       "group": "C",
       "group_label": "C · ghi dữ liệu",
       "budget_ms": 1000,
+<<<<<<< HEAD
       "count": 48,
+=======
+      "count": 66,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "http_errors": 0,
       "error_rate": 0.0,
       "breaches": 0,
       "breach_rate": 0.0,
+<<<<<<< HEAD
       "min_ms": 9,
       "p50_ms": 13,
       "p95_ms": 58,
       "p99_ms": 64,
       "max_ms": 64,
+=======
+      "min_ms": 10,
+      "p50_ms": 13,
+      "p95_ms": 53,
+      "p99_ms": 55,
+      "max_ms": 55,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "verdict": "ĐẠT",
       "note": ""
     },
@@ -462,16 +718,27 @@
       "group": "C",
       "group_label": "C · ghi dữ liệu",
       "budget_ms": 1000,
+<<<<<<< HEAD
       "count": 48,
+=======
+      "count": 66,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "http_errors": 0,
       "error_rate": 0.0,
       "breaches": 0,
       "breach_rate": 0.0,
       "min_ms": 51,
+<<<<<<< HEAD
       "p50_ms": 56,
       "p95_ms": 66,
       "p99_ms": 67,
       "max_ms": 67,
+=======
+      "p50_ms": 54,
+      "p95_ms": 61,
+      "p99_ms": 106,
+      "max_ms": 106,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "verdict": "ĐẠT",
       "note": ""
     },
@@ -486,11 +753,19 @@
       "error_rate": 0.0,
       "breaches": 0,
       "breach_rate": 0.0,
+<<<<<<< HEAD
       "min_ms": 204,
       "p50_ms": 213,
       "p95_ms": 231,
       "p99_ms": 231,
       "max_ms": 231,
+=======
+      "min_ms": 205,
+      "p50_ms": 228,
+      "p95_ms": 263,
+      "p99_ms": 263,
+      "max_ms": 263,
+>>>>>>> ea2aecef4b3bd642178893aa4d8773da6f74a43a
       "verdict": "ĐẠT",
       "note": "bcrypt 12 vòng nằm trong đường đi"
     },
