@@ -151,6 +151,39 @@ _BACKUP_AGENTS = {
 }
 
 
+# ĐỘ DÀI PHẦN "SUY NGHĨ" CỦA MODEL REASONING.
+#
+# gpt-oss và qwen3 là model reasoning: chúng sinh một chuỗi suy luận TRƯỚC câu trả lời,
+# và chuỗi đó tiêu chung trần `max_tokens` với câu trả lời thật. Đo trên chính tài khoản
+# này với một câu hỏi ngắn: mặc định tốn 400 token sinh ra (1.262 ký tự suy nghĩ, 230 ký
+# tự trả lời); với `reasoning_effort` thấp còn 92 token (42 / 286). Hệ quả khi để mặc
+# định: phần suy nghĩ ăn hết trần output -> API trả về nội dung RỖNG, và HR nhìn thấy
+# đúng dòng "(không có phản hồi)" trong khung chat. Đó cũng là lượt tiêu 8.446 token
+# trong ai_logs mà completion trống trơn.
+#
+# Groq nhận từ vựng khác nhau tuỳ họ model: gpt-oss chỉ chấp nhận low/medium/high, qwen3
+# chỉ chấp nhận none/default. Gửi nhầm là 400, nên tra theo tiền tố tên model.
+_REASONING_EFFORT = {
+    "openai/gpt-oss": os.getenv("GROQ_REASONING_EFFORT", "low"),
+    "qwen/": os.getenv("GROQ_REASONING_EFFORT_QWEN", "none"),
+}
+
+
+def reasoning_kwargs(model: str) -> dict:
+    """Tham số `reasoning_effort` hợp lệ cho model này ({} nếu model không hỗ trợ).
+
+    Gửi qua `extra_body` chứ KHÔNG phải tham số có tên: SDK groq 0.11 chưa biết
+    `reasoning_effort` nên truyền thẳng là `TypeError: unexpected keyword argument` —
+    lỗi này nuốt trọn mọi lượt chat (đã gặp: Copilot trả "mình gặp trục trặc" cho câu
+    hỏi đơn giản nhất). `extra_body` đi thẳng vào JSON body nên không phụ thuộc phiên
+    bản SDK, và Groq bỏ qua nếu model không hiểu.
+    """
+    for prefix, value in _REASONING_EFFORT.items():
+        if model.startswith(prefix) and value:
+            return {"extra_body": {"reasoning_effort": value}}
+    return {}
+
+
 def _models_for(agent_name: str) -> list[str]:
     """Danh sách model theo thứ tự ưu tiên cho 1 agent.
 
@@ -390,6 +423,7 @@ def generate_text(model_name: str, prompt: str, agent_name: str = None) -> str:
                 temperature=0.2,
                 max_tokens=MAX_OUTPUT_TOKENS,
                 response_format={"type": "json_object"},
+                **reasoning_kwargs(model),
             )
             choice = resp.choices[0]
             content = choice.message.content
