@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useLocation, Link } from 'react-router-dom'
 import {
   Search,
@@ -206,10 +206,14 @@ function notifyState(item, now = Date.now()) {
       title: `Địa chỉ “${email}” không đúng định dạng nên không gửi được. Sửa email của ứng viên rồi thử lại.` }
   }
 
+  // ĐÃ GỬI XONG cho đúng quyết định hiện tại -> KHÔNG có nút thử lại. Việc đã thành
+  // công thì một nút "Thử lại" nằm cạnh nhãn xanh chỉ gây hoang mang ("gửi lỗi à?") và
+  // là đường ngắn nhất để ứng viên nhận hai lá thư giống nhau. Muốn gửi lại thật thì
+  // đổi quyết định (nhãn thành "Cần gửi lại") hoặc dùng nút gửi cả lô.
   if (item.notified_at && item.notified_status === item.candidate_status) {
-    return { queued: false, canRetry: true, variant: 'success', icon: MailCheck,
+    return { queued: false, canRetry: false, variant: 'success', icon: MailCheck,
       label: 'Đã gửi',
-      title: `Đã gửi lúc ${formatDateTime(item.notified_at)}${attemptNote}. Bấm để gửi lại nếu ứng viên chưa nhận.` }
+      title: `Đã gửi lúc ${formatDateTime(item.notified_at)}${attemptNote}.` }
   }
   if (item.notified_at) {
     return { queued: true, canRetry: true, variant: 'warning', icon: MailWarning,
@@ -380,6 +384,9 @@ export default function Shortlisting() {
   const [shortlists, setShortlists] = useState(null) // danh sách shortlist của JD
   const [activeSlId, setActiveSlId] = useState(null) // shortlist đang chọn
   const [slDetail, setSlDetail] = useState(null) // chi tiết shortlist đang chọn
+  // id của shortlist mà `slDetail` đang giữ — để phân biệt "đổi shortlist" (phải xoá
+  // dữ liệu cũ) với "nạp lại cùng shortlist" (giữ bảng, thay tại chỗ).
+  const slIdDaNap = useRef(null)
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState('')
 
@@ -468,20 +475,32 @@ export default function Shortlisting() {
   }, [projectId, paramSl, navNonce])
 
   // Nạp chi tiết shortlist đang chọn.
+  //
+  // `navNonce` PHẢI nằm trong deps, không chỉ `activeSlId`: agent/MCP gửi mail xong sẽ
+  // điều hướng về ĐÚNG shortlist HR đang mở, nên `activeSlId` không đổi và effect này
+  // không chạy lại — cột "Email" đứng im ở "Chưa gửi" cho tới khi HR F5, dù backend đã
+  // gửi xong và ghi notified_at. Effect nạp DANH SÁCH shortlist ở trên đã nghe nonce
+  // rồi, nhưng nó chỉ làm mới item_count; trạng thái gửi của từng ứng viên nằm trong
+  // chi tiết này.
   useEffect(() => {
     if (!activeSlId) {
+      slIdDaNap.current = null
       setSlDetail(null)
       return
     }
     let cancelled = false
-    setSlDetail(null)
+    // Chỉ xoá dữ liệu cũ khi ĐỔI sang shortlist khác. Nạp lại vì nonce mà cũng xoá thì
+    // cả bảng nháy về khung "đang tải" ngay dưới tay HR, chỉ để hiện lại gần như y
+    // nguyên — đổi tại chỗ khi dữ liệu mới về là đủ.
+    if (slIdDaNap.current !== activeSlId) setSlDetail(null)
+    slIdDaNap.current = activeSlId
     getShortlist(activeSlId)
       .then((d) => !cancelled && setSlDetail(d))
       .catch(() => !cancelled && setSlDetail(null))
     return () => {
       cancelled = true
     }
-  }, [activeSlId])
+  }, [activeSlId, navNonce])
 
   // Backend gửi mail trong BackgroundTasks, nên notified_at chỉ xuất hiện vài giây
   // SAU khi API trả về. Nạp lại hai nhịp để cột "Email" tự chuyển sang "Đã gửi" —
@@ -1366,19 +1385,16 @@ export default function Shortlisting() {
                                     {notify.label}
                                   </span>
                                 )}
-                                {/* Thử lại cho ĐÚNG ứng viên này. Có mặt cả khi đã gửi
-                                    thành công (mail vào spam, ứng viên báo chưa thấy) —
-                                    còn khi lỗi thì đây là đường ra duy nhất, thiếu nó
-                                    thì "Gửi lỗi" thành một ngõ cụt. */}
+                                {/* Thử lại cho ĐÚNG ứng viên này. CHỈ hiện khi chưa gửi
+                                    được (lỗi, treo, quyết định vừa đổi) — lúc đó đây là
+                                    đường ra duy nhất, thiếu nó thì "Gửi lỗi" thành một
+                                    ngõ cụt. Đã gửi thành công thì không hiện: xem
+                                    `notifyState`. */}
                                 {notify.canRetry && (
                                   <button
                                     onClick={() => handleResend(it.id)}
                                     disabled={resendingId !== null}
-                                    title={
-                                      notify.variant === 'success'
-                                        ? 'Gửi lại email kết quả cho ứng viên này'
-                                        : 'Thử gửi lại email kết quả cho ứng viên này'
-                                    }
+                                    title="Thử gửi lại email kết quả cho ứng viên này"
                                     className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-1.5 py-1 text-[11px] font-medium text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                                   >
                                     {resendingId === it.id ? (
