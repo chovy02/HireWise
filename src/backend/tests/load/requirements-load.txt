@@ -1,0 +1,14 @@
+# Phụ thuộc RIÊNG cho load test — cố ý KHÔNG gộp vào src/backend/requirements.txt.
+# Locust kéo theo gevent, flask và cả một stack web riêng; nhét vào image backend là
+# phình dung lượng và tăng bề mặt phụ thuộc của thứ chạy trên môi trường thật, chỉ để
+# phục vụ một việc chạy trên máy người phát triển.
+#
+#   pip install -r requirements-load.txt
+locust>=2.31,<3
+
+# seed.py gọi API bằng requests (locust đã kéo theo, ghi rõ ở đây để chạy độc lập được).
+requests>=2.31
+
+# Không bắt buộc: cho phép seed.py / locustfile.py đọc thẳng .env ở gốc dự án,
+# khỏi phải khai lại DEFAULT_ADMIN_EMAIL bằng tay.
+python-dotenv>=1.0
