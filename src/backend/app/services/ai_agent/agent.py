@@ -38,6 +38,7 @@ from app.services.ai_agent import rate_limiter
 from app.services.ai_agent.gemini_client import (
     MODEL_KHONG_TON_TAI,
     is_model_missing,
+    reasoning_kwargs,
     record_ai_log,
 )
 
@@ -64,6 +65,8 @@ _CHAT_KEY_ENV = ("GROQ_MCP_API_KEY", "GROQ_API_KEY_1", "GROQ_API_KEY_2")
 # CẦU (prompt + phần output đặt chỗ) — xem "Requested 7301" trong chính lỗi 429 ở
 # trên — nên bỏ trống là mỗi lượt gọi tự ăn thêm ngân sách mình không hề dùng tới.
 _MAX_OUTPUT = int(os.getenv("AGENT_MAX_OUTPUT_TOKENS", "700"))
+# Trần cứng khi nới output cho lần thử lại (xem `_goi`).
+_MAX_OUTPUT_CAP = int(os.getenv("AGENT_MAX_OUTPUT_TOKENS_CAP", "1500"))
 
 
 def _cac_key() -> list[tuple[str, str]]:
@@ -152,6 +155,10 @@ def _completion_for_log(resp) -> str:
         return ""
 
 
+class _TraLoiRong(Exception):
+    """Groq trả 200 nhưng lượt đó không có chữ nào và cũng không gọi tool nào."""
+
+
 def _is_quota_error(err: Exception) -> bool:
     """Lỗi này là do CẠN HẠN MỨC nhà cung cấp (429), không phải lỗi lập trình."""
     text = str(err).lower()
@@ -206,6 +213,17 @@ def _kha_dung(model: str) -> bool:
     return True
 
 
+# Model KHÔNG GỌI ĐƯỢC TOOL (vd groq/compound: "`tool calling` is not supported with
+# this model"). Khác với model chết hẳn: nó vẫn chạy tốt cho các việc JSON của pipeline,
+# nên danh sách này là RIÊNG của khung chat, không dùng chung với gemini_client.
+_MODEL_KHONG_GOI_DUOC_TOOL: set[str] = set()
+
+
+def _khong_goi_duoc_tool(err: Exception) -> bool:
+    text = str(err).lower()
+    return "tool calling" in text and "not supported" in text
+
+
 def _con_song() -> list[str]:
     """Chuỗi model bỏ đi những model NHÀ CUNG CẤP KHÔNG CÒN PHỤC VỤ (404).
 
@@ -215,7 +233,8 @@ def _con_song() -> list[str]:
     Chết sạch thì vẫn trả chuỗi đầy đủ — để lỗi thật của Groq nói ra nguyên nhân, thay
     vì ta tự dựng một lỗi khác che mất nó.
     """
-    con = [m for m in _MODEL_CHAIN if m not in MODEL_KHONG_TON_TAI]
+    bo = MODEL_KHONG_TON_TAI | _MODEL_KHONG_GOI_DUOC_TOOL
+    con = [m for m in _MODEL_CHAIN if m not in bo]
     return con or list(_MODEL_CHAIN)
 
 
@@ -262,6 +281,15 @@ def _friendly_error(err: Exception, da_lam: list[str] | None = None) -> str:
         return (
             "Hệ thống đã dùng hết hạn mức AI cho hôm nay nên mình chưa xử lý được yêu "
             f"cầu này.{goi_y}"
+        )
+    if isinstance(err, _TraLoiRong):
+        # Đã thử lại với trần output rộng dần mà model vẫn không nói được câu nào. Nói
+        # thật là hơn: dòng "(không có phản hồi)" trắng trơn khiến HR không biết yêu cầu
+        # của mình đã chạy hay chưa.
+        return (
+            "Mình chưa soạn được câu trả lời cho yêu cầu này (model AI trả về lượt "
+            "rỗng). Chưa có gì bị thay đổi thêm; bạn thử gửi lại yêu cầu ngắn gọn hơn "
+            "giúp mình nhé."
         )
     if is_model_missing(err):
         # Đây là lỗi CẤU HÌNH, không phải lỗi cách HR diễn đạt: model khai trong
@@ -356,11 +384,42 @@ def _complete_sync(messages: list, tools: list):
             tools=tools,
             tool_choice="auto",
             temperature=0.2 + 0.3 * attempt,
-            max_tokens=_MAX_OUTPUT,
+            # Trần output NỚI DẦN theo lần thử: lần đầu tiết kiệm, nhưng nếu model
+            # reasoning tiêu hết trần vào phần suy nghĩ và trả về rỗng thì lần sau phải
+            # rộng hơn, chứ thử lại y nguyên là rỗng y nguyên. CÓ TRẦN CỨNG vì Groq trừ
+            # hạn mức phút theo (prompt + output đặt chỗ): nới vô tội vạ là tự đẩy request
+            # vượt 8.000 TPM rồi ăn 413 "Request too large".
+            max_tokens=min(_MAX_OUTPUT * (attempt + 1), _MAX_OUTPUT_CAP),
+            **reasoning_kwargs(model),
         )
         dung_that = getattr(getattr(resp, "usage", None), "total_tokens", 0) or 0
         # Trả lại phần đặt chỗ thừa, để lượt sau không bị từ chối oan.
         rate_limiter.reconcile(key_id, model, est, dung_that)
+
+        # LƯỢT RỖNG = LƯỢT HỎNG, KHÔNG PHẢI LƯỢT THÀNH CÔNG.
+        #
+        # Model reasoning tiêu hết trần output vào phần suy nghĩ thì API vẫn trả 200,
+        # chỉ là `content` rỗng và không có tool_calls nào. Trước đây lượt đó được ghi
+        # log là THÀNH CÔNG rồi trả thẳng lên khung chat, thành đúng dòng "(không có
+        # phản hồi)" mà HR nhìn thấy — một lượt tiêu 8.446 token nhưng nói không nên
+        # lời. Ném ra để vòng ngoài thử lại với trần rộng hơn / model khác.
+        msg = resp.choices[0].message
+        if not (getattr(msg, "content", None) or "").strip() and not getattr(msg, "tool_calls", None):
+            record_ai_log(
+                agent_name="copilot_agent",
+                prompt=_prompt_for_log(messages),
+                completion=None,
+                total_tokens=dung_that,
+                latency_ms=(time.time() - start) * 1000,
+                is_error=True,
+                error_message=(
+                    f"{model} trả lời rỗng (finish_reason="
+                    f"{getattr(resp.choices[0], 'finish_reason', '?')}); nhiều khả năng "
+                    f"phần suy luận đã ăn hết trần {_MAX_OUTPUT * (attempt + 1)} token."
+                ),
+            )
+            raise _TraLoiRong(f"{model} trả về lượt rỗng")
+
         completion = _completion_for_log(resp)
         if model != AGENT_MODEL:
             completion = f"[model dự phòng: {model}]\n{completion}"
@@ -397,7 +456,11 @@ def _complete_sync(messages: list, tools: list):
                 return _goi(model, key_id, api_key, attempt, est)
             except Exception as e:  # noqa: BLE001 - cả tool_use_failed lẫn 429/5xx
                 last_err = e
-                rate_limiter.release_reservation(key_id, model, est)
+                if not isinstance(e, _TraLoiRong):
+                    # Lượt rỗng thì token ĐÃ TIÊU THẬT và `_goi` đã reconcile bằng số
+                    # thật rồi — trả chỗ thêm lần nữa là ghi khống cho mình một ngân
+                    # sách không có, rồi lượt sau đâm vào 429.
+                    rate_limiter.release_reservation(key_id, model, est)
                 if is_model_missing(e):
                     # Groq không phục vụ model này nữa -> gạch tên và XUỐNG MODEL KẾ
                     # TIẾP NGAY. Trước đây 404 rơi vào nhánh "lỗi ngẫu nhiên" ở cuối:
@@ -408,6 +471,16 @@ def _complete_sync(messages: list, tools: list):
                         "Groq không còn model %s cho tài khoản %s; chuyển model kế tiếp. "
                         "Cập nhật GROQ_MODEL/GROQ_FALLBACK_MODELS theo /v1/models.",
                         model, key_id,
+                    )
+                    break
+                if _khong_goi_duoc_tool(e):
+                    # CÙNG MỘT HÌNH DẠNG với 404: lỗi tất định về NĂNG LỰC model, thử
+                    # lại bao nhiêu lần cũng vậy. Gạch tên khỏi chuỗi CHAT (model vẫn
+                    # tốt cho việc JSON của pipeline) rồi xuống model kế tiếp ngay.
+                    _MODEL_KHONG_GOI_DUOC_TOOL.add(model)
+                    log.warning(
+                        "Model %s không hỗ trợ tool calling nên không dùng cho Copilot "
+                        "được; chuyển model kế tiếp. Sửa GROQ_MODEL trong .env.", model,
                     )
                     break
                 if _is_quota_error(e):
@@ -800,7 +873,14 @@ async def _agent_loop(messages: list, tools: list, execute) -> dict:
 
         # LLM không gọi tool nữa -> câu trả lời cuối cùng.
         if not msg.tool_calls:
-            return _out(msg.content or "")
+            # Chốt chặn cuối: KHÔNG BAO GIỜ trả chuỗi rỗng lên khung chat. `_complete`
+            # đã coi lượt rỗng là lỗi và thử lại, nhưng nếu vì lý do nào đó vẫn lọt tới
+            # đây thì HR phải nhận một câu nói được điều gì đã xảy ra, chứ không phải
+            # dòng "(không có phản hồi)" — nhất là khi các tool GHI đã chạy xong.
+            reply = (msg.content or "").strip()
+            if not reply:
+                reply = _friendly_error(_TraLoiRong("lượt cuối rỗng"), da_ghi)
+            return _out(reply)
 
         # Ghi lại lượt assistant (kèm yêu cầu gọi tool) vào lịch sử.
         messages.append({

@@ -48,6 +48,9 @@ _DEFAULT_LIMITS = {
     # cao thì đâm thẳng vào 429 và ăn cooldown.
     "openai/gpt-oss-120b": {"rpm": 30, "tpm": 8_000, "rpd": 1_000, "tpd": 100_000},
     "openai/gpt-oss-20b": {"rpm": 30, "tpm": 8_000, "rpd": 1_000, "tpd": 100_000},
+    # Model thứ ba còn gọi được tool trên tài khoản này; số đo lấy từ header
+    # x-ratelimit-limit-* ngày 17/08/2026 (tokens 8.000, requests 1.000).
+    "qwen/qwen3.6-27b": {"rpm": 30, "tpm": 8_000, "rpd": 1_000, "tpd": 100_000},
 }
 
 # Hạn mức cho model lạ (không có trong bảng trên): lấy mức thấp nhất cho an toàn.
