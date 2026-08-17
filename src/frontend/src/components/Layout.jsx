@@ -95,7 +95,7 @@ export default function Layout() {
             {showCopilot && (
               <button
                 onClick={() => setCopilotOpen(true)}
-                aria-label="Mở AI Copilot"
+                aria-label="Mở HireWise Chatbot"
                 className="rounded-lg p-2 text-slate-600 transition hover:bg-slate-100"
               >
                 <Sparkles size={20} />

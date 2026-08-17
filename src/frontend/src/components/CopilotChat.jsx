@@ -184,7 +184,7 @@ export default function CopilotChat({ open = false, onClose }) {
           <Sparkles size={16} />
         </div>
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-semibold text-slate-900">AI Copilot</p>
+          <p className="text-sm font-semibold text-slate-900">HireWise Chatbot</p>
           <p className="truncate text-xs text-slate-400">Trợ lý tuyển dụng</p>
         </div>
         <button
@@ -209,8 +209,8 @@ export default function CopilotChat({ open = false, onClose }) {
         {/* Chỉ mobile: panel là lớp phủ nên phải có lối thoát. */}
         <button
           onClick={onClose}
-          title="Đóng AI Copilot"
-          aria-label="Đóng AI Copilot"
+          title="Đóng HireWise Chatbot"
+          aria-label="Đóng HireWise Chatbot"
           className="rounded-md p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 lg:hidden"
         >
           <X size={17} />
@@ -326,7 +326,7 @@ export default function CopilotChat({ open = false, onClose }) {
               }
             }}
             placeholder="Nhập yêu cầu…"
-            aria-label="Nội dung yêu cầu gửi cho AI Copilot"
+            aria-label="Nội dung yêu cầu gửi cho HireWise Chatbot"
             className="flex-1 resize-none bg-transparent text-sm leading-5 text-slate-800 outline-none placeholder:text-slate-400"
           />
           <button

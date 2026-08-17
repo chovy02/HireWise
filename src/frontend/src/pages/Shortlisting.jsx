@@ -1031,19 +1031,29 @@ export default function Shortlisting() {
                                 {(formatName(c.name) || '?')[0]}
                               </div>
                               <div className="min-w-0">
-                                <div className="flex items-center gap-2">
-                                  <span className="truncate text-sm font-semibold text-slate-900">
-                                    {formatName(c.name) || 'Đang trích xuất…'}
+                                <p
+                                  className="truncate text-sm font-semibold text-slate-900"
+                                  title={formatName(c.name) || undefined}
+                                >
+                                  {formatName(c.name) || 'Đang trích xuất…'}
+                                </p>
+                                <div className="mt-0.5 flex min-w-0 items-center gap-2">
+                                  <span
+                                    className="truncate text-xs text-slate-400"
+                                    title={c.email || undefined}
+                                  >
+                                    {c.email || '—'}
                                   </span>
                                   {c.is_overridden && (
-                                    <Badge variant="ai" upper={false}>
+                                    <Badge
+                                      variant="ai"
+                                      upper={false}
+                                      className="flex-shrink-0 whitespace-nowrap"
+                                    >
                                       Đã ghi đè
                                     </Badge>
                                   )}
                                 </div>
-                                <p className="truncate text-xs text-slate-400">
-                                  {c.email || '—'}
-                                </p>
                               </div>
                             </div>
                           </td>
@@ -1195,12 +1205,14 @@ export default function Shortlisting() {
             {slDetail?.items && slDetail.items.length > 0 && (
               <>
                 <div className="overflow-x-auto">
-                  <table className="w-full min-w-[760px] text-left">
+                  {/* 7 cột: min-width rộng hơn leaderboard, nếu không cột "Ứng viên"
+                      bị bóp lại và tên dài không còn chỗ. */}
+                  <table className="w-full min-w-[900px] text-left">
                     <thead>
                       <tr className="border-b border-slate-200 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
                         <th className="w-10 py-3 pl-4 pr-0" />
-                        <th className="px-6 py-3">Hạng</th>
-                        <th className="px-6 py-3">Ứng viên</th>
+                        <th className="w-16 px-6 py-3">Hạng</th>
+                        <th className="min-w-[220px] px-6 py-3">Ứng viên</th>
                         <th className="px-6 py-3 text-center">Độ phù hợp</th>
                         <th className="px-6 py-3">Quyết định</th>
                         <th className="px-6 py-3">Email</th>
@@ -1250,23 +1262,33 @@ export default function Shortlisting() {
                                 <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-indigo-50 text-sm font-semibold text-indigo-600">
                                   {(formatName(c.name) || '?')[0]}
                                 </div>
+                                {/* Tên chiếm trọn một dòng, nhãn phỏng vấn xuống dòng
+                                    dưới cùng email: để chung một dòng thì nhãn dài
+                                    ("Đã có câu hỏi") ăn hết chỗ và tên bị cắt cụt. */}
                                 <div className="min-w-0">
-                                  <div className="flex items-center gap-2">
-                                    <span className="truncate text-sm font-semibold text-slate-900">
-                                      {formatName(c.name) || 'Đang trích xuất…'}
+                                  <p
+                                    className="truncate text-sm font-semibold text-slate-900"
+                                    title={formatName(c.name) || undefined}
+                                  >
+                                    {formatName(c.name) || 'Đang trích xuất…'}
+                                  </p>
+                                  <div className="mt-0.5 flex min-w-0 items-center gap-2">
+                                    <span
+                                      className="truncate text-xs text-slate-400"
+                                      title={c.email || undefined}
+                                    >
+                                      {c.email || '—'}
                                     </span>
                                     {interviewMeta && (
                                       <Badge
                                         variant={interviewMeta.variant}
                                         upper={false}
+                                        className="flex-shrink-0 whitespace-nowrap"
                                       >
                                         {interviewMeta.label}
                                       </Badge>
                                     )}
                                   </div>
-                                  <p className="truncate text-xs text-slate-400">
-                                    {c.email || '—'}
-                                  </p>
                                 </div>
                               </div>
                             </td>
