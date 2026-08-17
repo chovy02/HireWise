@@ -17,6 +17,21 @@ export function sortInterviewQuestions(list) {
   return [...(list || [])].sort((a, b) => a.order_index - b.order_index)
 }
 
+// Điểm trung bình của buổi phỏng vấn: bình quân các câu ĐÃ chấm (câu đào sâu tính
+// như câu thường), làm tròn 1 chữ số thập phân. Chưa chấm câu nào -> avg = null.
+// Dùng chung cho khung phỏng vấn và khung tóm tắt để hai chỗ không lệch số.
+export function interviewAverageScore(questions) {
+  const list = questions || []
+  const scored = list.filter((q) => q.score != null)
+  return {
+    avg: scored.length
+      ? Math.round((scored.reduce((s, q) => s + q.score, 0) / scored.length) * 10) / 10
+      : null,
+    scoredCount: scored.length,
+    total: list.length,
+  }
+}
+
 // Gắn nhãn số cho từng câu: câu chính là 1, 2, 3… còn câu đào sâu ăn theo câu
 // chính ngay trước nó -> 1.1, 1.2, 1.3…
 // Nhận vào danh sách ĐÃ sắp theo order_index.
