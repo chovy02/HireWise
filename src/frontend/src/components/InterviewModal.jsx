@@ -16,11 +16,12 @@ import {
   ChevronDown,
   Lightbulb,
 } from 'lucide-react'
-import { Badge, PrimaryButton, SecondaryButton } from './ui.jsx'
+import { Badge, PrimaryButton, ProgressBar, SecondaryButton } from './ui.jsx'
 import { useToast } from '../context/ToastContext.jsx'
 import { useAgentReload } from '../utils/useAgentReload.js'
 import { formatName } from '../utils/formatName.js'
 import {
+  interviewAverageScore,
   isManualQuestion,
   numberInterviewQuestions,
   sortInterviewQuestions,
@@ -46,6 +47,13 @@ function scoreColor(score) {
   if (score >= 8) return 'text-emerald-600'
   if (score >= 5) return 'text-indigo-600'
   return 'text-red-500'
+}
+
+function scoreBarColor(score) {
+  if (score == null) return 'slate'
+  if (score >= 8) return 'green'
+  if (score >= 5) return 'indigo'
+  return 'red'
 }
 
 const sortQuestions = sortInterviewQuestions
@@ -190,7 +198,10 @@ export function InterviewPanel({ candidateId, candidateName, onClose, onBack }) 
   }
 
   const statusMeta = STATUS_META[interview?.status] || STATUS_META.pending
-  const answeredCount = (interview?.questions || []).filter((q) => q.answer_text).length
+  // Điểm trung bình tính ngay tại đây: trước phải thoát ra tab Shortlist rồi bung
+  // hàng ứng viên mới thấy con số này, trong khi nó là thứ HR cần nhìn đúng lúc
+  // đang chấm để biết ứng viên đang ở đâu.
+  const { avg, scoredCount, total } = interviewAverageScore(interview?.questions)
 
   return (
     <>
@@ -339,6 +350,11 @@ export function InterviewPanel({ candidateId, candidateName, onClose, onBack }) 
         {/* Có buổi phỏng vấn -> danh sách câu hỏi */}
         {!loading && interview && (
           <div className="space-y-4">
+            {/* Điểm trung bình — luôn nằm trên đầu, cập nhật ngay sau mỗi lần chấm */}
+            {interview.questions.length > 0 && (
+              <AverageScoreCard avg={avg} scoredCount={scoredCount} total={total} />
+            )}
+
             {/* Tổng kết AI (sau khi kết thúc) */}
             {completed && interview.feedback_summary && (
               <div className="rounded-xl border border-emerald-200 bg-emerald-50/70 p-4">
@@ -391,8 +407,16 @@ export function InterviewPanel({ candidateId, candidateName, onClose, onBack }) 
       {/* Footer */}
       {!loading && interview && !completed && interview.questions.length > 0 && (
         <div className="flex items-center justify-between border-t border-slate-200 px-6 py-3.5">
+          {/* Thẻ điểm ở đầu danh sách cuộn mất khi HR chấm tới câu cuối — nhắc lại
+              con số ở thanh dưới (luôn dính đáy) để không phải cuộn ngược lên. */}
           <span className="text-xs text-slate-500">
-            Đã chấm {answeredCount}/{interview.questions.length} câu
+            Đã chấm {scoredCount}/{total} câu
+            {avg != null && (
+              <>
+                {' · TB '}
+                <span className={`text-sm font-bold ${scoreColor(avg)}`}>{avg}/10</span>
+              </>
+            )}
           </span>
           <PrimaryButton
             className="px-3 py-2"
@@ -426,6 +450,43 @@ export default function InterviewModal({ candidateId, candidateName, onClose }) 
           candidateName={candidateName}
           onClose={onClose}
         />
+      </div>
+    </div>
+  )
+}
+
+// Thẻ điểm trung bình đặt trên đầu danh sách câu hỏi. Chưa chấm câu nào thì vẫn
+// hiện (dạng "—") để HR biết chỗ này rồi sẽ ra điểm, thay vì thấy khung nhảy ra
+// bất chợt sau lần chấm đầu tiên.
+function AverageScoreCard({ avg, scoredCount, total }) {
+  const percent = total ? (scoredCount / total) * 100 : 0
+  return (
+    <div className="flex items-center gap-4 rounded-xl border border-slate-200 bg-slate-50/70 px-4 py-3">
+      <div className="min-w-0">
+        <p className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
+          Điểm trung bình
+        </p>
+        <p className={`text-2xl font-bold leading-tight ${scoreColor(avg)}`}>
+          {avg == null ? '—' : avg}
+          <span className="text-sm font-semibold text-slate-400">/10</span>
+        </p>
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="text-xs text-slate-500">
+          Đã chấm{' '}
+          <span className="font-semibold text-slate-700">
+            {scoredCount}/{total}
+          </span>{' '}
+          câu
+        </p>
+        <div className="mt-1.5">
+          <ProgressBar value={percent} color={scoreBarColor(avg)} />
+        </div>
+        {avg == null && (
+          <p className="mt-1.5 text-[11px] text-slate-400">
+            Chấm ít nhất một câu để có điểm trung bình.
+          </p>
+        )}
       </div>
     </div>
   )

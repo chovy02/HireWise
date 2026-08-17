@@ -11,6 +11,7 @@ import { Badge } from './ui.jsx'
 import { getCandidateInterview } from '../api/interviews.js'
 import { useAgentReload } from '../utils/useAgentReload.js'
 import {
+  interviewAverageScore,
   isManualQuestion,
   numberInterviewQuestions,
   sortInterviewQuestions,
@@ -73,10 +74,7 @@ export default function InterviewSummary({ candidateId }) {
   }
 
   const questions = sortInterviewQuestions(interview.questions)
-  const scored = questions.filter((q) => q.score != null)
-  const avg = scored.length
-    ? Math.round((scored.reduce((s, q) => s + q.score, 0) / scored.length) * 10) / 10
-    : null
+  const { avg, scoredCount } = interviewAverageScore(questions)
   const statusMeta = STATUS_META[interview.status] || STATUS_META.pending
 
   return (
@@ -90,7 +88,7 @@ export default function InterviewSummary({ candidateId }) {
           {statusMeta.label}
         </Badge>
         <span className="text-xs text-slate-500">
-          Đã chấm {scored.length}/{questions.length} câu
+          Đã chấm {scoredCount}/{questions.length} câu
         </span>
         {avg != null && (
           <span className="text-xs text-slate-500">
