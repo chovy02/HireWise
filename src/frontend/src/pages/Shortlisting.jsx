@@ -355,6 +355,12 @@ export default function Shortlisting() {
   const paramSl = navParams.get('sl')
   const paramCv = navParams.get('cv')
   const navNonce = navParams.get('t') || ''
+  // `highlight` / `open`: directive của các tool ĐỌC (so sánh, tìm kiếm, xem chi tiết
+  // ứng viên). Trang này PHẢI hiểu được chúng, nếu không thì Copilot buộc phải hất HR
+  // sang /projects/{jd} chỉ để tô sáng vài dòng — xem `duongDiThucTe` trong
+  // CopilotChat.jsx và `dieu_huong_o_lai` ở backend.
+  const paramHighlight = navParams.get('highlight')
+  const paramOpen = navParams.get('open')
 
   const initialId =
     (paramJd && projects.some((p) => p.id === paramJd) && paramJd) ||
@@ -439,6 +445,21 @@ export default function Shortlisting() {
       setView(paramView)
     }
   }, [paramJd, paramView, paramCv, navNonce])
+
+  // Ứng viên mà Copilot vừa đem ra so sánh / vừa tìm được -> tô sáng ở cả bảng xếp hạng
+  // và bảng shortlist, để HR đối chiếu được câu trả lời trong khung chat với điểm số
+  // thật mà không phải rời màn hình đang làm.
+  const highlightIds = useMemo(
+    () => new Set((paramHighlight || '').split(',').filter(Boolean)),
+    [paramHighlight]
+  )
+
+  // Copilot mở popup chi tiết một ứng viên. `navNonce` trong deps: HR đóng popup rồi
+  // nhờ agent mở lại đúng người đó thì `paramOpen` không đổi, thiếu nonce là popup
+  // không bật lại.
+  useEffect(() => {
+    if (paramOpen) setOpenId(paramOpen)
+  }, [paramOpen, navNonce])
 
   // Điền tên ứng viên khi bảng xếp hạng của vị trí đó tải xong. Không có bước này thì
   // header màn hình phỏng vấn ghi "Ứng viên" trong khi HR vừa gọi đích danh một người.
@@ -1027,8 +1048,14 @@ export default function Shortlisting() {
                   <tbody className="divide-y divide-slate-100">
                     {visible.map((c) => {
                       const meta = STATUS_BADGE[c.status] || STATUS_BADGE.PENDING
+                      const highlighted = highlightIds.has(c.id)
                       return (
-                        <tr key={c.id} className="hover:bg-slate-50/60">
+                        <tr
+                          key={c.id}
+                          className={
+                            highlighted ? 'bg-indigo-50/70' : 'hover:bg-slate-50/60'
+                          }
+                        >
                           {compareMode && (
                             <td className="px-6 py-4">
                               <input
@@ -1070,6 +1097,15 @@ export default function Shortlisting() {
                                       className="flex-shrink-0 whitespace-nowrap"
                                     >
                                       Đã ghi đè
+                                    </Badge>
+                                  )}
+                                  {highlighted && (
+                                    <Badge
+                                      variant="ai"
+                                      upper={false}
+                                      className="flex-shrink-0 whitespace-nowrap"
+                                    >
+                                      AI đề xuất
                                     </Badge>
                                   )}
                                 </div>
@@ -1244,9 +1280,14 @@ export default function Shortlisting() {
                         const interviewMeta = INTERVIEW_BADGE[c.interview_status]
                         const summaryOpen = openSummaryId === it.id
                         const notify = notifyState(it)
+                        const highlighted = highlightIds.has(c.id)
                         return (
                           <Fragment key={it.id}>
-                          <tr className="hover:bg-slate-50/60">
+                          <tr
+                            className={
+                              highlighted ? 'bg-indigo-50/70' : 'hover:bg-slate-50/60'
+                            }
+                          >
                             {/* Mũi tên mở tóm tắt phỏng vấn (chỉ ứng viên đã phỏng vấn). */}
                             <td className="py-4 pl-4 pr-0">
                               {interviewMeta ? (
@@ -1305,6 +1346,15 @@ export default function Shortlisting() {
                                         className="flex-shrink-0 whitespace-nowrap"
                                       >
                                         {interviewMeta.label}
+                                      </Badge>
+                                    )}
+                                    {highlighted && (
+                                      <Badge
+                                        variant="ai"
+                                        upper={false}
+                                        className="flex-shrink-0 whitespace-nowrap"
+                                      >
+                                        AI đề xuất
                                       </Badge>
                                     )}
                                   </div>

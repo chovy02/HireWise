@@ -98,6 +98,33 @@ def dieu_huong(path: str, **query) -> dict:
     return {"type": "navigate", "path": f"{path}?{urlencode(q)}"}
 
 
+def dieu_huong_o_lai(path: str, jd_id, **query) -> dict:
+    """Như `dieu_huong`, nhưng ƯU TIÊN Ở LẠI màn hình HR đang mở.
+
+    DÙNG CHO TOOL ĐỌC (so sánh, tìm kiếm, xem chi tiết ứng viên). Những tool này không
+    đổi dữ liệu; thứ chúng cần ở giao diện chỉ là "tô sáng/mở đúng mấy người này" —
+    một việc làm được ở BẤT KỲ màn hình nào đang liệt kê ứng viên của vị trí đó.
+
+    Vì sao phải có: `path` ở đây luôn là trang chi tiết vị trí (`/projects/{jd}`), nên
+    HR đang làm việc trong màn hình Shortlisting mà nhờ "so sánh 3 người điểm cao nhất"
+    thì bị hất ra trang khác, rồi phải tự bấm vào lại Shortlisting từ đầu — mất luôn
+    shortlist đang chọn và chế độ xem đang mở. Đúng lỗi HR báo. Các tool GHI không gặp
+    chuyện này vì chúng điều hướng về chính màn hình chứa việc vừa làm.
+
+    `jd_id` là điều kiện để được ở lại: chỉ ở lại khi màn hình hiện tại đang mở ĐÚNG
+    vị trí này. HR đang xem vị trí khác thì tô sáng tại chỗ là tô sai người, lúc đó
+    `path` (đường dự phòng) mới là đúng.
+
+    Frontend quyết định phần còn lại (`runUiActions` trong CopilotChat.jsx): nó là chỗ
+    duy nhất biết HR đang đứng ở route nào. Backend chỉ nói "ở lại được" chứ không tự
+    dựng URL của màn hình hiện tại — đoán route ở đây là dựng lại state của frontend
+    lần thứ hai, rồi trôi lệch.
+    """
+    directive = dieu_huong(path, **query)
+    directive["stay_if_jd"] = str(jd_id)
+    return directive
+
+
 def _owner_filter(q, owner_id):
     """Giới hạn query JD về đúng người đang thao tác, và bỏ JD trong thùng rác.
 
@@ -480,8 +507,9 @@ def search_candidates(
         jd_ids = {c.jd_id for c in rows}
         if len(jd_ids) == 1:
             target = jd.id if jd else next(iter(jd_ids))
-            result["ui_action"] = dieu_huong(
+            result["ui_action"] = dieu_huong_o_lai(
                 f"/projects/{target}",
+                target,
                 highlight=",".join(b["candidate_id"] for b in briefs),
             )
     return result
@@ -500,7 +528,7 @@ def get_candidate(db: Session, candidate_id: str, owner_id=None) -> dict:
         # skills / evaluation / interview), nên `c.projects` ném AttributeError và
         # tool này hỏng ở MỌI lượt gọi. Kỹ năng đã nằm trong _candidate_brief.
         # LC1: mở popup chi tiết đánh giá ứng viên này trên app (query ?open=).
-        "ui_action": dieu_huong(f"/projects/{c.jd_id}", open=c.id),
+        "ui_action": dieu_huong_o_lai(f"/projects/{c.jd_id}", c.jd_id, open=c.id),
     }
 
 
@@ -611,8 +639,8 @@ def compare_candidates(
     # Tô sáng đúng những người vừa được đem ra so trên bảng xếp hạng, để HR đối chiếu
     # được bài so sánh với điểm số thật. Mọi ứng viên ở đây chắc chắn cùng một vị trí —
     # khác vị trí thì đã thoát ở nhánh trên.
-    result["ui_action"] = dieu_huong(
-        f"/projects/{jd_ref}", highlight=",".join(str(c.id) for c in cands)
+    result["ui_action"] = dieu_huong_o_lai(
+        f"/projects/{jd_ref}", jd_ref, highlight=",".join(str(c.id) for c in cands)
     )
     if missing:
         result["not_found"] = missing

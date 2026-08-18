@@ -17,6 +17,17 @@ const SUGGESTIONS = [
   'Mở vị trí Backend ra xem',
 ]
 
+// Trang HIỆN ĐƯỢC directive "tô sáng / mở ứng viên" ngay tại chỗ (giá trị `page` do
+// usePublishPageContext công bố). Trang không có trong đây thì phải điều hướng tới
+// đường dự phòng của directive, vì ở lại là HR không thấy gì xảy ra.
+const TRANG_HIEN_DUOC_UNG_VIEN = new Set(['project', 'shortlisting'])
+
+// Query param do agent điều khiển. Khi ở lại trang hiện tại thì XOÁ HẾT nhóm này rồi
+// mới áp cái mới: chỉ merge thêm là directive của lượt TRƯỚC còn nằm trên URL, và nonce
+// `t` mới sẽ khiến trang chạy lại effect — popup của lượt trước bật lại giữa lúc HR
+// đang hỏi chuyện khác.
+const AGENT_PARAMS = ['open', 'highlight', 't']
+
 const WELCOME = {
   role: 'ai',
   text: 'Xin chào! Mình là trợ lý tuyển dụng. Bạn cứ ra lệnh, mình sẽ thao tác và mở đúng màn hình bên trái cho bạn.',
@@ -46,6 +57,13 @@ export default function CopilotChat({ open = false, onClose }) {
 
   const scrollRef = useRef(null)
   const textareaRef = useRef(null)
+  // Ảnh chụp MỚI NHẤT của ngữ cảnh trang. `runUiActions` chạy SAU khi await xong lượt
+  // chat (vài giây), mà `pageContext` trong closure là giá trị lúc HR bấm gửi — HR đổi
+  // trang giữa lúc chờ là quyết định "ở lại hay đi" bị tính trên màn hình cũ.
+  const pageContextRef = useRef(pageContext)
+  useEffect(() => {
+    pageContextRef.current = pageContext
+  }, [pageContext])
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
@@ -133,12 +151,43 @@ export default function CopilotChat({ open = false, onClose }) {
   // Có navigate thì KHÔNG gọi refreshCurrentPage: navigate đã kèm nonce `t` nên trang
   // đích tự nạp lại, mà làm mới "trang hiện tại" lúc này còn có thể ghi đè (replace)
   // đúng cái URL vừa điều hướng tới.
+  //
+  // ĐƯỜNG ĐI THỰC TẾ của một directive: xem `dieu_huong_o_lai` ở backend. Tool ĐỌC
+  // (so sánh, tìm kiếm, xem chi tiết ứng viên) gắn thêm `stay_if_jd` để nói rằng việc
+  // của nó (tô sáng / mở popup) làm được ở BẤT KỲ màn hình nào đang liệt kê ứng viên
+  // của vị trí đó — không cần kéo HR sang trang chi tiết vị trí.
+  //
+  // Vì sao cần: HR đang làm việc trong Shortlisting mà nhờ "so sánh 3 người điểm cao
+  // nhất" thì bị hất sang /projects/{jd}, rồi phải tự bấm vào lại Shortlisting từ đầu,
+  // mất luôn shortlist đang chọn và chế độ xem đang mở. `path` chỉ còn là đường DỰ
+  // PHÒNG, dùng khi màn hình hiện tại không mở đúng vị trí đó (tô sáng tại chỗ sẽ là
+  // tô sai người) hoặc không hiện được directive.
+  function duongDiThucTe(action) {
+    const jdCanMo = action.stay_if_jd
+    const ctx = pageContextRef.current
+    if (
+      !jdCanMo ||
+      !ctx?.jd_id ||
+      String(ctx.jd_id) !== String(jdCanMo) ||
+      !TRANG_HIEN_DUOC_UNG_VIEN.has(ctx.page)
+    ) {
+      return action.path
+    }
+    // Giữ nguyên pathname + các param riêng của trang (`view`, `sl`… của Shortlisting)
+    // và chỉ thay nhóm param của agent — đó chính là phần "không mất chỗ đang làm".
+    const [, queryCuaDirective = ''] = action.path.split('?')
+    const q = new URLSearchParams(window.location.search)
+    AGENT_PARAMS.forEach((k) => q.delete(k))
+    new URLSearchParams(queryCuaDirective).forEach((v, k) => q.set(k, v))
+    return `${window.location.pathname}?${q.toString()}`
+  }
+
   function runUiActions(actions = []) {
     const dich = actions.filter((a) => a?.type === 'navigate' && a.path).pop()
     const canLamMoi = actions.some((a) => a?.type === 'refresh')
 
     if (canLamMoi) refreshProjects() // danh sách dự án ở cột trái
-    if (dich) navigate(dich.path)
+    if (dich) navigate(duongDiThucTe(dich))
     else if (canLamMoi) refreshCurrentPage()
   }
 
